@@ -32,22 +32,20 @@ BUDGET_DATA = {
 }
 
 # ------------------------------------------------------------------
-# 3. 함수 정의 (스마트한 엑셀 처리)
+# 3. 함수 정의
 # ------------------------------------------------------------------
 
 def find_first_date(df):
     """
     데이터프레임의 첫 번째 열을 훑어서 '진짜 날짜'가 언제인지 찾아냄
     """
-    # 첫 번째 열을 강제로 날짜로 변환 시도 (에러나면 NaT로 처리)
     first_col = df.iloc[:, 0]
+    # errors='coerce'를 써서 '소계', '구분' 같은 문자는 NaT(시간아님)로 변환
     dates = pd.to_datetime(first_col, errors='coerce')
-    
-    # 날짜가 유효한 행들만 남김
     valid_dates = dates.dropna()
     
     if not valid_dates.empty:
-        return valid_dates.iloc[0], valid_dates.index[0] # 첫 날짜와 그 행 번호 반환
+        return valid_dates.iloc[0], valid_dates.index[0]
     return None, None
 
 def get_yesterday_data(month_num):
@@ -88,15 +86,12 @@ if uploaded_files:
     
     for file in uploaded_files:
         try:
-            # 헤더 없이 일단 읽음
             temp_df = pd.read_excel(file, header=None)
-            
-            # 날짜 찾기 함수 실행
             first_date, start_row_idx = find_first_date(temp_df)
             
             if first_date:
                 month_num = first_date.month
-                month_map[month_num] = (file, start_row_idx) # 파일과 데이터 시작 위치 저장
+                month_map[month_num] = (file, start_row_idx)
         except Exception as e:
             st.error(f"파일 분류 중 오류 ({file.name}): {e}")
 
@@ -106,31 +101,26 @@ if uploaded_files:
         with tab:
             if current_month in month_map:
                 file, start_row = month_map[current_month]
-                file.seek(0) # 파일 포인터 초기화
+                file.seek(0)
                 
                 try:
-                    # 데이터 시작 위치(start_row)를 알았으니 거기부터 다시 읽음
-                    # header=start_row-2 (헤더가 2줄 위에 있다고 가정) 하거나
-                    # 그냥 헤더 없이 읽어서 인덱싱으로 처리하는게 가장 안전
-                    
                     df_raw = pd.read_excel(file, header=None)
-                    
-                    # 데이터 영역만 자르기 (날짜가 시작되는 행부터 끝까지)
                     df_data = df_raw.iloc[start_row:].copy()
                     
-                    # 컬럼 매핑 (이미지2 기준)
-                    # 0: 날짜, 맨뒤(-1): 매출, 맨뒤-1: RevPAR, -3: 객단가, -4: 점유율, -5: 객실수
                     df_clean = pd.DataFrame()
-                    df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0])
                     
-                    # 중요: 엑셀 컬럼 위치가 정확해야 합니다.
-                    # 만약 숫자가 이상하면 이 인덱스(-1, -3 등)를 조절해야 합니다.
+                    # [핵심 수정] errors='coerce' 추가 -> '소계' 같은 문자는 NaT로 변환
+                    df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
+                    
+                    # NaT(날짜가 아닌 행) 제거 -> 즉, '소계', '합계' 행 삭제됨
+                    df_clean = df_clean.dropna(subset=['Date'])
+
+                    # 나머지 데이터 숫자 변환
                     df_clean['RMS'] = pd.to_numeric(df_data.iloc[:, -5], errors='coerce').fillna(0)
                     df_clean['OCC'] = pd.to_numeric(df_data.iloc[:, -4], errors='coerce').fillna(0)
                     df_clean['ADR'] = pd.to_numeric(df_data.iloc[:, -3], errors='coerce').fillna(0)
                     df_clean['REV'] = pd.to_numeric(df_data.iloc[:, -1], errors='coerce').fillna(0)
                     
-                    # 날짜 문자열 컬럼 추가 (매칭용)
                     df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
                     
                     # ----------------------
@@ -140,8 +130,6 @@ if uploaded_files:
                     budget = BUDGET_DATA.get(current_month, 0)
                     achv_rate = (total_rev / budget * 100) if budget > 0 else 0
                     diff_val = total_rev - budget
-                    
-                    # 색상 서식
                     diff_color = "red" if diff_val < 0 else "blue"
                     
                     st.markdown(f"""
@@ -158,14 +146,10 @@ if uploaded_files:
                     # ----------------------
                     df_prev = get_yesterday_data(current_month)
                     
-                    display_df = df_clean.copy()
-                    
                     if df_prev is not None:
-                         # 저장된 데이터 날짜 포맷 통일
                         if 'Date' in df_prev.columns:
                             df_prev['DateStr'] = pd.to_datetime(df_prev['Date']).dt.strftime('%Y-%m-%d')
                         
-                        # 병합
                         merged = pd.merge(
                             df_clean, 
                             df_prev[['DateStr', 'REV', 'RMS']], 
@@ -174,37 +158,23 @@ if uploaded_files:
                             suffixes=('', '_prev')
                         )
                         
-                        # 변화량 계산
-                        merged['PickUp_REV'] = merged['REV'] - merged['REV_prev'].fillna(merged['REV']) # 없으면 0변화가 아니라 당일값으로? 보통은 0처리
-                        # *수정: 전일 데이터가 없으면 변화량은 0이어야 함 (또는 신규발생)
-                        # 여기서는 "전일 데이터가 없으면 변화량 0"으로 처리
-                        merged['PickUp_REV'] = merged['REV'] - merged['REV_prev'].fillna(merged['REV']) 
-                        # 로직 수정: 비교대상이 없으면 변화량 0 (즉, 어제값=오늘값으로 가정) 
-                        # 혹은 아예 신규 예약으로 칠거면 fillna(0) -> 이 경우 전체 매출이 픽업으로 잡힘.
-                        # 보통 Pace Report는 전일자 파일과 비교이므로 fillna(0)하면 첫날 전체가 픽업이 됨. 
-                        # 일단 fillna(0)으로 해서 "전체 증가"로 보이게 하거나, 첫날은 0으로 숨기는게 나음.
-                        
-                        # 깔끔한 로직: 
-                        # DB값이 있으면 차이 계산, 없으면 0
-                        merged['REV_prev'] = merged['REV_prev'].fillna(merged['REV']) # 비교값 없으면 변화 없음 처리
+                        # 비교 데이터가 없으면 오늘 값으로 채우기 (변화량 0)
+                        merged['REV_prev'] = merged['REV_prev'].fillna(merged['REV'])
                         merged['RMS_prev'] = merged['RMS_prev'].fillna(merged['RMS'])
                         
                         merged['Var_REV'] = merged['REV'] - merged['REV_prev']
                         merged['Var_RMS'] = merged['RMS'] - merged['RMS_prev']
                         
-                        # 컬럼 정리
                         final_show = merged[['DateStr', 'RMS', 'RMS_prev', 'Var_RMS', 'REV', 'REV_prev', 'Var_REV']].copy()
                     else:
-                        # 비교 데이터 없음
                         final_show = df_clean[['DateStr', 'RMS', 'RMS', 'REV', 'REV']].copy()
                         final_show.columns = ['DateStr', 'RMS', 'RMS_prev', 'REV', 'REV_prev']
                         final_show['Var_RMS'] = 0
                         final_show['Var_REV'] = 0
 
-                    # 컬럼 이름 예쁘게
                     final_show.columns = ['Date', 'Rms(Act)', 'Rms(Pre)', 'Rms(Pick)', 'Rev(Act)', 'Rev(Pre)', 'Rev(Pick)']
                     
-                    # 데이터프레임 표시 (하이라이트 기능 사용)
+                    # 데이터프레임 표시
                     st.dataframe(
                         final_show,
                         column_config={
@@ -216,9 +186,6 @@ if uploaded_files:
                         use_container_width=True
                     )
                     
-                    # ----------------------
-                    # 저장 버튼
-                    # ----------------------
                     if st.button(f"💾 {current_month}월 데이터 확정 및 저장", key=f"save_{current_month}"):
                         save_today_data(current_month, df_clean)
                         st.toast(f"✅ {current_month}월 데이터가 안전하게 저장되었습니다!", icon="cloud")
