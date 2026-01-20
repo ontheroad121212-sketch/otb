@@ -3,3 +3,4 @@ pandas
 openpyxl
 firebase-admin
 xlsxwriter
+matplotlib
