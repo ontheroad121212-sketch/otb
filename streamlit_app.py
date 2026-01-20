@@ -36,16 +36,45 @@ BUDGET_DATA = {
 # ------------------------------------------------------------------
 
 def find_first_date(df):
-    """
-    데이터프레임의 첫 번째 열을 훑어서 '진짜 날짜'가 언제인지 찾아냄
-    """
+    """데이터프레임에서 진짜 날짜가 시작되는 위치 찾기"""
     first_col = df.iloc[:, 0]
     dates = pd.to_datetime(first_col, errors='coerce')
     valid_dates = dates.dropna()
-    
     if not valid_dates.empty:
         return valid_dates.iloc[0], valid_dates.index[0]
     return None, None
+
+def process_excel_file(file):
+    """엑셀 파일을 읽어서 깨끗한 DataFrame으로 변환"""
+    try:
+        file.seek(0)
+        temp_df = pd.read_excel(file, header=None)
+        first_date, start_row = find_first_date(temp_df)
+        
+        if first_date is None:
+            return None, None
+
+        # 데이터 로드
+        df_raw = pd.read_excel(file, header=None)
+        df_data = df_raw.iloc[start_row:].copy()
+        
+        df_clean = pd.DataFrame()
+        
+        # 날짜 및 데이터 파싱
+        df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
+        df_clean = df_clean.dropna(subset=['Date'])
+
+        # 컬럼 매핑 (맨뒤: 매출, -5: 객실수 등)
+        df_clean['RMS'] = pd.to_numeric(df_data.iloc[:, -5], errors='coerce').fillna(0)
+        df_clean['OCC'] = pd.to_numeric(df_data.iloc[:, -4], errors='coerce').fillna(0)
+        df_clean['ADR'] = pd.to_numeric(df_data.iloc[:, -3], errors='coerce').fillna(0)
+        df_clean['REV'] = pd.to_numeric(df_data.iloc[:, -1], errors='coerce').fillna(0)
+        
+        df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
+        
+        return df_clean, first_date.month
+    except Exception as e:
+        return None, None
 
 def get_yesterday_data(month_num):
     doc_ref = db.collection('daily_reports').document(f"2026-{month_num:02d}")
@@ -70,9 +99,10 @@ def save_today_data(month_num, df):
 # 4. 메인 UI 구성
 # ------------------------------------------------------------------
 st.title("🏨 One-Click Daily Pace Report")
+st.caption("💡 팁: 처음 사용할 땐 '어제 파일'과 '오늘 파일'을 같이 업로드하면 바로 비교됩니다.")
 
 uploaded_files = st.file_uploader(
-    "1월~4월 RAW 데이터 파일을 모두 드래그해서 넣으세요", 
+    "파일을 몽땅 드래그해서 넣으세요 (4개 또는 8개)", 
     accept_multiple_files=True,
     type=['xlsx']
 )
@@ -80,117 +110,127 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     tabs = st.tabs(["1월 (JAN)", "2월 (FEB)", "3월 (MAR)", "4월 (APR)"])
     
-    # [1] 파일을 미리 읽어서 몇 월 파일인지 분류
-    month_map = {}
+    # [1] 파일 분류 (월별로 리스트에 담기)
+    month_files_map = {1: [], 2: [], 3: [], 4: []}
     
     for file in uploaded_files:
-        try:
-            temp_df = pd.read_excel(file, header=None)
-            first_date, start_row_idx = find_first_date(temp_df)
-            
-            if first_date:
-                month_num = first_date.month
-                month_map[month_num] = (file, start_row_idx)
-        except Exception as e:
-            st.error(f"파일 분류 중 오류 ({file.name}): {e}")
+        df, month = process_excel_file(file)
+        if df is not None and month in month_files_map:
+            month_files_map[month].append({'file_name': file.name, 'data': df})
 
-    # [2] 탭별 리포트 생성
+    # [2] 탭별 로직 실행
     for i, tab in enumerate(tabs):
         current_month = i + 1
         with tab:
-            if current_month in month_map:
-                file, start_row = month_map[current_month]
-                file.seek(0)
+            files = month_files_map.get(current_month, [])
+            
+            if not files:
+                st.info(f"📂 {current_month}월 데이터가 없습니다.")
+                continue
+
+            # 변수 초기화
+            df_curr = None
+            df_prev = None
+            mode_msg = ""
+
+            # Case A: 파일이 2개다? (오늘 vs 어제 파일 직접 비교)
+            if len(files) >= 2:
+                # 매출(REV) 합계가 더 큰 쪽을 '오늘(Current)'로 간주 (보통 누적되므로)
+                # 만약 같다면 파일 이름 등 다른 로직이 필요하지만, 일단 매출 기준
+                f1 = files[0]
+                f2 = files[1]
                 
-                try:
-                    df_raw = pd.read_excel(file, header=None)
-                    df_data = df_raw.iloc[start_row:].copy()
-                    
-                    df_clean = pd.DataFrame()
-                    
-                    # '소계' 등 문자는 NaT로 변환 후 제거
-                    df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
-                    df_clean = df_clean.dropna(subset=['Date'])
+                rev1 = f1['data']['REV'].sum()
+                rev2 = f2['data']['REV'].sum()
+                
+                if rev1 >= rev2:
+                    df_curr = f1['data']
+                    df_prev = f2['data']
+                    mode_msg = f"🔥 **업로드된 파일끼리 비교 중** ({f1['file_name']} vs {f2['file_name']})"
+                else:
+                    df_curr = f2['data']
+                    df_prev = f1['data']
+                    mode_msg = f"🔥 **업로드된 파일끼리 비교 중** ({f2['file_name']} vs {f1['file_name']})"
 
-                    # 데이터 숫자 변환
-                    df_clean['RMS'] = pd.to_numeric(df_data.iloc[:, -5], errors='coerce').fillna(0)
-                    df_clean['OCC'] = pd.to_numeric(df_data.iloc[:, -4], errors='coerce').fillna(0)
-                    df_clean['ADR'] = pd.to_numeric(df_data.iloc[:, -3], errors='coerce').fillna(0)
-                    df_clean['REV'] = pd.to_numeric(df_data.iloc[:, -1], errors='coerce').fillna(0)
-                    
-                    df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
-                    
-                    # ----------------------
-                    # 상단 요약 (Budget)
-                    # ----------------------
-                    total_rev = df_clean['REV'].sum()
-                    budget = BUDGET_DATA.get(current_month, 0)
-                    achv_rate = (total_rev / budget * 100) if budget > 0 else 0
-                    diff_val = total_rev - budget
-                    diff_color = "red" if diff_val < 0 else "blue"
-                    
-                    st.markdown(f"""
-                    ### 📊 {current_month}월 Performance
-                    | Category | Budget | Actual | Vs Budget | Achv % |
-                    | :--- | :---: | :---: | :---: | :---: |
-                    | **Total Rev** | {budget:,.0f} | **{total_rev:,.0f}** | <span style='color:{diff_color}'>{diff_val:,.0f}</span> | **{achv_rate:.1f}%** |
-                    """, unsafe_allow_html=True)
-                    
-                    st.divider()
-                    
-                    # ----------------------
-                    # Daily Report (Comparison)
-                    # ----------------------
-                    df_prev = get_yesterday_data(current_month)
-                    
-                    if df_prev is not None:
-                        if 'Date' in df_prev.columns:
-                            df_prev['DateStr'] = pd.to_datetime(df_prev['Date']).dt.strftime('%Y-%m-%d')
-                        
-                        merged = pd.merge(
-                            df_clean, 
-                            df_prev[['DateStr', 'REV', 'RMS']], 
-                            on='DateStr', 
-                            how='left', 
-                            suffixes=('', '_prev')
-                        )
-                        
-                        # 비교값 채우기
-                        merged['REV_prev'] = merged['REV_prev'].fillna(merged['REV'])
-                        merged['RMS_prev'] = merged['RMS_prev'].fillna(merged['RMS'])
-                        
-                        merged['Var_REV'] = merged['REV'] - merged['REV_prev']
-                        merged['Var_RMS'] = merged['RMS'] - merged['RMS_prev']
-                        
-                        final_show = merged[['DateStr', 'RMS', 'RMS_prev', 'Var_RMS', 'REV', 'REV_prev', 'Var_REV']].copy()
-                    else:
-                        final_show = df_clean[['DateStr', 'RMS', 'RMS', 'REV', 'REV']].copy()
-                        final_show.columns = ['DateStr', 'RMS', 'RMS_prev', 'REV', 'REV_prev']
-                        final_show['Var_RMS'] = 0
-                        final_show['Var_REV'] = 0
+            # Case B: 파일이 1개다? (DB와 비교)
+            elif len(files) == 1:
+                df_curr = files[0]['data']
+                df_prev = get_yesterday_data(current_month)
+                if df_prev is not None:
+                    mode_msg = "☁️ **DB 저장된 과거 데이터와 비교 중**"
+                else:
+                    mode_msg = "⚠️ **비교할 과거 데이터가 없습니다.** (오늘 저장하면 내일부터 나옵니다)"
 
-                    final_show.columns = ['Date', 'Rms(Act)', 'Rms(Pre)', 'Rms(Pick)', 'Rev(Act)', 'Rev(Pre)', 'Rev(Pick)']
-                    
-                    st.dataframe(
-                        final_show,
-                        column_config={
-                            "Rev(Act)": st.column_config.NumberColumn(format="%d"),
-                            "Rev(Pre)": st.column_config.NumberColumn(format="%d"),
-                            "Rev(Pick)": st.column_config.NumberColumn(format="%d"),
-                        },
-                        height=600,
-                        use_container_width=True
-                    )
-                    
-                    # ----------------------
-                    # 저장 버튼 (여기가 수정됨!)
-                    # ----------------------
-                    if st.button(f"💾 {current_month}월 데이터 확정 및 저장", key=f"save_{current_month}"):
-                        save_today_data(current_month, df_clean)
-                        # icon="cloud" -> icon="💾" 로 수정
-                        st.toast(f"✅ {current_month}월 데이터가 안전하게 저장되었습니다!", icon="💾")
-                        
-                except Exception as e:
-                    st.error(f"데이터 처리 중 에러 발생: {e}")
+            # ----------------------
+            # 1. 상단 요약 (Budget)
+            # ----------------------
+            total_rev = df_curr['REV'].sum()
+            budget = BUDGET_DATA.get(current_month, 0)
+            achv_rate = (total_rev / budget * 100) if budget > 0 else 0
+            diff_val = total_rev - budget
+            diff_color = "red" if diff_val < 0 else "blue"
+            
+            st.markdown(f"""
+            ### 📊 {current_month}월 Performance
+            {mode_msg}
+            | Category | Budget | Actual | Vs Budget | Achv % |
+            | :--- | :---: | :---: | :---: | :---: |
+            | **Total Rev** | {budget:,.0f} | **{total_rev:,.0f}** | <span style='color:{diff_color}'>{diff_val:,.0f}</span> | **{achv_rate:.1f}%** |
+            """, unsafe_allow_html=True)
+            
+            st.divider()
+
+            # ----------------------
+            # 2. 상세 리포트 (Comparison)
+            # ----------------------
+            if df_prev is not None:
+                # 날짜 포맷 통일 및 병합
+                if 'DateStr' not in df_prev.columns:
+                    df_prev['Date'] = pd.to_datetime(df_prev['Date'])
+                    df_prev['DateStr'] = df_prev['Date'].dt.strftime('%Y-%m-%d')
+
+                merged = pd.merge(
+                    df_curr, 
+                    df_prev[['DateStr', 'REV', 'RMS']], 
+                    on='DateStr', 
+                    how='left', 
+                    suffixes=('', '_prev')
+                )
+                
+                # 없는 값 처리
+                merged['REV_prev'] = merged['REV_prev'].fillna(merged['REV'])
+                merged['RMS_prev'] = merged['RMS_prev'].fillna(merged['RMS'])
+                
+                # 변화량 계산
+                merged['Var_REV'] = merged['REV'] - merged['REV_prev']
+                merged['Var_RMS'] = merged['RMS'] - merged['RMS_prev']
+                
+                final_show = merged[['DateStr', 'RMS', 'RMS_prev', 'Var_RMS', 'REV', 'REV_prev', 'Var_REV']].copy()
             else:
-                st.info(f"📂 {current_month}월 파일을 아직 업로드하지 않았습니다.")
+                # 비교 대상 없을 때
+                final_show = df_curr[['DateStr', 'RMS', 'RMS', 'REV', 'REV']].copy()
+                final_show.columns = ['DateStr', 'RMS', 'RMS_prev', 'REV', 'REV_prev']
+                final_show['Var_RMS'] = 0
+                final_show['Var_REV'] = 0
+
+            # 컬럼명 정리
+            final_show.columns = ['Date', 'Rms(Act)', 'Rms(Pre)', 'Rms(Pick)', 'Rev(Act)', 'Rev(Pre)', 'Rev(Pick)']
+
+            st.dataframe(
+                final_show,
+                column_config={
+                    "Rev(Act)": st.column_config.NumberColumn(format="%d"),
+                    "Rev(Pre)": st.column_config.NumberColumn(format="%d"),
+                    "Rev(Pick)": st.column_config.NumberColumn(format="%d"),
+                },
+                height=600,
+                use_container_width=True
+            )
+            
+            # ----------------------
+            # 3. 저장 버튼
+            # ----------------------
+            # 파일이 2개일 땐 'Current'로 선정된 놈을 저장해야 내일 또 비교가 됨
+            if st.button(f"💾 {current_month}월 데이터 확정 및 저장", key=f"save_{current_month}"):
+                save_today_data(current_month, df_curr)
+                st.toast(f"✅ {current_month}월 데이터가 안전하게 저장되었습니다!", icon="💾")
