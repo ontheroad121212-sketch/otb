@@ -4,3 +4,4 @@ openpyxl
 firebase-admin
 xlsxwriter
 matplotlib
+xlrd>=2.0.1
