@@ -10,6 +10,14 @@ import io
 # ------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
+# 스타일 커스텀 (화면 너비 최대한 활용)
+st.markdown("""
+<style>
+    .block-container {padding-top: 1rem; padding-bottom: 0rem; padding-left: 1rem; padding-right: 1rem;}
+    iframe[title="streamlit.dataframe"] {width: 100% !important;}
+</style>
+""", unsafe_allow_html=True)
+
 if not firebase_admin._apps:
     try:
         key_dict = dict(st.secrets["firebase"])
@@ -71,6 +79,7 @@ def process_excel_file(file):
         df_clean['REV'] = pd.to_numeric(df_data.iloc[:, -1], errors='coerce').fillna(0)
         
         df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
+        df_clean['WeekDay'] = df_clean['Date'].dt.strftime('%a') # 요일 추가
         
         return df_clean, first_date.month
     except Exception as e:
@@ -95,6 +104,12 @@ def save_today_data(month_num, df):
         'updated_at': firestore.SERVER_TIMESTAMP
     })
 
+# 스타일링 함수 (마이너스 빨간색 처리)
+def color_negative_red(val):
+    if isinstance(val, (int, float)) and val < 0:
+        return 'color: red; font-weight: bold;'
+    return 'color: black;'
+
 # ------------------------------------------------------------------
 # 4. 메인 UI 구성
 # ------------------------------------------------------------------
@@ -110,7 +125,7 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     tabs = st.tabs(["1월 (JAN)", "2월 (FEB)", "3월 (MAR)", "4월 (APR)"])
     
-    # [1] 파일 분류 (월별로 리스트에 담기)
+    # [1] 파일 분류
     month_files_map = {1: [], 2: [], 3: [], 4: []}
     
     for file in uploaded_files:
@@ -133,33 +148,21 @@ if uploaded_files:
             df_prev = None
             mode_msg = ""
 
-            # Case A: 파일이 2개다? (오늘 vs 어제 파일 직접 비교)
+            # 파일 비교 로직 (Case A: 파일 2개, Case B: DB 비교)
             if len(files) >= 2:
-                # 매출(REV) 합계가 더 큰 쪽을 '오늘(Current)'로 간주 (보통 누적되므로)
-                # 만약 같다면 파일 이름 등 다른 로직이 필요하지만, 일단 매출 기준
-                f1 = files[0]
-                f2 = files[1]
-                
-                rev1 = f1['data']['REV'].sum()
-                rev2 = f2['data']['REV'].sum()
-                
-                if rev1 >= rev2:
-                    df_curr = f1['data']
-                    df_prev = f2['data']
-                    mode_msg = f"🔥 **업로드된 파일끼리 비교 중** ({f1['file_name']} vs {f2['file_name']})"
+                f1, f2 = files[0], files[1]
+                if f1['data']['REV'].sum() >= f2['data']['REV'].sum():
+                    df_curr, df_prev = f1['data'], f2['data']
                 else:
-                    df_curr = f2['data']
-                    df_prev = f1['data']
-                    mode_msg = f"🔥 **업로드된 파일끼리 비교 중** ({f2['file_name']} vs {f1['file_name']})"
-
-            # Case B: 파일이 1개다? (DB와 비교)
+                    df_curr, df_prev = f2['data'], f1['data']
+                mode_msg = f"🔥 **업로드된 파일끼리 비교 중**"
             elif len(files) == 1:
                 df_curr = files[0]['data']
                 df_prev = get_yesterday_data(current_month)
                 if df_prev is not None:
-                    mode_msg = "☁️ **DB 저장된 과거 데이터와 비교 중**"
+                    mode_msg = "☁️ **DB 데이터와 비교 중**"
                 else:
-                    mode_msg = "⚠️ **비교할 과거 데이터가 없습니다.** (오늘 저장하면 내일부터 나옵니다)"
+                    mode_msg = "⚠️ **비교할 과거 데이터가 없습니다.**"
 
             # ----------------------
             # 1. 상단 요약 (Budget)
@@ -181,56 +184,99 @@ if uploaded_files:
             st.divider()
 
             # ----------------------
-            # 2. 상세 리포트 (Comparison)
+            # 2. 상세 리포트 (데이터 가공)
             # ----------------------
+            # 오늘 데이터 준비
+            display_df = df_curr[['DateStr', 'WeekDay', 'RMS', 'OCC', 'ADR', 'REV']].copy()
+            display_df.columns = ['Date', 'Day', 'Curr_RMS', 'Curr_OCC', 'Curr_ADR', 'Curr_REV']
+
+            # 어제 데이터 병합
             if df_prev is not None:
-                # 날짜 포맷 통일 및 병합
                 if 'DateStr' not in df_prev.columns:
                     df_prev['Date'] = pd.to_datetime(df_prev['Date'])
                     df_prev['DateStr'] = df_prev['Date'].dt.strftime('%Y-%m-%d')
 
-                merged = pd.merge(
-                    df_curr, 
-                    df_prev[['DateStr', 'REV', 'RMS']], 
-                    on='DateStr', 
-                    how='left', 
-                    suffixes=('', '_prev')
-                )
+                merged = pd.merge(display_df, df_prev, left_on='Date', right_on='DateStr', how='left', suffixes=('', '_prev'))
                 
-                # 없는 값 처리
-                merged['REV_prev'] = merged['REV_prev'].fillna(merged['REV'])
-                merged['RMS_prev'] = merged['RMS_prev'].fillna(merged['RMS'])
+                # 어제 데이터 컬럼 정리 (값 채우기)
+                merged['Prev_RMS'] = merged['RMS'].fillna(0) # RMS_prev가 실제 컬럼명일 수 있음 확인 필요
+                # 실제로는 df_prev의 컬럼명이 RMS, OCC.. 일 것임. process_excel_file 참고.
+                # merge시 _prev 접미사가 붙음 -> RMS_prev, OCC_prev...
                 
-                # 변화량 계산
-                merged['Var_REV'] = merged['REV'] - merged['REV_prev']
-                merged['Var_RMS'] = merged['RMS'] - merged['RMS_prev']
+                merged['Prev_RMS'] = merged['RMS_prev'].fillna(merged['Curr_RMS'])
+                merged['Prev_OCC'] = merged['OCC_prev'].fillna(merged['Curr_OCC'])
+                merged['Prev_ADR'] = merged['ADR_prev'].fillna(merged['Curr_ADR'])
+                merged['Prev_REV'] = merged['REV_prev'].fillna(merged['Curr_REV'])
+
+                # 변화량 계산 (Growth)
+                merged['Var_RMS'] = merged['Curr_RMS'] - merged['Prev_RMS']
+                merged['Var_OCC'] = merged['Curr_OCC'] - merged['Prev_OCC']
+                merged['Var_ADR'] = merged['Curr_ADR'] - merged['Prev_ADR']
+                merged['Var_REV'] = merged['Curr_REV'] - merged['Prev_REV']
                 
-                final_show = merged[['DateStr', 'RMS', 'RMS_prev', 'Var_RMS', 'REV', 'REV_prev', 'Var_REV']].copy()
+                # 최종 컬럼 순서 재배치 (어제 | 오늘 | 변화량)
+                final_df = merged[[
+                    'Date', 'Day',
+                    'Prev_RMS', 'Prev_OCC', 'Prev_ADR', 'Prev_REV',
+                    'Curr_RMS', 'Curr_OCC', 'Curr_ADR', 'Curr_REV',
+                    'Var_RMS', 'Var_OCC', 'Var_ADR', 'Var_REV'
+                ]]
             else:
-                # 비교 대상 없을 때
-                final_show = df_curr[['DateStr', 'RMS', 'RMS', 'REV', 'REV']].copy()
-                final_show.columns = ['DateStr', 'RMS', 'RMS_prev', 'REV', 'REV_prev']
-                final_show['Var_RMS'] = 0
-                final_show['Var_REV'] = 0
+                # 비교 데이터 없을 때
+                final_df = display_df.copy()
+                # 빈 컬럼 추가 (어제 데이터 위치에 오늘 데이터 넣어서 0 차이로 보이게 하거나 비워둠)
+                final_df['Prev_RMS'] = final_df['Curr_RMS']
+                final_df['Prev_OCC'] = final_df['Curr_OCC']
+                final_df['Prev_ADR'] = final_df['Curr_ADR']
+                final_df['Prev_REV'] = final_df['Curr_REV']
+                final_df['Var_RMS'] = 0
+                final_df['Var_OCC'] = 0
+                final_df['Var_ADR'] = 0
+                final_df['Var_REV'] = 0
+                
+                # 순서 배치
+                final_df = final_df[[
+                    'Date', 'Day',
+                    'Prev_RMS', 'Prev_OCC', 'Prev_ADR', 'Prev_REV',
+                    'Curr_RMS', 'Curr_OCC', 'Curr_ADR', 'Curr_REV',
+                    'Var_RMS', 'Var_OCC', 'Var_ADR', 'Var_REV'
+                ]]
 
-            # 컬럼명 정리
-            final_show.columns = ['Date', 'Rms(Act)', 'Rms(Pre)', 'Rms(Pick)', 'Rev(Act)', 'Rev(Pre)', 'Rev(Pick)']
+            # ----------------------
+            # 3. 스타일링 (Pandas Styler)
+            # ----------------------
+            # 컬럼 이름 깔끔하게 변경
+            final_df.columns = [
+                'Date', 'Day', 
+                'Prev RMS', 'Prev OCC', 'Prev ADR', 'Prev REV', 
+                'Curr RMS', 'Curr OCC', 'Curr ADR', 'Curr REV', 
+                'Pick RMS', 'Pick OCC', 'Pick ADR', 'Pick REV'
+            ]
 
-            st.dataframe(
-                final_show,
-                column_config={
-                    "Rev(Act)": st.column_config.NumberColumn(format="%d"),
-                    "Rev(Pre)": st.column_config.NumberColumn(format="%d"),
-                    "Rev(Pick)": st.column_config.NumberColumn(format="%d"),
-                },
-                height=600,
-                use_container_width=True
-            )
+            # 포맷 설정 (천단위 콤마, 소수점)
+            format_dict = {
+                'Prev RMS': '{:,.0f}', 'Prev OCC': '{:.1f}%', 'Prev ADR': '{:,.0f}', 'Prev REV': '{:,.0f}',
+                'Curr RMS': '{:,.0f}', 'Curr OCC': '{:.1f}%', 'Curr ADR': '{:,.0f}', 'Curr REV': '{:,.0f}',
+                'Pick RMS': '{:+,.0f}', 'Pick OCC': '{:+.1f}%', 'Pick ADR': '{:+,.0f}', 'Pick REV': '{:+,.0f}'
+            }
+
+            # 스타일 적용
+            styler = final_df.style.format(format_dict)
+            
+            # 1) 마이너스 빨간색 (전체 적용 or 변화량만 적용)
+            styler = styler.map(color_negative_red, subset=['Pick RMS', 'Pick OCC', 'Pick ADR', 'Pick REV'])
+            
+            # 2) 히트맵 (상위/하위 데이터 표시) - 점유율과 매출에 적용
+            # 색상: 낮은 값(연함) -> 높은 값(진함) / Blues, Greens, Reds 등
+            styler = styler.background_gradient(cmap='Blues', subset=['Curr RMS', 'Curr REV'])
+            styler = styler.background_gradient(cmap='Oranges', subset=['Curr OCC']) # 점유율은 오렌지톤
+
+            # 화면 출력 (높이 조절로 촘촘하게)
+            st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
             
             # ----------------------
-            # 3. 저장 버튼
+            # 4. 저장 버튼
             # ----------------------
-            # 파일이 2개일 땐 'Current'로 선정된 놈을 저장해야 내일 또 비교가 됨
             if st.button(f"💾 {current_month}월 데이터 확정 및 저장", key=f"save_{current_month}"):
                 save_today_data(current_month, df_curr)
                 st.toast(f"✅ {current_month}월 데이터가 안전하게 저장되었습니다!", icon="💾")
