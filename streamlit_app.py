@@ -8,11 +8,10 @@ import numpy as np
 import textwrap
 
 # ------------------------------------------------------------------
-# 1. 페이지 설정 및 CSS 디자인
+# 1. 페이지 설정 및 CSS (줄바꿈 허용 + 가독성 디자인)
 # ------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
-# CSS: 가독성을 위한 파스텔톤 배경 및 테이블 스타일링
 st.markdown(textwrap.dedent("""
 <style>
     .block-container {
@@ -74,6 +73,20 @@ st.markdown(textwrap.dedent("""
     .kpi-accent { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
     .kpi-accent .kpi-title { color: rgba(255,255,255,0.8); }
     .kpi-accent .kpi-value { color: white; }
+    
+    /* [핵심] DataFrame 헤더 줄바꿈 허용 */
+    th {
+        white-space: pre-wrap !important; 
+        text-align: center !important; 
+        vertical-align: bottom !important;
+        line-height: 1.2 !important;
+        font-size: 11px !important;
+        padding: 4px !important;
+    }
+    td {
+        font-size: 12px !important;
+        vertical-align: middle !important;
+    }
     
     /* 상태 컬러 유틸리티 */
     .text-red { color: #dc2626; font-weight: 700; }
@@ -273,7 +286,7 @@ if uploaded_files:
                 st.info(f"📂 {current_month}월 데이터가 없습니다.")
                 continue
 
-            # 상단 S.O.B 카드 출력
+            # 대시보드 출력
             budget = BUDGET_DATA.get(current_month, 0)
             render_sob_dashboard(
                 current_month=current_month,
@@ -362,9 +375,9 @@ if uploaded_files:
             final_df = merged[final_cols].copy()
             col_map = {'Date':'Date', 'Day':'Day'}
             for item in items:
-                col_map[f'{item}_prev'] = f'Pre\n{item}'
-                col_map[f'Curr_{item}'] = f'{item}'
-                col_map[f'Pick_{item}'] = f'Var\n{item}'
+                col_map[f'{item}_prev'] = f'Pre\n{item}'  # 줄바꿈 추가
+                col_map[f'Curr_{item}'] = f'Today\n{item}' # 줄바꿈 추가
+                col_map[f'Pick_{item}'] = f'Var\n{item}'   # 줄바꿈 추가
             final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
             fmt = {}
@@ -375,21 +388,31 @@ if uploaded_files:
                 else: fmt[col] = '{:,.0f}'
             if 'Var\nOCC' in final_df.columns: fmt['Var\nOCC'] = '{:+.1f}%'
 
-            # [스타일링: 파스텔톤 그룹핑]
+            # [스타일링: 파스텔톤 그룹핑 & 강조]
             styler = final_df.style.format(fmt)
             
             # 1. 어제 그룹 (회색 파스텔)
             pre_cols = [c for c in final_df.columns if 'Pre' in c]
-            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f3f4f6', 'color': '#6b7280', 'font-size': '11px'})
+            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#9ca3af', 'font-size': '11px'})
             
-            # 2. 오늘 그룹 (하늘색 파스텔 + 히트맵)
+            # 2. 오늘 그룹 (하늘색 배경 + 히트맵 + 테두리 강조)
             curr_cols = [c for c in final_df.columns if c not in pre_cols and 'Var' not in c and c not in ['Date', 'Day']]
             subset_idx = final_df.index[:-1]
-            styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[subset_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.2)
-            styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[subset_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.4)
-            styler = styler.set_properties(subset=curr_cols, **{'font-weight': '700', 'font-size': '12px', 'border-left': '1px solid #d1d5db', 'border-right': '1px solid #d1d5db'})
             
-            # 3. 변화 그룹 (노랑 파스텔)
+            # 배경색 지정 (히트맵 밑바탕)
+            styler = styler.set_properties(subset=curr_cols, **{
+                'background-color': '#f0f9ff',  # 연한 하늘색
+                'font-weight': '700', 
+                'font-size': '12px',
+                'border-left': '1px solid #cbd5e1', 
+                'border-right': '1px solid #cbd5e1'
+            })
+            
+            # 히트맵 (진하지 않게 low/high 조절)
+            styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[subset_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.5)
+            styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[subset_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.6)
+            
+            # 3. 변화 그룹 (연한 노랑)
             var_cols = [c for c in final_df.columns if 'Var' in c]
             def color_variant(val):
                 color = '#dc2626' if val < 0 else '#166534' if val > 0 else '#374151'
@@ -397,8 +420,22 @@ if uploaded_files:
             styler = styler.map(color_variant, subset=var_cols)
             styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb', 'font-size': '11px'})
 
-            # Total Row
-            styler = styler.apply(lambda x: ['font-weight: 800; font-size: 13px; background-color: #eff6ff; border-top: 2px solid #1d4ed8'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
+            # 4. Total 행 강조 (특히 오늘 데이터 부분)
+            def highlight_total_curr(row):
+                styles = []
+                for idx, col in enumerate(row.index):
+                    # 기본 Total 스타일
+                    base_style = 'background-color: #eff6ff; font-weight: 800; border-top: 2px solid #1d4ed8; font-size: 13px;'
+                    
+                    # 오늘(Today) 컬럼인 경우 더 강조
+                    if 'Today' in col:
+                        base_style += 'background-color: #dbeafe; color: #1e3a8a; font-size: 14px; border-left: 2px solid #1d4ed8; border-right: 2px solid #1d4ed8;'
+                    
+                    styles.append(base_style)
+                return styles
+
+            # 마지막 행(Total)에 대해 스타일 함수 적용
+            styler = styler.apply(lambda x: highlight_total_curr(x) if x.name == final_df.index[-1] else ['' for _ in x], axis=1)
 
             st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
 
