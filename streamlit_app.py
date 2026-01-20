@@ -5,14 +5,15 @@ from firebase_admin import credentials, firestore
 from datetime import datetime, timedelta
 import io
 import numpy as np
-import textwrap  # [추가] 들여쓰기 제거용 라이브러리
+import textwrap
 
 # ------------------------------------------------------------------
 # 1. 페이지 설정 및 CSS 디자인
 # ------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
-st.markdown("""
+# CSS도 들여쓰기 문제 없도록 textwrap.dedent 적용
+st.markdown(textwrap.dedent("""
 <style>
     .block-container {
         padding-top: 1rem;
@@ -108,9 +109,8 @@ st.markdown("""
     .kpi-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; }
     .kpi-green .kpi-title { color: rgba(255,255,255,0.9); }
     .kpi-green .kpi-value { color: white; }
-
 </style>
-""", unsafe_allow_html=True)
+"""), unsafe_allow_html=True)
 
 # Firebase 연결
 if not firebase_admin._apps:
@@ -289,7 +289,7 @@ if uploaded_files:
                 continue
 
             # ----------------------
-            # [상단] 모던 S.O.B 카드 (여기가 핵심!)
+            # [상단] 모던 S.O.B 카드
             # ----------------------
             budget = BUDGET_DATA.get(current_month, 0)
             
@@ -312,78 +312,78 @@ if uploaded_files:
             
             vs_class = "variance-negative" if vs_budget < 0 else "variance-positive"
             
-            # [수정됨] textwrap.dedent를 사용하여 들여쓰기로 인한 코드 블록 렌더링 방지
+            # [핵심 수정] textwrap.dedent를 사용하여 들여쓰기 문제를 완벽 해결
             html_card = textwrap.dedent(f"""
-            <div class="sob-container">
-                <div class="sob-header">📊 {current_month}월 Performance Summary</div>
-                
-                <div class="sob-grid">
-                    <div>
-                        <table class="modern-table">
-                            <thead>
-                                <tr><th>Category</th><th>Amount</th><th>Status</th></tr>
-                            </thead>
-                            <tbody>
-                                <tr>
-                                    <td class="label">Budget</td>
-                                    <td>{budget:,.0f}</td>
-                                    <td>-</td>
-                                </tr>
-                                <tr>
-                                    <td class="label">Actual</td>
-                                    <td style="font-weight:bold;">{total_rev:,.0f}</td>
-                                    <td>-</td>
-                                </tr>
-                                <tr class="highlight-row">
-                                    <td class="label">Variance</td>
-                                    <td class="{vs_class}">{vs_budget:+,.0f}</td>
-                                    <td class="{vs_class}">Achv: {achv_rate:.1f}%</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                        <div class="kpi-wrapper">
-                            <div class="kpi-card">
-                                <div class="kpi-title">TOTAL OCC</div>
-                                <div class="kpi-value">{total_occ:.1f}%</div>
-                            </div>
-                            <div class="kpi-card kpi-green">
-                                <div class="kpi-title">ACHIEVEMENT</div>
-                                <div class="kpi-value">{achv_rate:.1f}%</div>
+                <div class="sob-container">
+                    <div class="sob-header">📊 {current_month}월 Performance Summary</div>
+                    
+                    <div class="sob-grid">
+                        <div>
+                            <table class="modern-table">
+                                <thead>
+                                    <tr><th>Category</th><th>Amount</th><th>Status</th></tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td class="label">Budget</td>
+                                        <td>{budget:,.0f}</td>
+                                        <td>-</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="label">Actual</td>
+                                        <td style="font-weight:bold;">{total_rev:,.0f}</td>
+                                        <td>-</td>
+                                    </tr>
+                                    <tr class="highlight-row">
+                                        <td class="label">Variance</td>
+                                        <td class="{vs_class}">{vs_budget:+,.0f}</td>
+                                        <td class="{vs_class}">Achv: {achv_rate:.1f}%</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <div class="kpi-wrapper">
+                                <div class="kpi-card">
+                                    <div class="kpi-title">TOTAL OCC</div>
+                                    <div class="kpi-value">{total_occ:.1f}%</div>
+                                </div>
+                                <div class="kpi-card kpi-green">
+                                    <div class="kpi-title">ACHIEVEMENT</div>
+                                    <div class="kpi-value">{achv_rate:.1f}%</div>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <div>
-                        <table class="modern-table">
-                            <thead>
-                                <tr>
-                                    <th>Segment</th><th>RMS</th><th>ADR</th><th>REV</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr>
-                                    <td class="label">FIT (개인)</td>
-                                    <td>{fit_rms:,.0f}</td>
-                                    <td>{fit_adr:,.0f}</td>
-                                    <td>{fit_rev:,.0f}</td>
-                                </tr>
-                                <tr>
-                                    <td class="label">GROUP (단체)</td>
-                                    <td>{grp_rms:,.0f}</td>
-                                    <td>{grp_adr:,.0f}</td>
-                                    <td>{grp_rev:,.0f}</td>
-                                </tr>
-                                <tr class="total-row">
-                                    <td class="label">TOTAL</td>
-                                    <td>{total_rms:,.0f}</td>
-                                    <td>{total_adr:,.0f}</td>
-                                    <td>{total_rev:,.0f}</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                        <div>
+                            <table class="modern-table">
+                                <thead>
+                                    <tr>
+                                        <th>Segment</th><th>RMS</th><th>ADR</th><th>REV</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td class="label">FIT (개인)</td>
+                                        <td>{fit_rms:,.0f}</td>
+                                        <td>{fit_adr:,.0f}</td>
+                                        <td>{fit_rev:,.0f}</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="label">GROUP (단체)</td>
+                                        <td>{grp_rms:,.0f}</td>
+                                        <td>{grp_adr:,.0f}</td>
+                                        <td>{grp_rev:,.0f}</td>
+                                    </tr>
+                                    <tr class="total-row">
+                                        <td class="label">TOTAL</td>
+                                        <td>{total_rms:,.0f}</td>
+                                        <td>{total_adr:,.0f}</td>
+                                        <td>{total_rev:,.0f}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-            </div>
             """)
             st.markdown(html_card, unsafe_allow_html=True)
 
