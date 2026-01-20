@@ -22,29 +22,28 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# 1. 파이어베이스 연결 & 데이터 함수 (구글 시트 대체)
+# 1. 파이어베이스 연결 & 데이터 함수
 # ------------------------------------------------------------------------------
-# 파이어베이스 초기화
 if not firebase_admin._apps:
     cred = credentials.Certificate(dict(st.secrets["firebase"]))
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# 컬렉션 이름 정의
-COLLECTION_NAME = "revenue_integrity_final"
+# 컬렉션 이름 (이곳에 히스토리가 쌓입니다)
+COLLECTION_NAME = "revenue_integrity_history"
 
 def save_to_firestore(df):
-    """데이터프레임을 파이어베이스에 저장 (append_rows 대체)"""
+    """데이터프레임을 파이어베이스에 저장 (Append Mode)"""
     try:
-        # 데이터프레임을 딕셔너리 리스트로 변환 (모든 값 문자열 처리하여 오류 방지)
+        # 날짜 등 객체 타입을 문자열로 변환하여 JSON 오류 방지
         records = df.fillna('').astype(str).to_dict(orient='records')
         
-        # 문서 하나에 업로드된 데이터 덩어리를 저장
-        # (구글 시트의 append_rows와 유사하게 동작하도록)
+        # 문서 생성 (업로드 시간 기반 ID)
         doc_ref = db.collection(COLLECTION_NAME).document()
         doc_ref.set({
             'data': records,
             'uploaded_at': datetime.now(),
+            'snapshot_date': datetime.now().strftime('%Y-%m-%d'), # 조회 기준일
             'count': len(records)
         })
         return True
@@ -54,7 +53,7 @@ def save_to_firestore(df):
 
 @st.cache_data(ttl=600)
 def load_data_from_firestore():
-    """파이어베이스에서 모든 데이터 불러오기 (get_all_values 대체)"""
+    """파이어베이스에서 모든 히스토리 데이터 불러오기"""
     try:
         docs = db.collection(COLLECTION_NAME).stream()
         all_data = []
@@ -62,36 +61,27 @@ def load_data_from_firestore():
         for doc in docs:
             doc_dict = doc.to_dict()
             if 'data' in doc_dict:
-                all_data.extend(doc_dict['data'])
+                # 각 행에 스냅샷 날짜가 없다면 문서의 날짜를 사용 (하위 호환성)
+                doc_date = doc_dict.get('snapshot_date', '')
+                rows = doc_dict['data']
+                
+                # 데이터프레임 변환 후 날짜 보정
+                for row in rows:
+                    if 'Snapshot_Date' not in row or not row['Snapshot_Date']:
+                        row['Snapshot_Date'] = doc_date
+                    all_data.append(row)
         
-        # 데이터가 없으면 빈 리스트 반환 (원본 로직 호환)
         if not all_data:
             return []
             
-        # 첫 번째 행을 헤더로 사용하는 구조를 맞추기 위해
-        # 파이어베이스는 딕셔너리 리스트이므로 바로 DataFrame 생성 가능하지만,
-        # 원본 코드의 get_all_values() 구조(리스트의 리스트)와 호환되게 처리
-        # 여기서는 DataFrame을 바로 생성하여 반환하도록 약간 수정 (효율성 위해)
-        # 하지만 원본 흐름 유지를 위해 바로 DataFrame 리턴
         return all_data
         
     except Exception as e:
         st.error(f"❌ 데이터 로드 오류: {e}")
         return []
 
-def clear_firestore():
-    """DB 초기화 (sheet.clear 대체)"""
-    try:
-        docs = db.collection(COLLECTION_NAME).stream()
-        for doc in docs:
-            doc.reference.delete()
-        return True
-    except Exception as e:
-        st.error(f"❌ 초기화 오류: {e}")
-        return False
-
 # ------------------------------------------------------------------------------
-# 2. 데이터 처리 엔진 (원본 로직 유지)
+# 2. 데이터 처리 엔진 (로직 유지)
 # ------------------------------------------------------------------------------
 def normalize_and_map_columns(df):
     col_map = {}
@@ -107,7 +97,7 @@ def normalize_and_map_columns(df):
         'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
-        'Lead_Time': ['lead', '리드', 'lt', 'l/t'] # 리드타임 컬럼 인식
+        'Lead_Time': ['lead', '리드', 'lt', 'l/t']
     }
 
     for original_col in df.columns:
@@ -146,7 +136,6 @@ def process_data(uploaded_file, status, sub_segment="General"):
             df_raw = pd.read_excel(uploaded_file, header=None)
 
         if is_otb:
-            # [OTB]
             df_raw = find_valid_header_row(df_raw)
             if '일자' in df_raw.columns: 
                 df_raw = df_raw[~df_raw['일자'].astype(str).str.contains('소계|Subtotal|합계|Total', na=False)]
@@ -175,7 +164,6 @@ def process_data(uploaded_file, status, sub_segment="General"):
             df['Lead_Time'] = 0
             
         else:
-            # [리스트]
             df_raw = find_valid_header_row(df_raw)
             df_raw = df_raw[~df_raw.iloc[:, 0].astype(str).str.contains('합계|Total|소계|Subtotal', case=False, na=False)]
             
@@ -201,8 +189,8 @@ def process_data(uploaded_file, status, sub_segment="General"):
             df['Is_Zero_Rate'] = df['Room_Revenue'] <= 0
             df['ADR'] = df.apply(lambda x: x['Room_Revenue'] / x['RN'] if x['RN'] > 0 else 0, axis=1)
 
-        # 공통
-        df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
+        # 공통 필드 추가
+        df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d') # 여기가 조회 기준일이 됩니다
         df['Status'] = status
         
         df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
@@ -218,8 +206,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
         
         df['Weekday_Num'] = df['CheckIn_dt'].dt.weekday
         df['Day_Type'] = df['Weekday_Num'].apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
-
-        # [지배인님 요청] 리드타임 강제 계산 로직 삭제 -> 엑셀 값 그대로 사용
+        
         df['Lead_Time'] = df['Lead_Time'].fillna(0).astype(int)
         
         def classify_nat(row):
@@ -253,20 +240,18 @@ def process_data(uploaded_file, status, sub_segment="General"):
         return pd.DataFrame()
 
 # ------------------------------------------------------------------------------
-# 3. 공통 분석 모듈 (세그먼트 월별 상세 + 페이싱 ADR 완벽 복구)
+# 3. 공통 분석 모듈
 # ------------------------------------------------------------------------------
 def render_rich_analysis(target_df, title_prefix, color_scale="Blues"):
     if target_df.empty:
         st.warning(f"⚠️ {title_prefix} 데이터가 없습니다.")
         return
 
-    # 탭 구성
     t1, t2, t3, t4, t5, t6 = st.tabs([
         "📊 세그먼트 분석", "📅 예약패턴(Pacing)", "🏢 거래처", 
         "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일별"
     ])
     
-    # 1. 세그먼트 (월별 상세 복구)
     with t1:
         st.subheader(f"📊 {title_prefix} 세그먼트 상세")
         seg_stats = target_df.groupby('Segment').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
@@ -277,29 +262,13 @@ def render_rich_analysis(target_df, title_prefix, color_scale="Blues"):
         c2.plotly_chart(px.bar(seg_stats, x='Segment', y='ADR', title="세그먼트별 ADR", text_auto=',.0f', color='Segment'), use_container_width=True, key=f"{title_prefix}_seg_bar")
         
         st.divider()
-        st.markdown("##### 📅 세그먼트 x 월별 상세 실적 (RN / ADR / 매출)")
-        # [복구] 세그먼트 월별 상세 테이블
-        seg_monthly = target_df.groupby(['Segment', 'Stay_Month']).agg({
-            'RN': 'sum', 
-            'Room_Revenue': 'sum'
-        }).reset_index()
+        seg_monthly = target_df.groupby(['Segment', 'Stay_Month']).agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
         seg_monthly['ADR'] = (seg_monthly['Room_Revenue'] / seg_monthly['RN']).fillna(0)
         seg_monthly = seg_monthly.sort_values(['Stay_Month', 'Segment'])
-        
-        st.dataframe(seg_monthly, 
-                     column_config={
-                         "Stay_Month": st.column_config.TextColumn("월"),
-                         "Segment": st.column_config.TextColumn("세그먼트"),
-                         "Room_Revenue": st.column_config.NumberColumn("매출액", format="%d원"),
-                         "ADR": st.column_config.NumberColumn("ADR", format="%d원"),
-                         "RN": st.column_config.NumberColumn("RN", format="%d")
-                     }, hide_index=True, use_container_width=True)
+        st.dataframe(seg_monthly, hide_index=True, use_container_width=True)
 
-    # 2. Pacing (ADR 옵션 복구)
     with t2:
         st.subheader(f"📅 {title_prefix} Pacing (예약월 vs 입실월)")
-        
-        # [복구] ADR 선택 옵션
         pivot_metric = st.radio("분석 기준", ["객실수 (RN)", "객실매출", "객실단가 (ADR)"], horizontal=True, key=f"{title_prefix}_pacing_radio")
         
         if "ADR" in pivot_metric:
@@ -314,48 +283,37 @@ def render_rich_analysis(target_df, title_prefix, color_scale="Blues"):
             pacing = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='Room_Revenue', aggfunc='sum', fill_value=0)
             fmt = ".2s"
 
-        fig = px.imshow(pacing, text_auto=fmt, aspect="auto", color_continuous_scale=color_scale, title=f"Booking Pattern ({pivot_metric})")
+        fig = px.imshow(pacing, text_auto=fmt, aspect="auto", color_continuous_scale=color_scale)
         st.plotly_chart(fig, use_container_width=True, key=f"{title_prefix}_pacing")
 
-    # 3. 거래처
     with t3:
         st.subheader(f"🏢 {title_prefix} 거래처 분석")
         acc_stats = target_df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
         acc_stats['ADR'] = (acc_stats['Room_Revenue'] / acc_stats['RN']).fillna(0)
-        
         fig_acc = px.scatter(acc_stats, x="RN", y="ADR", size="Room_Revenue", color="Account", hover_name="Account", size_max=60)
         st.plotly_chart(fig_acc, use_container_width=True, key=f"{title_prefix}_acc")
-        st.dataframe(acc_stats.sort_values('RN', ascending=False), 
-                     column_config={"Room_Revenue": st.column_config.NumberColumn(format="%d원"), "ADR": st.column_config.NumberColumn(format="%d원")}, 
-                     hide_index=True, use_container_width=True)
+        st.dataframe(acc_stats.sort_values('RN', ascending=False), hide_index=True, use_container_width=True)
 
-    # 4. 리드타임
     with t4:
-        st.subheader(f"⏳ {title_prefix} 리드타임 분석 (파일 원본 값)")
+        st.subheader(f"⏳ {title_prefix} 리드타임 분석")
         bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]
         labels = ['당일', '1-3일', '4-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+']
         temp_df = target_df.copy()
         temp_df['Lead_Group'] = pd.cut(temp_df['Lead_Time'], bins=bins, labels=labels)
-        
         lead_stats = temp_df.groupby('Lead_Group').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
         lead_stats['ADR'] = (lead_stats['Room_Revenue'] / lead_stats['RN']).fillna(0)
         
         fig_lead = go.Figure()
         fig_lead.add_trace(go.Bar(x=lead_stats['Lead_Group'], y=lead_stats['RN'], name='RN', marker_color='red' if "취소" in title_prefix else 'blue'))
         fig_lead.add_trace(go.Scatter(x=lead_stats['Lead_Group'], y=lead_stats['ADR'], name='ADR', yaxis='y2', line=dict(color='black', width=2)))
-        fig_lead.update_layout(yaxis2=dict(overlaying='y', side='right', title='ADR'), title="리드타임별 물량 vs 단가")
         st.plotly_chart(fig_lead, use_container_width=True, key=f"{title_prefix}_lead")
 
-    # 5. 객실타입
     with t5:
         st.subheader(f"🛏️ {title_prefix} 객실타입 분석")
         rt_stats = target_df.groupby('Room_Type').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
         rt_stats['ADR'] = (rt_stats['Room_Revenue'] / rt_stats['RN']).fillna(0)
-        st.dataframe(rt_stats.sort_values('RN', ascending=False), 
-                     column_config={"Room_Revenue": st.column_config.NumberColumn(format="%d원"), "ADR": st.column_config.NumberColumn(format="%d원")}, 
-                     hide_index=True, use_container_width=True)
+        st.dataframe(rt_stats.sort_values('RN', ascending=False), hide_index=True, use_container_width=True)
 
-    # 6. 요일별
     with t6:
         st.subheader(f"🗓️ {title_prefix} 요일별 분석")
         wd_stats = target_df.groupby('Day_Type').agg({'RN':'sum', 'Room_Revenue':'sum'}).reset_index()
@@ -368,81 +326,91 @@ def render_rich_analysis(target_df, title_prefix, color_scale="Blues"):
 # UI 메인
 # ------------------------------------------------------------------------------
 try:
-    # [변경] 구글 시트 연결 대신 파이어베이스 연결은 상단에서 이미 완료함
-    # 예산 데이터 등은 현재 파이어베이스에 없으므로 빈 DF 처리 (원본 로직 유지)
-    budget_df = pd.DataFrame(columns=['Month', 'Budget'])
+    st.title("🏛️ 앰버 호텔 경영 리포트 (History Mode)")
 
-    st.title("🏛️ 앰버 호텔 경영 리포트 (Final Integrity)")
-
-    # 초기화
-    with st.sidebar.expander("🛠️ 데이터 관리", expanded=True):
-        if st.button("🗑️ 전체 데이터 삭제 (필수)"):
-            if clear_firestore():
-                load_data_from_firestore.clear()
-                st.success("초기화 완료! (Firestore)")
-                time.sleep(1)
-                st.rerun()
-
-    st.sidebar.header("📤 데이터 업로드")
-    
-    with st.sidebar.expander("📝 상세 리스트", expanded=False):
-        f1 = st.file_uploader("신규 예약 리스트", type=['xlsx','csv'], key="f1")
-        if f1 and st.button("신규 예약 반영"):
-            df = process_data(f1, "Booked")
-            if not df.empty:
-                if save_to_firestore(df):
-                    load_data_from_firestore.clear()
-                    st.success("반영 완료!")
-                    time.sleep(2)
-                    st.rerun()
-        
-        f2 = st.file_uploader("취소 리스트", type=['xlsx','csv'], key="f2")
-        if f2 and st.button("취소 반영"):
-            df = process_data(f2, "Cancelled")
-            if not df.empty:
-                if save_to_firestore(df):
-                    load_data_from_firestore.clear()
-                    st.success("반영 완료!")
-                    time.sleep(2)
-                    st.rerun()
-
-    with st.sidebar.expander("🎯 세일즈 온더북", expanded=True):
-        # [수정] 여러 파일을 올릴 수 있도록 accept_multiple_files=True 옵션 추가
-        # 로직은 원본 그대로 유지하되, 반복문으로 처리
-        f3 = st.file_uploader("당월 OTB", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
-        if f3 and st.button("당월 OTB 반영"):
-            # 리스트로 들어오므로 반복 처리
-            for file in f3:
-                df = process_data(file, "Booked", "Month")
-                if not df.empty:
-                    save_to_firestore(df)
-            load_data_from_firestore.clear()
-            st.success("반영 완료!")
-            time.sleep(2)
-            st.rerun()
-        
-        f4 = st.file_uploader("전체 OTB", type=['xlsx','csv'], key="f4", accept_multiple_files=True)
-        if f4 and st.button("전체 OTB 반영"):
-            for file in f4:
-                df = process_data(file, "Booked", "Total")
-                if not df.empty:
-                    save_to_firestore(df)
-            load_data_from_firestore.clear()
-            st.success("반영 완료!")
-            time.sleep(2)
-            st.rerun()
-
-    # 데이터 로드 (파이어베이스에서)
+    # 1. 데이터 로드
     raw_data = load_data_from_firestore()
+
+    # 2. 날짜 필터링 로직
+    df_filtered = pd.DataFrame()
     
-    if not raw_data:
-        st.warning("⚠️ 데이터가 없습니다. 파일을 업로드해주세요.")
-    else:
-        # 파이어베이스 데이터(Dict list)를 DataFrame으로 변환
-        # 원본 코드 로직과 호환되게 처리
-        df = pd.DataFrame(raw_data)
+    if raw_data:
+        df_all = pd.DataFrame(raw_data)
         
-        # 수치 변환
+        # 스냅샷 날짜 목록 추출 (중복제거 및 내림차순 정렬)
+        if 'Snapshot_Date' in df_all.columns:
+            available_dates = sorted(df_all['Snapshot_Date'].unique(), reverse=True)
+        else:
+            available_dates = []
+
+        # 사이드바 구성
+        with st.sidebar:
+            st.header("📅 조회 기준일 (Snapshot)")
+            
+            if available_dates:
+                # [핵심] 날짜 선택 박스
+                selected_date = st.selectbox(
+                    "데이터 업로드 날짜 선택",
+                    available_dates,
+                    index=0 # 기본값: 가장 최근 날짜
+                )
+                
+                # 선택된 날짜로 데이터 필터링
+                df_filtered = df_all[df_all['Snapshot_Date'] == selected_date].copy()
+                st.success(f"기준일: {selected_date}")
+            else:
+                st.warning("저장된 데이터가 없습니다.")
+
+            st.divider()
+            st.header("📤 데이터 추가 (Append)")
+            
+            with st.expander("📝 상세 리스트 업로드"):
+                f1 = st.file_uploader("신규 예약", type=['xlsx','csv'], key="f1")
+                if f1 and st.button("신규 예약 저장"):
+                    df = process_data(f1, "Booked")
+                    if not df.empty and save_to_firestore(df):
+                        st.cache_data.clear()
+                        st.success("저장 완료!")
+                        time.sleep(1)
+                        st.rerun()
+                
+                f2 = st.file_uploader("취소 리스트", type=['xlsx','csv'], key="f2")
+                if f2 and st.button("취소 저장"):
+                    df = process_data(f2, "Cancelled")
+                    if not df.empty and save_to_firestore(df):
+                        st.cache_data.clear()
+                        st.success("저장 완료!")
+                        time.sleep(1)
+                        st.rerun()
+
+            with st.expander("🎯 OTB 업로드"):
+                # 다중 파일 업로드 지원
+                f3_list = st.file_uploader("당월 OTB (여러개 가능)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
+                if f3_list and st.button("당월 OTB 저장"):
+                    for f in f3_list:
+                        df = process_data(f, "Booked", "Month")
+                        if not df.empty: save_to_firestore(df)
+                    st.cache_data.clear()
+                    st.success("저장 완료!")
+                    time.sleep(1)
+                    st.rerun()
+                
+                f4_list = st.file_uploader("전체 OTB (여러개 가능)", type=['xlsx','csv'], key="f4", accept_multiple_files=True)
+                if f4_list and st.button("전체 OTB 저장"):
+                    for f in f4_list:
+                        df = process_data(f, "Booked", "Total")
+                        if not df.empty: save_to_firestore(df)
+                    st.cache_data.clear()
+                    st.success("저장 완료!")
+                    time.sleep(1)
+                    st.rerun()
+
+    # 3. 대시보드 출력
+    if df_filtered.empty:
+        st.info("👈 사이드바에서 파일을 업로드하거나, 조회할 날짜를 선택해주세요.")
+    else:
+        # 데이터 전처리 및 타입 변환 (JSON 문자열 -> 숫자)
+        df = df_filtered.copy()
         for col in ['RN', 'Room_Revenue', 'Total_Revenue', 'ADR', 'Lead_Time']:
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
@@ -451,11 +419,8 @@ try:
         df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
         
-        # 리드타임: 계산 안함. 파일에 있는 값 그대로 사용
-        df['Lead_Time'] = df['Lead_Time'].astype(int)
-        
         df['Is_Zero_Rate'] = df['Total_Revenue'] <= 0
-        df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m') # 필터링용
+        df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
         df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
         
         # 데이터 분리
@@ -468,17 +433,13 @@ try:
         df_list_cn = df_list[df_list['Status'] == 'Cancelled']
         df_total_paid = pd.concat([df_paid_bk, df_list_cn])
 
-        curr_month = datetime.now().strftime('%Y-%m')
-
-        # [NEW] GM 요약 탭
         main_tab0, main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs([
             "👑 총지배인(GM) 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약"
         ])
 
         with main_tab0:
-            st.header("👑 Executive Summary")
+            st.header(f"👑 Executive Summary ({selected_date} 기준)")
             
-            # 1. 예약 유입 속도
             st.subheader("🚀 최근 예약 유입 속도 (Booking Velocity)")
             if not df_paid_bk.empty:
                 recent_bk = df_paid_bk.groupby('Booking_Month').agg({'RN':'sum', 'Room_Revenue':'sum'}).reset_index()
@@ -491,7 +452,6 @@ try:
 
             st.divider()
             
-            # 2. Top 5 거래처
             st.subheader("🏆 Top 5 효자 거래처")
             if not df_paid_bk.empty:
                 top_acc = df_paid_bk.groupby('Account').agg({'Room_Revenue':'sum', 'RN':'sum'}).reset_index()
