@@ -8,13 +8,14 @@ import numpy as np
 import textwrap
 
 # ------------------------------------------------------------------
-# 1. 페이지 설정 및 CSS 디자인
+# 1. 페이지 설정 및 CSS (들여쓰기 이슈 완벽 해결)
 # ------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
-# CSS도 들여쓰기 문제 없도록 textwrap.dedent 적용
-st.markdown(textwrap.dedent("""
+# CSS 스타일 정의 (변수로 분리하여 공백 문제 해결)
+custom_css = """
 <style>
+    /* 전체 여백 조정 */
     .block-container {
         padding-top: 1rem;
         padding-bottom: 3rem;
@@ -22,56 +23,52 @@ st.markdown(textwrap.dedent("""
         padding-right: 1rem;
     }
     
-    /* [카드 스타일 S.O.B 테이블] */
+    /* S.O.B 카드 컨테이너 */
     .sob-container {
         background-color: white;
         border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        padding: 20px;
-        margin-bottom: 20px;
-        border: 1px solid #e5e7eb;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        padding: 25px;
+        margin-bottom: 25px;
+        border: 1px solid #e0e0e0;
     }
     .sob-header {
-        font-size: 18px;
-        font-weight: 700;
+        font-size: 20px;
+        font-weight: 800;
         color: #111827;
         margin-bottom: 20px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
         border-bottom: 2px solid #f3f4f6;
         padding-bottom: 10px;
     }
     .sob-grid {
         display: grid;
-        grid-template-columns: 1fr 1.2fr;
+        grid-template-columns: 1fr 1.3fr;
         gap: 40px;
     }
     
-    /* 모던 테이블 */
+    /* 테이블 스타일 */
     .modern-table {
         width: 100%;
         border-collapse: collapse;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-family: 'Segoe UI', sans-serif;
     }
     .modern-table th {
         text-align: right;
         color: #6b7280;
-        font-size: 12px;
-        text-transform: uppercase;
+        font-size: 13px;
         font-weight: 600;
         padding: 10px 8px;
-        border-bottom: 2px solid #f3f4f6;
+        border-bottom: 2px solid #e5e7eb;
+        background-color: #f9fafb;
     }
     .modern-table th:first-child { text-align: left; }
     
     .modern-table td {
         padding: 12px 8px;
-        font-size: 14px;
+        font-size: 15px;
         color: #1f2937;
-        font-weight: 500;
         text-align: right;
-        border-bottom: 1px solid #f9fafb;
+        border-bottom: 1px solid #f3f4f6;
     }
     .modern-table td.label {
         text-align: left;
@@ -79,14 +76,21 @@ st.markdown(textwrap.dedent("""
         color: #374151;
     }
     
-    /* 강조 스타일 */
-    .variance-positive { color: #059669; font-weight: 700; }
-    .variance-negative { color: #dc2626; font-weight: 700; }
+    /* 강조 행 */
+    .highlight-row td {
+        background-color: #f0fdf4;
+        font-weight: 700;
+        color: #166534;
+    }
+    .highlight-row td.negative {
+        background-color: #fef2f2;
+        color: #991b1b;
+    }
     .total-row td {
-        background-color: #f8fafc;
+        background-color: #eff6ff;
         font-weight: 800;
-        color: #1e3a8a;
-        border-top: 2px solid #e2e8f0;
+        color: #1e40af;
+        border-top: 2px solid #bfdbfe;
     }
 
     /* KPI 카드 */
@@ -97,20 +101,24 @@ st.markdown(textwrap.dedent("""
     }
     .kpi-card {
         flex: 1;
-        background: #f3f4f6;
-        border-radius: 8px;
-        padding: 15px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 20px;
         text-align: center;
-        box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
     }
-    .kpi-title { font-size: 11px; color: #6b7280; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 4px; }
-    .kpi-value { font-size: 24px; color: #111827; font-weight: 800; }
+    .kpi-title { font-size: 12px; color: #64748b; font-weight: 700; margin-bottom: 5px; }
+    .kpi-value { font-size: 28px; color: #0f172a; font-weight: 900; }
     
-    .kpi-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; }
-    .kpi-green .kpi-title { color: rgba(255,255,255,0.9); }
-    .kpi-green .kpi-value { color: white; }
+    .kpi-accent { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
+    .kpi-accent .kpi-title { color: rgba(255,255,255,0.8); }
+    .kpi-accent .kpi-value { color: white; }
+    
+    /* DataFrame 스타일 */
+    iframe[title="streamlit.dataframe"] { width: 100% !important; }
 </style>
-"""), unsafe_allow_html=True)
+"""
+st.markdown(custom_css, unsafe_allow_html=True)
 
 # Firebase 연결
 if not firebase_admin._apps:
@@ -161,14 +169,14 @@ def find_header_and_process(file):
             if col_idx >= df_data.shape[1]: return 0
             return pd.to_numeric(df_data.iloc[:, col_idx], errors='coerce').fillna(0)
 
-        # [지능형 매핑]
+        # [좌표 매핑]
         if len(rms_indices) >= 3 and len(rev_indices) >= 3:
             fit_rms_idx, grp_rms_idx, total_rms_idx = rms_indices[0], rms_indices[1], rms_indices[-1]
             fit_rev_idx, grp_rev_idx, total_rev_idx = rev_indices[0], rev_indices[1], rev_indices[-1]
         else:
             fit_rms_idx, grp_rms_idx = 1, 6
             fit_rev_idx, grp_rev_idx = 4, 9
-            total_rms_idx, total_rev_idx = 13, 17 
+            total_rms_idx, total_rev_idx = 13, 17
             
         df_clean = pd.DataFrame()
         df_clean['Date'] = df_data['Date']
@@ -231,8 +239,10 @@ def save_data_by_date(target_date_str, month_num, df):
 
 def color_negative_red(val):
     if isinstance(val, (int, float)) and val < 0:
-        return 'color: red; font-weight: bold;'
-    return 'color: black;'
+        return 'color: #dc2626; font-weight: bold;'
+    if isinstance(val, (int, float)) and val > 0:
+        return 'color: #166534; font-weight: bold;'
+    return 'color: #374151;'
 
 # ------------------------------------------------------------------
 # 3. 사이드바
@@ -304,88 +314,87 @@ if uploaded_files:
             total_rms = fit_rms + grp_rms
             total_rev = fit_rev + grp_rev
             total_adr = (total_rev / total_rms) if total_rms else 0
-            
             total_occ = sob_curr['TOTAL_OCC']
 
             vs_budget = total_rev - budget
             achv_rate = (total_rev / budget * 100) if budget > 0 else 0
             
-            vs_class = "variance-negative" if vs_budget < 0 else "variance-positive"
-            
-            # [핵심 수정] textwrap.dedent를 사용하여 들여쓰기 문제를 완벽 해결
-            html_card = textwrap.dedent(f"""
-                <div class="sob-container">
-                    <div class="sob-header">📊 {current_month}월 Performance Summary</div>
-                    
-                    <div class="sob-grid">
-                        <div>
-                            <table class="modern-table">
-                                <thead>
-                                    <tr><th>Category</th><th>Amount</th><th>Status</th></tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td class="label">Budget</td>
-                                        <td>{budget:,.0f}</td>
-                                        <td>-</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="label">Actual</td>
-                                        <td style="font-weight:bold;">{total_rev:,.0f}</td>
-                                        <td>-</td>
-                                    </tr>
-                                    <tr class="highlight-row">
-                                        <td class="label">Variance</td>
-                                        <td class="{vs_class}">{vs_budget:+,.0f}</td>
-                                        <td class="{vs_class}">Achv: {achv_rate:.1f}%</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                            <div class="kpi-wrapper">
-                                <div class="kpi-card">
-                                    <div class="kpi-title">TOTAL OCC</div>
-                                    <div class="kpi-value">{total_occ:.1f}%</div>
-                                </div>
-                                <div class="kpi-card kpi-green">
-                                    <div class="kpi-title">ACHIEVEMENT</div>
-                                    <div class="kpi-value">{achv_rate:.1f}%</div>
-                                </div>
+            vs_row_class = "highlight-row"
+            vs_cell_class = "negative" if vs_budget < 0 else ""
+
+            # HTML 생성 (변수 분리하여 들여쓰기 문제 해결)
+            html_content = f"""
+            <div class="sob-container">
+                <div class="sob-header">📊 {current_month}월 Performance Summary</div>
+                
+                <div class="sob-grid">
+                    <div>
+                        <table class="modern-table">
+                            <thead>
+                                <tr><th>Category</th><th>Amount</th><th>Status</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="label">Budget</td>
+                                    <td>{budget:,.0f}</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td class="label">Actual</td>
+                                    <td style="font-weight:bold;">{total_rev:,.0f}</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr class="{vs_row_class}">
+                                    <td class="label">Variance</td>
+                                    <td class="{vs_cell_class}">{vs_budget:+,.0f}</td>
+                                    <td class="{vs_cell_class}">Achv: {achv_rate:.1f}%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div class="kpi-wrapper">
+                            <div class="kpi-card">
+                                <div class="kpi-title">TOTAL OCC</div>
+                                <div class="kpi-value">{total_occ:.1f}%</div>
+                            </div>
+                            <div class="kpi-card kpi-accent">
+                                <div class="kpi-title">ACHIEVEMENT</div>
+                                <div class="kpi-value">{achv_rate:.1f}%</div>
                             </div>
                         </div>
-
-                        <div>
-                            <table class="modern-table">
-                                <thead>
-                                    <tr>
-                                        <th>Segment</th><th>RMS</th><th>ADR</th><th>REV</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td class="label">FIT (개인)</td>
-                                        <td>{fit_rms:,.0f}</td>
-                                        <td>{fit_adr:,.0f}</td>
-                                        <td>{fit_rev:,.0f}</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="label">GROUP (단체)</td>
-                                        <td>{grp_rms:,.0f}</td>
-                                        <td>{grp_adr:,.0f}</td>
-                                        <td>{grp_rev:,.0f}</td>
-                                    </tr>
-                                    <tr class="total-row">
-                                        <td class="label">TOTAL</td>
-                                        <td>{total_rms:,.0f}</td>
-                                        <td>{total_adr:,.0f}</td>
-                                        <td>{total_rev:,.0f}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
+                    </div>
+                    <div>
+                        <table class="modern-table">
+                            <thead>
+                                <tr>
+                                    <th>Segment</th><th>RMS</th><th>ADR</th><th>REV</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="label">FIT (개인)</td>
+                                    <td>{fit_rms:,.0f}</td>
+                                    <td>{fit_adr:,.0f}</td>
+                                    <td>{fit_rev:,.0f}</td>
+                                </tr>
+                                <tr>
+                                    <td class="label">GROUP (단체)</td>
+                                    <td>{grp_rms:,.0f}</td>
+                                    <td>{grp_adr:,.0f}</td>
+                                    <td>{grp_rev:,.0f}</td>
+                                </tr>
+                                <tr class="total-row">
+                                    <td class="label">TOTAL</td>
+                                    <td>{total_rms:,.0f}</td>
+                                    <td>{total_adr:,.0f}</td>
+                                    <td>{total_rev:,.0f}</td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-            """)
-            st.markdown(html_card, unsafe_allow_html=True)
+            </div>
+            """
+            st.markdown(html_content, unsafe_allow_html=True)
 
             # ----------------------
             # [하단] 상세 리포트
@@ -477,17 +486,30 @@ if uploaded_files:
 
             styler = final_df.style.format(fmt)
             
+            # [스타일링]
+            # 1. Pre(어제) - 회색조, 작게
             pre_cols = [c for c in final_df.columns if 'Pre' in c]
-            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f9fafb', 'color': '#9ca3af', 'font-size': '10px'})
+            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f9fafb', 'color': '#9ca3af', 'font-size': '11px'})
             
+            # 2. Curr(오늘) - 중앙, 히트맵 적용
             curr_cols = [c for c in final_df.columns if c not in pre_cols and 'Var' not in c and c not in ['Date', 'Day']]
-            styler = styler.set_properties(subset=curr_cols, **{'background-color': '#ffffff', 'font-weight': '700', 'font-size': '12px', 'border-left': '1px solid #e5e7eb', 'border-right': '1px solid #e5e7eb'})
             
+            # 히트맵 (은은한 파랑: RMS, ADR, RevPAR, REV / 은은한 오렌지: OCC)
+            # Total 행 제외하고 적용
+            subset_idx = final_df.index[:-1]
+            styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[subset_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.3, high=0.3)
+            styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[subset_idx, [c for c in curr_cols if 'OCC' in c]], low=0.5, high=0.5)
+            
+            # 폰트 스타일
+            styler = styler.set_properties(subset=curr_cols, **{'font-weight': '700', 'font-size': '12px', 'border-left': '1px solid #e5e7eb', 'border-right': '1px solid #e5e7eb'})
+            
+            # 3. Var(변화량) - 빨강/초록 텍스트
             var_cols = [c for c in final_df.columns if 'Var' in c]
-            styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb', 'font-size': '11px'})
             styler = styler.map(color_negative_red, subset=var_cols)
+            styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb', 'font-size': '11px'})
             
-            styler = styler.apply(lambda x: ['font-weight: 800; font-size: 13px; background-color: #eff6ff; border-top: 2px solid #1e40af'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
+            # 4. Total 행
+            styler = styler.apply(lambda x: ['font-weight: 800; font-size: 13px; background-color: #eff6ff; border-top: 2px solid #1d4ed8'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
 
             st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
             
