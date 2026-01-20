@@ -9,7 +9,7 @@ import re
 # 1. 기본 설정 및 DB 연결
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="객실 현황 대시보드", layout="wide")
-st.title("🏨 객실 판매 및 OCC 통합 리포트")
+st.title("🏨 객실 현황 통합 대시보드 (Reference & Sales)")
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(dict(st.secrets["firebase"]))
@@ -17,87 +17,77 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # --------------------------------------------------------------------------
-# 2. 강력한 엑셀 로더 (헤더 찾기 & 날짜 통일 & 노란색 데이터 살리기)
+# 2. 데이터 처리 함수들 (헤더 찾기, 날짜 통일, 숫자 추출)
 # --------------------------------------------------------------------------
 
+def extract_total_rooms(index_name):
+    """
+    'GDB (7)' 같은 문자열에서 괄호 안의 숫자 '7'을 추출 (OCC 계산용 분모)
+    """
+    if pd.isna(index_name): return 0
+    match = re.search(r'\((\d+)\)', str(index_name))
+    if match:
+        return int(match.group(1))
+    return 0
+
 def normalize_date_columns(df):
-    """
-    서로 다른 날짜 형식(01-19 vs 2026-01-19)을 'YYYY-MM-DD'로 강제 통일합니다.
-    """
+    """날짜 컬럼을 YYYY-MM-DD 형식으로 통일"""
     new_cols = []
-    # 현재 연도 (만약 파일에 연도가 없으면 붙여줄 용도)
-    current_year = "2026" 
+    current_year = str(datetime.date.today().year)
     
     for col in df.columns:
-        # 1. 만약 이미 datetime 객체라면 -> '2026-01-20' 문자열로 변환
         if isinstance(col, (pd.Timestamp, datetime.date, datetime.datetime)):
             new_cols.append(col.strftime("%Y-%m-%d"))
-        
-        # 2. 문자열인 경우
-        elif isinstance(col, str):
-            col_str = col.strip().replace(" 00:00:00", "") # 시간 제거
+            continue
             
-            # 패턴 A: '01-19' 처럼 월-일만 있는 경우 -> '2026-01-19'로 변경
-            # 정규표현식: 숫자1~2개 + 하이픈 + 숫자1~2개 (예: 1-19, 01-19)
-            if re.match(r'^\d{1,2}-\d{1,2}$', col_str):
-                new_cols.append(f"{current_year}-{col_str.zfill(5)}") # 01-19 형태로 맞춤
-            
-            # 패턴 B: '2026-01-19' 처럼 이미 완벽한 경우 -> 그대로 둠
-            elif re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', col_str):
-                new_cols.append(col_str)
-                
-            # 날짜가 아닌 컬럼(객실타입 등) -> 그대로 둠
-            else:
-                new_cols.append(col_str)
-        
-        # 기타 숫자형 등
+        col_str = str(col).strip().replace(" 00:00:00", "")
+        # 2026-01-20 패턴
+        if re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', col_str):
+            new_cols.append(col_str)
+        # 01-20 패턴 -> 2026-01-20 변환
+        elif re.match(r'^\d{1,2}-\d{1,2}$', col_str):
+            parts = col_str.split('-')
+            new_cols.append(f"{current_year}-{parts[0].zfill(2)}-{parts[1].zfill(2)}")
         else:
-            new_cols.append(str(col))
+            new_cols.append(col_str)
             
     df.columns = new_cols
     return df
 
 def find_header_row(df_raw):
-    """데이터프레임에서 실제 날짜가 있는 헤더 행의 인덱스를 찾습니다."""
+    """헤더 행 자동 찾기"""
     for i, row in df_raw.head(20).iterrows():
-        # '-'나 '/'가 포함된 날짜 형태가 3개 이상 있으면 헤더로 간주
+        # 날짜 패턴이나 GDB 키워드가 있으면 헤더로 간주
         date_count = row.astype(str).apply(lambda x: '-' in x or '/' in x).sum()
-        # 혹은 'GDB' 같은 룸타입이 있어도 헤더로 간주
         has_gdb = row.astype(str).str.contains('GDB').any()
-        
         if date_count > 3 or has_gdb:
             return i
     return 0 
 
 def process_uploaded_df(file):
-    # 1. 헤더 없이 읽기
+    # 헤더 찾아서 읽기
     df_raw = pd.read_excel(file, header=None)
-    
-    # 2. 진짜 헤더 위치 찾아서 다시 읽기
     header_idx = find_header_row(df_raw)
     df = pd.read_excel(file, header=header_idx)
     
-    # 3. 첫 번째 컬럼(룸타입) 설정
-    if df.columns[0].startswith('Unnamed'):
+    # 첫 컬럼 인덱스 처리
+    if str(df.columns[0]).startswith('Unnamed'):
         df.rename(columns={df.columns[0]: '구분'}, inplace=True)
     df.set_index(df.columns[0], inplace=True)
     
-    # 4. [중요] 날짜 컬럼 형식 통일 (YYYY-MM-DD)
+    # 날짜 통일
     df = normalize_date_columns(df)
     
-    # 5. '요일' 행(월, 화...) 삭제
+    # 불필요한 행(요일 등) 삭제
     rows_to_drop = []
     for idx in df.index[:20]:
         s_idx = str(idx)
         if s_idx in ['객실수', 'Room Qty', 'nan', 'NaT', 'None']:
             rows_to_drop.append(idx)
             continue
-        
-        row_values = df.loc[idx].astype(str).values.flatten()
-        row_str = "".join(row_values)
+        row_str = "".join(df.loc[idx].astype(str).values.flatten())
         if any(day in row_str for day in ['월', '화', '수', '목', '금', '토', '일', 'Mon', 'Tue']):
              rows_to_drop.append(idx)
-
     if rows_to_drop:
         df = df.drop(rows_to_drop)
 
@@ -130,78 +120,84 @@ def merge_files(files):
             df = make_index_unique(df)
             df_list.append(df)
         except Exception as e:
-            st.error(f"파일 {f.name} 처리 중 오류: {e}")
+            st.error(f"파일 {f.name} 오류: {e}")
             
     if not df_list: return None
     
-    # 옆으로 합치기
     merged = pd.concat(df_list, axis=1, sort=False)
-    # 중복 날짜 제거
     merged = merged.loc[:, ~merged.columns.duplicated()]
-    return merged
+    
+    # 날짜순 정렬
+    date_cols = [c for c in merged.columns if re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', str(c))]
+    date_cols.sort()
+    other_cols = [c for c in merged.columns if c not in date_cols]
+    
+    return merged[other_cols + date_cols]
 
 # --------------------------------------------------------------------------
 # 3. UI 구성
 # --------------------------------------------------------------------------
-tab_upload, tab_dashboard = st.tabs(["📤 데이터 업로드 (다시 올려주세요!)", "📊 통합 리포트 (VIEW)"])
+tab_upload, tab_dashboard = st.tabs(["📤 데이터 업로드 (3종류)", "📊 통합 리포트 (GM/Sales)"])
 
 # ==========================================================================
 # [TAB 1] 업로드
 # ==========================================================================
 with tab_upload:
-    st.warning("⚠️ 날짜 형식 오류가 있었다면, 파일을 다시 업로드해야 해결됩니다!")
+    st.info("💡 순서: 1. 오늘 판매량(스냅샷) -> 2. 어제 판매량 -> 3. 남은 객실(참고용)")
     
     c1, c2, c3 = st.columns(3)
     
-    # 1. 오늘 스냅샷
+    # 1. 오늘 판매량 (Sales Snapshot)
     with c1:
-        st.subheader("1. 오늘 스냅샷")
-        files_today = st.file_uploader("오늘 파일 4개", accept_multiple_files=True, key="today")
-        if st.button("오늘 데이터 저장"):
+        st.subheader("1. 오늘 판매량 (Snapshot)")
+        st.caption("실제 판매된 데이터")
+        files_today = st.file_uploader("오늘 판매 파일들", accept_multiple_files=True, key="today")
+        if st.button("오늘 판매량 저장"):
             if files_today:
                 df = merge_files(files_today)
                 if df is not None:
                     df_save = df.fillna(0)
                     today_str = datetime.date.today().strftime("%Y-%m-%d")
-                    db.collection("daily_room_snapshots").document(today_str).set({
+                    db.collection("daily_sales_snapshot").document(today_str).set({
                         "data": df_save.to_dict(), "created_at": datetime.datetime.now()
                     })
-                    st.success(f"✅ {today_str} 저장 완료! (날짜 포맷 통일됨)")
-                    st.dataframe(df.head())
+                    st.success(f"✅ 오늘 판매량 저장 완료! ({df.shape[1]}일치)")
 
-    # 2. 어제 스냅샷
+    # 2. 어제 판매량 (Yesterday Sales)
     with c2:
-        st.subheader("2. 어제 스냅샷")
+        st.subheader("2. 어제 판매량 (비교용)")
+        st.caption("Pickup 계산을 위한 어제 데이터")
         yest_date = st.date_input("어제 날짜", datetime.date.today() - datetime.timedelta(days=1))
         yest_str = yest_date.strftime("%Y-%m-%d")
-        files_yest = st.file_uploader("어제 파일 4개", accept_multiple_files=True, key="yest")
-        if st.button("어제 데이터 저장"):
+        files_yest = st.file_uploader("어제 판매 파일들", accept_multiple_files=True, key="yest")
+        if st.button("어제 판매량 저장"):
             if files_yest:
                 df = merge_files(files_yest)
                 if df is not None:
                     df_save = df.fillna(0)
-                    db.collection("daily_room_snapshots").document(yest_str).set({
+                    db.collection("daily_sales_snapshot").document(yest_str).set({
                         "data": df_save.to_dict(), "created_at": datetime.datetime.now()
                     })
-                    st.success(f"✅ {yest_str} 저장 완료!")
+                    st.success(f"✅ 어제 판매량 저장 완료!")
 
-    # 3. Capacity
+    # 3. 남은 객실 (Availability / Capacity)
     with c3:
-        st.subheader("3. Capacity (필수)")
-        files_capa = st.file_uploader("Capacity 파일 4개", accept_multiple_files=True, key="capa")
-        if st.button("Capacity 저장"):
-            if files_capa:
-                df = merge_files(files_capa)
+        st.subheader("3. 남은 객실 (Availability)")
+        st.caption("총지배인 참고용 (Available)")
+        files_avail = st.file_uploader("남은 객실 파일들", accept_multiple_files=True, key="avail")
+        if st.button("남은 객실 저장"):
+            if files_avail:
+                df = merge_files(files_avail)
                 if df is not None:
                     df_save = df.fillna(0)
-                    db.collection("hotel_settings").document("latest_availability").set({
+                    # Availability는 날짜별 스냅샷보다는 '최신 상태'를 보는 것이므로 latest로 저장
+                    db.collection("hotel_settings").document("latest_availability_view").set({
                         "data": df_save.to_dict(), "updated_at": datetime.datetime.now()
                     })
-                    st.success("✅ Capacity 저장 완료! (날짜 포맷 통일됨)")
-                    st.dataframe(df.head())
+                    st.success("✅ 남은 객실 데이터 저장 완료!")
 
 # ==========================================================================
-# [TAB 2] 리포트
+# [TAB 2] 리포트 (GM View)
 # ==========================================================================
 with tab_dashboard:
     st.header("📊 객실 통합 리포트")
@@ -217,93 +213,104 @@ with tab_dashboard:
         st.write("")
         if st.button("🚀 리포트 불러오기", type="primary"):
             
-            # DB 로드
-            doc_today = db.collection("daily_room_snapshots").document(search_str).get()
-            doc_capa = db.collection("hotel_settings").document("latest_availability").get()
-            doc_yest = db.collection("daily_room_snapshots").document(yest_str).get()
+            # DB 로드 (3개 다 부름)
+            doc_sales_today = db.collection("daily_sales_snapshot").document(search_str).get()
+            doc_sales_yest = db.collection("daily_sales_snapshot").document(yest_str).get()
+            doc_avail = db.collection("hotel_settings").document("latest_availability_view").get()
 
-            if not doc_today.exists:
-                st.error(f"❌ '{search_str}' 데이터가 없습니다. 옆 탭에서 업로드해주세요.")
-            elif not doc_capa.exists:
-                st.error("❌ 'Capacity' 데이터가 없습니다. 옆 탭에서 업로드해주세요.")
+            # ----------------------------------------------------------
+            # SECTION 1: 상단 - 남은 객실 (Availability)
+            # ----------------------------------------------------------
+            st.markdown("### 1️⃣ 남은 객실 수 (Available Rooms) - GM 참고용")
+            if doc_avail.exists:
+                df_avail = pd.DataFrame.from_dict(doc_avail.to_dict()['data']).apply(pd.to_numeric, errors='coerce')
+                # 날짜 컬럼 정렬
+                date_cols = [c for c in df_avail.columns if re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', str(c))]
+                date_cols.sort()
+                # 정렬된 순서로 보여주기 (옵션: 펼쳐보기)
+                with st.expander("🔻 남은 객실 데이터 펼쳐보기", expanded=True):
+                    st.dataframe(df_avail[date_cols], use_container_width=True)
             else:
-                # DataFrame 변환
-                df_today = pd.DataFrame.from_dict(doc_today.to_dict()['data']).apply(pd.to_numeric, errors='coerce')
-                df_capa = pd.DataFrame.from_dict(doc_capa.to_dict()['data']).apply(pd.to_numeric, errors='coerce').fillna(0)
+                st.warning("⚠️ 남은 객실(Availability) 데이터가 없습니다. 업로드해주세요.")
+
+            st.divider()
+
+            # ----------------------------------------------------------
+            # SECTION 2: 중단 - 실제 판매 & OCC (Sales Snapshot)
+            # ----------------------------------------------------------
+            st.markdown(f"### 2️⃣ {search_str} 판매 현황 및 점유율 (Sales & OCC)")
+            
+            if not doc_sales_today.exists:
+                st.error("❌ 오늘 판매량(Snapshot) 데이터가 없습니다.")
+            else:
+                df_sales = pd.DataFrame.from_dict(doc_sales_today.to_dict()['data']).apply(pd.to_numeric, errors='coerce')
                 
-                df_yest = pd.DataFrame()
-                if doc_yest.exists:
-                    df_yest = pd.DataFrame.from_dict(doc_yest.to_dict()['data']).apply(pd.to_numeric, errors='coerce').fillna(0)
+                # 날짜 정렬
+                sales_dates = [c for c in df_sales.columns if re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', str(c))]
+                sales_dates.sort()
 
-                # 날짜 교집합 확인 (여기가 문제였음 -> 해결!)
-                common_dates = sorted(list(set(df_today.columns).intersection(df_capa.columns)))
-
-                if not common_dates:
-                    st.error(f"⚠️ 날짜 매칭 실패!\n\n오늘 스냅샷 날짜 예시: {list(df_today.columns)[:3]}\nCapacity 날짜 예시: {list(df_capa.columns)[:3]}\n\n두 파일의 날짜 형식이 다릅니다. 업로드 탭에서 둘 다 다시 업로드해주세요.")
-                else:
-                    # ----------------------------------------------------------
-                    # 뷰 생성 (OCC 계산 & 병합)
-                    # ----------------------------------------------------------
+                # [OCC 자동 계산 로직]
+                # 판매량 / (행 이름에 있는 숫자)
+                frames = {}
+                for date in sales_dates:
+                    qty_col = df_sales[date].copy()
+                    occ_col = pd.Series(index=df_sales.index, dtype=float)
                     
-                    # 1) OCC 계산 (룸타입 부분만)
-                    common_idx = df_today.index.intersection(df_capa.index)
-                    df_occ_calc = df_today.loc[common_idx, common_dates].div(df_capa.loc[common_idx, common_dates]).fillna(0) * 100
-
-                    # 2) 병합 [객실수 | 비율(%)]
-                    frames = {}
-                    for date in common_dates:
-                        qty_col = df_today[date].copy()
+                    for idx in df_sales.index:
+                        total = extract_total_rooms(idx) # GDB (7) -> 7 추출
+                        sold = qty_col.loc[idx]
                         
-                        occ_col = pd.Series(index=df_today.index, dtype=float)
-                        occ_col.update(df_occ_calc[date]) # 룸타입만 채우기
-                        
-                        # 합계 행의 OCC는 여기서 계산 안 됨 (필요시 별도 로직 필요)
-                        
-                        frame = pd.DataFrame({
-                            '객실수': qty_col,
-                            '비율(%)': occ_col
-                        })
-                        frames[date] = frame
+                        if total > 0 and pd.notna(sold):
+                            occ_col.loc[idx] = (sold / total) * 100
+                        else:
+                            occ_col.loc[idx] = None # 합계 등은 빈칸
                     
-                    df_combined = pd.concat(frames, axis=1)
+                    frame = pd.DataFrame({
+                        '판매': qty_col,
+                        'OCC': occ_col
+                    })
+                    frames[date] = frame
+                
+                df_combined = pd.concat(frames, axis=1)
+                
+                # 스타일링
+                idx = pd.IndexSlice
+                st.dataframe(
+                    df_combined.style
+                    .format("{:.0f}", subset=idx[:, (slice(None), '판매')], na_rep="") 
+                    .format("{:.1f}%", subset=idx[:, (slice(None), 'OCC')], na_rep="")
+                    .background_gradient(cmap='Reds', vmin=0, vmax=100, subset=idx[:, (slice(None), 'OCC')]),
+                    height=600,
+                    use_container_width=True
+                )
 
-                    st.success(f"데이터 매칭 성공! ({len(common_dates)}일치)")
+            st.divider()
 
-                    # 1. Capacity
-                    with st.expander("🔻 전체 객실 수 (Capacity) 확인"):
-                        st.dataframe(df_capa, use_container_width=True)
+            # ----------------------------------------------------------
+            # SECTION 3: 하단 - 변화값 (Pickup)
+            # ----------------------------------------------------------
+            st.markdown("### 3️⃣ 전일 대비 변동 (Pickup)")
+            
+            if not doc_sales_yest.exists:
+                st.warning("⚠️ 어제 판매량 데이터가 없어서 변동을 계산할 수 없습니다.")
+            elif doc_sales_today.exists:
+                df_yest = pd.DataFrame.from_dict(doc_sales_yest.to_dict()['data']).apply(pd.to_numeric, errors='coerce')
+                
+                # 오늘과 어제의 교집합 날짜 찾기
+                common_dates = sorted(list(set(sales_dates).intersection(df_yest.columns)))
+                
+                if common_dates:
+                    # 계산: 오늘 판매량 - 어제 판매량
+                    df_pickup = df_sales[common_dates].sub(df_yest[common_dates], fill_value=0)
+                    
+                    def color_pickup(val):
+                        if val > 0: return 'color: blue; font-weight: bold; background-color: #f0f8ff'
+                        elif val < 0: return 'color: red; font-weight: bold; background-color: #fff0f0'
+                        else: return 'color: lightgrey'
 
-                    # 2. 메인 리포트
-                    st.markdown("### 2️⃣ 일자별 판매 현황 및 OCC")
-                    idx = pd.IndexSlice
                     st.dataframe(
-                        df_combined.style
-                        .format("{:.0f}", subset=idx[:, (slice(None), '객실수')], na_rep="") 
-                        .format("{:.1f}%", subset=idx[:, (slice(None), '비율(%)')], na_rep="")
-                        .background_gradient(cmap='Reds', vmin=0, vmax=100, subset=idx[:, (slice(None), '비율(%)')]),
-                        height=600,
+                        df_pickup.style.applymap(color_pickup).format("{:+.0f}", na_rep=""),
                         use_container_width=True
                     )
-
-                    # 3. Pickup
-                    st.markdown("### 3️⃣ 전일 대비 변동 (Pickup)")
-                    if not df_yest.empty:
-                        pickup_dates = sorted(list(set(df_today.columns).intersection(df_yest.columns)))
-                        pickup_idx = df_today.index.intersection(df_yest.index)
-                        
-                        if pickup_dates:
-                            df_pickup = df_today.loc[pickup_idx, pickup_dates].sub(df_yest.loc[pickup_idx, pickup_dates], fill_value=0)
-                            
-                            def color_pickup(val):
-                                if val > 0: return 'color: blue; font-weight: bold; background-color: #f0f8ff'
-                                elif val < 0: return 'color: red; font-weight: bold; background-color: #fff0f0'
-                                else: return 'color: lightgrey'
-
-                            st.dataframe(
-                                df_pickup.style.applymap(color_pickup).format("{:+.0f}", na_rep=""),
-                                use_container_width=True
-                            )
-                        else:
-                            st.warning("어제 데이터와 날짜가 겹치지 않습니다.")
-                    else:
-                        st.warning("어제 데이터가 없습니다.")
+                else:
+                    st.warning("오늘 데이터와 어제 데이터 간에 날짜가 겹치지 않습니다.")
