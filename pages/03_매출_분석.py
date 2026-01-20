@@ -190,7 +190,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
             df['Is_Zero_Rate'] = df['Room_Revenue'] <= 0
             df['ADR'] = df.apply(lambda x: x['Room_Revenue'] / x['RN'] if x['RN'] > 0 else 0, axis=1)
 
-        # 공통 필드 추가 (저장 시점 기준이 아닌 파일 자체의 스냅샷 날짜가 중요하지만, 여기선 오늘 날짜로 태깅)
+        # 공통 필드 추가
         df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d') 
         df['Status'] = status
         
@@ -241,16 +241,17 @@ def process_data(uploaded_file, status, sub_segment="General"):
         return pd.DataFrame()
 
 # ------------------------------------------------------------------------------
-# 3. 공통 분석 모듈
+# 3. 공통 분석 모듈 (국적 탭 추가)
 # ------------------------------------------------------------------------------
 def render_rich_analysis(target_df, title_prefix, color_scale="Blues"):
     if target_df.empty:
         st.warning(f"⚠️ {title_prefix} 데이터가 없습니다.")
         return
 
-    t1, t2, t3, t4, t5, t6 = st.tabs([
+    # [수정됨] 탭 7개로 확장 (국적별 추가)
+    t1, t2, t3, t4, t5, t6, t7 = st.tabs([
         "📊 세그먼트 분석", "📅 예약패턴(Pacing)", "🏢 거래처", 
-        "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일별"
+        "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일별", "🌐 국적별"
     ])
     
     with t1:
@@ -323,11 +324,28 @@ def render_rich_analysis(target_df, title_prefix, color_scale="Blues"):
         c1.plotly_chart(px.bar(wd_stats, x='Day_Type', y='ADR', title="요일별 ADR", text_auto=',.0f'), use_container_width=True, key=f"{title_prefix}_wd_bar")
         c2.plotly_chart(px.pie(wd_stats, values='RN', names='Day_Type', title="요일별 비중"), use_container_width=True, key=f"{title_prefix}_wd_pie")
 
+    # [NEW] 국적별 분석 탭
+    with t7:
+        st.subheader(f"🌐 {title_prefix} 국적별 분석")
+        if 'Nat_Group' in target_df.columns:
+            nat_stats = target_df.groupby('Nat_Group').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
+            nat_stats['ADR'] = (nat_stats['Room_Revenue'] / nat_stats['RN']).fillna(0)
+            
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(px.pie(nat_stats, values='RN', names='Nat_Group', title="국적별 점유 비중 (RN)"), use_container_width=True, key=f"{title_prefix}_nat_pie")
+            c2.plotly_chart(px.bar(nat_stats, x='Nat_Group', y='ADR', title="국적별 ADR", text_auto=',.0f', color='Nat_Group'), use_container_width=True, key=f"{title_prefix}_nat_bar")
+            
+            st.dataframe(nat_stats.sort_values('RN', ascending=False), 
+                         column_config={"Room_Revenue": st.column_config.NumberColumn(format="%d원"), "ADR": st.column_config.NumberColumn(format="%d원")}, 
+                         hide_index=True, use_container_width=True)
+        else:
+            st.info("국적 데이터가 없습니다.")
+
 # ------------------------------------------------------------------------------
 # UI 메인
 # ------------------------------------------------------------------------------
 try:
-    st.title("🏛️ 앰버 호텔 경영 리포트 (History & Analytics)")
+    st.title("🏛️ 앰버 호텔 경영 리포트 (History Mode)")
 
     # 1. 데이터 로드 (항상 로드 시도)
     raw_data = load_data_from_firestore()
@@ -442,13 +460,12 @@ try:
 
             curr_month = datetime.now().strftime('%Y-%m')
 
-            # 탭 구성
             main_tab0, main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs([
                 "👑 총지배인(GM) 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약"
             ])
 
             with main_tab0:
-                st.header(f"👑 Executive Summary ({selected_date})")
+                st.header(f"👑 Executive Summary ({selected_date} 기준)")
                 
                 st.subheader("🚀 최근 예약 유입 속도 (Booking Velocity)")
                 if not df_paid_bk.empty:
@@ -482,7 +499,7 @@ try:
                 st.write(f"총 {len(df_zero_bk)}건")
                 st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
     else:
-        # 데이터가 없을 때 메인 화면 안내
+        # 데이터가 없을 때 안내
         st.info("👈 왼쪽 사이드바에서 파일을 업로드하여 데이터를 추가해주세요.")
         st.markdown("""
         ### 📋 사용 방법
