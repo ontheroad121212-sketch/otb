@@ -11,9 +11,10 @@ st.title("🏨 Daily Pace Report System")
 
 # 1. Firebase 접속 (Secrets 활용)
 # 주의: 이 코드는 파일이 아니라 Streamlit Secrets에서 키를 가져옵니다.
+# 이렇게 바꿔주세요
 if not firebase_admin._apps:
-    # st.secrets에 저장된 key 정보를 가져옴
-    key_dict = json.loads(st.secrets["firebase_key"])
+    # secrets에서 [firebase] 섹션을 바로 딕셔너리로 가져옵니다
+    key_dict = dict(st.secrets["firebase"])
     cred = credentials.Certificate(key_dict)
     firebase_admin.initialize_app(cred)
 
