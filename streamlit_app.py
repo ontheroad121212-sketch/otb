@@ -13,7 +13,6 @@ st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
 st.markdown("""
 <style>
-    /* 전체 레이아웃 최적화 */
     .block-container {
         padding-top: 1rem;
         padding-bottom: 3rem;
@@ -25,75 +24,87 @@ st.markdown("""
     .sob-container {
         background-color: white;
         border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
         padding: 20px;
         margin-bottom: 20px;
-        border: 1px solid #e0e0e0;
+        border: 1px solid #e5e7eb;
     }
     .sob-header {
-        font-size: 16px;
+        font-size: 18px;
         font-weight: 700;
-        color: #1f2937;
-        margin-bottom: 15px;
-        border-bottom: 2px solid #f3f4f6;
-        padding-bottom: 10px;
+        color: #111827;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
     }
     .sob-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr; /* 2분할 (Budget vs SOB) */
-        gap: 30px;
+        grid-template-columns: 1fr 1.2fr; /* 왼쪽(Budget) : 오른쪽(Detail) 비율 조정 */
+        gap: 40px;
     }
     
-    /* 내부 테이블 스타일 */
+    /* 모던 테이블 */
     .modern-table {
         width: 100%;
         border-collapse: collapse;
-        font-family: 'Segoe UI', sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
     .modern-table th {
-        text-align: left;
+        text-align: right;
         color: #6b7280;
         font-size: 12px;
+        text-transform: uppercase;
         font-weight: 600;
-        padding: 8px 4px;
-        border-bottom: 1px solid #e5e7eb;
+        padding: 10px 8px;
+        border-bottom: 2px solid #f3f4f6;
     }
+    .modern-table th:first-child { text-align: left; }
+    
     .modern-table td {
-        padding: 8px 4px;
+        padding: 12px 8px;
         font-size: 14px;
-        color: #111827;
+        color: #1f2937;
         font-weight: 500;
         text-align: right;
+        border-bottom: 1px solid #f9fafb;
     }
     .modern-table td.label {
         text-align: left;
         font-weight: 600;
         color: #374151;
     }
-    .highlight-row td {
-        background-color: #f9fafb;
-        font-weight: 700;
-        color: #2563eb; /* 강조색 파랑 */
-    }
     
-    /* KPI 박스 (점유율 등) */
+    /* 강조 스타일 */
+    .variance-positive { color: #059669; font-weight: 700; }
+    .variance-negative { color: #dc2626; font-weight: 700; }
+    .total-row td {
+        background-color: #f8fafc;
+        font-weight: 800;
+        color: #1e3a8a;
+        border-top: 2px solid #e2e8f0;
+    }
+
+    /* KPI 카드 */
+    .kpi-wrapper {
+        display: flex;
+        gap: 15px;
+        margin-top: 20px;
+    }
     .kpi-card {
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-        color: white;
-        border-radius: 10px;
+        flex: 1;
+        background: #f3f4f6;
+        border-radius: 8px;
         padding: 15px;
         text-align: center;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        height: 100%;
     }
-    .kpi-title { font-size: 12px; opacity: 0.9; margin-bottom: 5px; }
-    .kpi-value { font-size: 28px; font-weight: 800; }
-
-    /* [하단 상세 리포트 테이블 스타일] */
-    iframe[title="streamlit.dataframe"] { width: 100% !important; }
+    .kpi-title { font-size: 11px; color: #6b7280; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .kpi-value { font-size: 24px; color: #111827; font-weight: 800; }
     
+    .kpi-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; }
+    .kpi-green .kpi-title { color: rgba(255,255,255,0.9); }
+    .kpi-green .kpi-value { color: white; }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -110,78 +121,104 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # ------------------------------------------------------------------
-# 2. 데이터 처리 함수 (좌표 수정됨)
+# 2. 데이터 처리 (지능형 컬럼 찾기)
 # ------------------------------------------------------------------
 
 BUDGET_DATA = { 1: 514992575, 2: 480000000, 3: 520000000, 4: 600000000 }
 
-def find_first_date(df):
-    first_col = df.iloc[:, 0]
-    dates = pd.to_datetime(first_col, errors='coerce')
-    valid_dates = dates.dropna()
-    if not valid_dates.empty:
-        return valid_dates.iloc[0], valid_dates.index[0]
-    return None, None
-
-def process_excel_file(file):
+def find_header_and_process(file):
     try:
         file.seek(0)
-        temp_df = pd.read_excel(file, header=None)
-        first_date, start_row = find_first_date(temp_df)
+        # 헤더를 찾기 위해 앞부분을 읽어봄
+        df_preview = pd.read_excel(file, header=None, nrows=10)
         
-        if first_date is None:
+        header_row_idx = None
+        rms_indices = []
+        rev_indices = []
+        date_col_idx = 0
+        
+        # '객실수'와 '매출'이라는 단어가 모두 포함된 행을 찾음
+        for idx, row in df_preview.iterrows():
+            row_str = row.astype(str).values
+            if np.any(['객실수' in s for s in row_str]) and np.any(['매출' in s for s in row_str]):
+                header_row_idx = idx
+                # 해당 행에서 '객실수', '매출' 컬럼 인덱스 추출
+                rms_indices = [i for i, val in enumerate(row_str) if '객실수' in str(val)]
+                rev_indices = [i for i, val in enumerate(row_str) if '매출' in str(val)]
+                break
+        
+        if header_row_idx is None:
             return None, None, None
 
+        # 데이터 로드 (헤더 다음 행부터)
         df_raw = pd.read_excel(file, header=None)
+        start_row = header_row_idx + 1 
         df_data = df_raw.iloc[start_row:].copy()
         
-        df_clean = pd.DataFrame()
-        df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
-        df_clean = df_clean.dropna(subset=['Date'])
+        # 날짜 컬럼 찾기 (보통 맨 앞이지만, 확실하게 '일자'나 날짜형식 확인)
+        # 여기서는 0번째 컬럼을 날짜로 가정하되, 검증
+        df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
+        df_data = df_data.dropna(subset=['Date']) # 날짜 없는 행 제거 (합계 등)
 
-        # [좌표 매핑] - 보내주신 이미지 기반 (0부터 시작)
-        # A=0: 날짜
-        # B=1: FIT RMS, D=3: FIT ADR, E=4: FIT REV
-        # G=6: GRP RMS, I=8: GRP ADR, J=9: GRP REV
-        # L=11: HU, M=12: Comp
-        # N=13: Total RMS, O=14: OCC, P=15: Total ADR, Q=16: RevPAR, R=17: Total REV
-        
         def safe_num(col_idx):
+            if col_idx >= df_data.shape[1]: return 0
             return pd.to_numeric(df_data.iloc[:, col_idx], errors='coerce').fillna(0)
 
-        # 1. 상세 리포트용 (Total 섹션 데이터)
-        df_clean['HU'] = safe_num(11)      # L열
-        df_clean['Comp'] = safe_num(12)    # M열
-        df_clean['RMS'] = safe_num(13)     # N열 (Total RMS)
-        df_clean['OCC'] = safe_num(14)     # O열 (OCC)
-        df_clean['ADR'] = safe_num(15)     # P열 (Total ADR)
-        df_clean['RevPAR'] = safe_num(16)  # Q열
-        df_clean['REV'] = safe_num(17)     # R열 (Total REV)
+        # [지능형 매핑]
+        # rms_indices는 보통 [FIT RMS, GRP RMS, Total RMS] 순서로 나옴
+        # rev_indices는 보통 [FIT REV, GRP REV, Total REV] 순서로 나옴
+        # 엑셀 구조상 (개인 -> 단체 -> 합계) 순서라고 가정
         
+        if len(rms_indices) >= 3 and len(rev_indices) >= 3:
+            fit_rms_idx, grp_rms_idx, total_rms_idx = rms_indices[0], rms_indices[1], rms_indices[-1]
+            fit_rev_idx, grp_rev_idx, total_rev_idx = rev_indices[0], rev_indices[1], rev_indices[-1]
+        else:
+            # 못 찾으면 기존 하드코딩 방식 (Fallback)
+            fit_rms_idx, grp_rms_idx = 1, 6
+            fit_rev_idx, grp_rev_idx = 4, 9
+            # Total 섹션은 보통 끝부분
+            total_rms_idx, total_rev_idx = 13, 17 
+            
+        # 상세 데이터 추출 (Total 기준) - OCC, ADR 등은 Total 섹션 근처에 있음
+        # Total RMS(N) 바로 옆이 OCC(O) -> total_rms_idx + 1
+        df_clean = pd.DataFrame()
+        df_clean['Date'] = df_data['Date']
         df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_clean['Date'].dt.strftime('%a')
+        
+        # 합계 섹션 데이터 (맨 뒤쪽)
+        # Total RMS 인덱스를 기준으로 상대 위치 추정 (이미지: RMS(N)=13, OCC(O)=14, ADR(P)=15, RevPAR(Q)=16, REV(R)=17)
+        base_idx = total_rms_idx 
+        
+        df_clean['RMS'] = safe_num(base_idx)
+        df_clean['OCC'] = safe_num(base_idx + 1)
+        df_clean['ADR'] = safe_num(base_idx + 2)
+        df_clean['RevPAR'] = safe_num(base_idx + 3)
+        df_clean['REV'] = safe_num(base_idx + 4) # 혹은 total_rev_idx 사용
+        
+        # HU, Comp는 Total RMS 앞쪽 (L=11, M=12) -> base_idx - 2, -1
+        df_clean['HU'] = safe_num(base_idx - 2)
+        df_clean['Comp'] = safe_num(base_idx - 1)
 
-        # 2. S.O.B 요약용 (FIT / GROUP 합계 계산)
-        fit_rms = safe_num(1).sum()  # B열
-        fit_rev = safe_num(4).sum()  # E열
+        # S.O.B 요약 데이터 계산
+        fit_rms_sum = safe_num(fit_rms_idx).sum()
+        fit_rev_sum = safe_num(fit_rev_idx).sum()
+        grp_rms_sum = safe_num(grp_rms_idx).sum()
+        grp_rev_sum = safe_num(grp_rev_idx).sum()
         
-        grp_rms = safe_num(6).sum()  # G열
-        grp_rev = safe_num(9).sum()  # J열
-        
-        # Total OCC 계산 (가중평균)
-        # 역산: Daily RMS / (Daily OCC / 100) = Daily Avail
+        # Total OCC 재계산
         avail_daily = df_clean['RMS'] / (df_clean['OCC'].replace(0, np.nan) / 100)
         total_avail = avail_daily.fillna(0).sum()
         total_rms = df_clean['RMS'].sum()
         total_occ_pct = (total_rms / total_avail * 100) if total_avail > 0 else 0
 
         sob_data = {
-            'FIT_RMS': fit_rms, 'FIT_REV': fit_rev,
-            'GRP_RMS': grp_rms, 'GRP_REV': grp_rev,
+            'FIT_RMS': fit_rms_sum, 'FIT_REV': fit_rev_sum,
+            'GRP_RMS': grp_rms_sum, 'GRP_REV': grp_rev_sum,
             'TOTAL_OCC': total_occ_pct
         }
         
-        return df_clean, first_date.month, sob_data
+        return df_clean, df_data['Date'].iloc[0].month, sob_data
 
     except Exception as e:
         return None, None, None
@@ -237,7 +274,7 @@ if uploaded_files:
     month_files_map = {1: [], 2: [], 3: [], 4: []}
     
     for file in uploaded_files:
-        df, month, sob = process_excel_file(file)
+        df, month, sob = find_header_and_process(file) # 지능형 함수 사용
         if df is not None and month in month_files_map:
             month_files_map[month].append({'file_name': file.name, 'data': df, 'sob': sob})
 
@@ -272,7 +309,6 @@ if uploaded_files:
             # ----------------------
             budget = BUDGET_DATA.get(current_month, 0)
             
-            # FIT/GROUP/TOTAL 계산
             fit_rms = sob_curr['FIT_RMS']
             fit_rev = sob_curr['FIT_REV']
             fit_adr = (fit_rev / fit_rms) if fit_rms else 0
@@ -290,8 +326,8 @@ if uploaded_files:
             vs_budget = total_rev - budget
             achv_rate = (total_rev / budget * 100) if budget > 0 else 0
             
-            vs_budget_color = "#ef4444" if vs_budget < 0 else "#10b981" # red/green
-
+            vs_class = "variance-negative" if vs_budget < 0 else "variance-positive"
+            
             html_card = f"""
             <div class="sob-container">
                 <div class="sob-header">📊 {current_month}월 Performance Summary</div>
@@ -315,17 +351,17 @@ if uploaded_files:
                                 </tr>
                                 <tr class="highlight-row">
                                     <td class="label">Variance</td>
-                                    <td style="color:{vs_budget_color}">{vs_budget:+,.0f}</td>
-                                    <td>Achv: {achv_rate:.1f}%</td>
+                                    <td class="{vs_class}">{vs_budget:+,.0f}</td>
+                                    <td class="{vs_class}">Achv: {achv_rate:.1f}%</td>
                                 </tr>
                             </tbody>
                         </table>
-                        <div style="margin-top:15px; display:flex; gap:10px;">
-                            <div class="kpi-card" style="flex:1;">
+                        <div class="kpi-wrapper">
+                            <div class="kpi-card">
                                 <div class="kpi-title">TOTAL OCC</div>
                                 <div class="kpi-value">{total_occ:.1f}%</div>
                             </div>
-                            <div class="kpi-card" style="flex:1; background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                            <div class="kpi-card kpi-green">
                                 <div class="kpi-title">ACHIEVEMENT</div>
                                 <div class="kpi-value">{achv_rate:.1f}%</div>
                             </div>
@@ -352,7 +388,7 @@ if uploaded_files:
                                     <td>{grp_adr:,.0f}</td>
                                     <td>{grp_rev:,.0f}</td>
                                 </tr>
-                                <tr class="highlight-row" style="border-top:2px solid #e5e7eb;">
+                                <tr class="total-row">
                                     <td class="label">TOTAL</td>
                                     <td>{total_rms:,.0f}</td>
                                     <td>{total_adr:,.0f}</td>
@@ -456,7 +492,6 @@ if uploaded_files:
 
             styler = final_df.style.format(fmt)
             
-            # 스타일링: Pre(회색), Curr(강조), Var(노랑)
             pre_cols = [c for c in final_df.columns if 'Pre' in c]
             styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f9fafb', 'color': '#9ca3af', 'font-size': '10px'})
             
@@ -467,7 +502,6 @@ if uploaded_files:
             styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb', 'font-size': '11px'})
             styler = styler.map(color_negative_red, subset=var_cols)
             
-            # Total 행
             styler = styler.apply(lambda x: ['font-weight: 800; font-size: 13px; background-color: #eff6ff; border-top: 2px solid #1e40af'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
 
             st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
