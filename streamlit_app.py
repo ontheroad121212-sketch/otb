@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
-from datetime import datetime, timedelta
+from datetime import datetime
 import io
 
 # ------------------------------------------------------------------
@@ -10,84 +10,58 @@ import io
 # ------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
-# Firebase 연결 (Secrets 활용)
 if not firebase_admin._apps:
-    key_dict = dict(st.secrets["firebase"])
-    cred = credentials.Certificate(key_dict)
-    firebase_admin.initialize_app(cred)
+    try:
+        key_dict = dict(st.secrets["firebase"])
+        cred = credentials.Certificate(key_dict)
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error(f"Firebase 연결 오류: Secrets 설정을 확인해주세요. ({e})")
+        st.stop()
 
 db = firestore.client()
 
 # ------------------------------------------------------------------
-# 2. 예산(Budget) 설정 (나중에 DB에서 불러오게 고칠 수 있음)
+# 2. 예산(Budget) 설정
 # ------------------------------------------------------------------
-# 예시값입니다. 실제 예산으로 수정하세요.
 BUDGET_DATA = {
-    1: 514992575,  # 1월 예산
-    2: 480000000,  # 2월 예산
-    3: 520000000,  # 3월 예산
-    4: 600000000   # 4월 예산
+    1: 514992575,  
+    2: 480000000,
+    3: 520000000,
+    4: 600000000
 }
 
 # ------------------------------------------------------------------
-# 3. 함수 정의 (엑셀 처리 & DB 통신)
+# 3. 함수 정의 (스마트한 엑셀 처리)
 # ------------------------------------------------------------------
 
-def load_and_process_excel(file):
+def find_first_date(df):
     """
-    업로드된 RAW 엑셀(Image 2)을 읽어서 깔끔한 DF로 변환
+    데이터프레임의 첫 번째 열을 훑어서 '진짜 날짜'가 언제인지 찾아냄
     """
-    # 헤더가 2줄(개인/단체 등)로 복잡하므로 적절히 처리
-    # 실제 파일 구조에 따라 header=1 또는 2 조정 필요. 
-    # 사진상으로는 2번째 줄(Index 1)부터가 진짜 헤더라고 가정
-    try:
-        df = pd.read_excel(file, header=1) 
-        
-        # 컬럼 이름 정리 (특수문자 제거 및 공백 정리)
-        df.columns = [str(c).replace('\n', '').strip() for c in df.columns]
-        
-        # '일자' 컬럼 찾기 (첫번째 컬럼일 확률 높음)
-        date_col = df.columns[0]
-        
-        # 합계 행 제거 (보통 맨 아래 '소계', '총합계' 등이 있음)
-        df = df[pd.to_numeric(df[date_col], errors='coerce').notna()]
-        
-        # 날짜 형식 변환
-        df['Date'] = pd.to_datetime(df[date_col])
-        df['Month'] = df['Date'].dt.month
-        
-        # 필요한 컬럼만 추출 및 이름 변경 (RAW 데이터 구조에 맞게 매핑)
-        # RAW 데이터 컬럼 위치를 기반으로 가져옵니다 (이름이 중복될 수 있어서 iloc 사용 권장)
-        # 가정: 개인(FIT) 매출은 왼쪽에서 5번째쯤, 단체(Group) 매출은 중간, 합계는 오른쪽
-        # *주의: 실제 엑셀 컬럼 위치 확인 후 인덱스 수정 필요*
-        
-        # 여기서는 편의상 컬럼명 검색으로 처리 시도
-        # (실제 엑셀을 봐야 정확하지만, 일반적인 구조로 추정)
-        # 전체 데이터 프레임 반환
-        return df
-        
-    except Exception as e:
-        st.error(f"엑셀 처리 중 오류 발생: {e}")
-        return None
+    # 첫 번째 열을 강제로 날짜로 변환 시도 (에러나면 NaT로 처리)
+    first_col = df.iloc[:, 0]
+    dates = pd.to_datetime(first_col, errors='coerce')
+    
+    # 날짜가 유효한 행들만 남김
+    valid_dates = dates.dropna()
+    
+    if not valid_dates.empty:
+        return valid_dates.iloc[0], valid_dates.index[0] # 첫 날짜와 그 행 번호 반환
+    return None, None
 
 def get_yesterday_data(month_num):
-    """
-    DB에서 해당 월의 '가장 최근 저장된(어제)' 데이터를 가져옴
-    """
-    # 전략: DB 컬렉션 'daily_reports' -> 문서 'YYYY-MM' -> 필드 'last_updated_data'
     doc_ref = db.collection('daily_reports').document(f"2026-{month_num:02d}")
     doc = doc_ref.get()
-    
     if doc.exists:
         data = doc.to_dict()
-        # 저장된 JSON 데이터를 다시 DataFrame으로 변환
-        return pd.read_json(io.StringIO(data['json_data']), orient='records')
+        try:
+            return pd.read_json(io.StringIO(data['json_data']), orient='records')
+        except:
+            return None
     return None
 
 def save_today_data(month_num, df):
-    """
-    오늘 데이터를 DB에 저장 (내일의 '어제 데이터'가 됨)
-    """
     json_str = df.to_json(orient='records', date_format='iso')
     doc_ref = db.collection('daily_reports').document(f"2026-{month_num:02d}")
     doc_ref.set({
@@ -100,7 +74,6 @@ def save_today_data(month_num, df):
 # ------------------------------------------------------------------
 st.title("🏨 One-Click Daily Pace Report")
 
-# 파일 업로더
 uploaded_files = st.file_uploader(
     "1월~4월 RAW 데이터 파일을 모두 드래그해서 넣으세요", 
     accept_multiple_files=True,
@@ -108,104 +81,149 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    # 탭 생성
     tabs = st.tabs(["1월 (JAN)", "2월 (FEB)", "3월 (MAR)", "4월 (APR)"])
     
-    # 파일을 월별로 분류
-    month_files = {}
+    # [1] 파일을 미리 읽어서 몇 월 파일인지 분류
+    month_map = {}
+    
     for file in uploaded_files:
-        # 파일명이나 내용을 미리 읽어서 월 구분 (여기서는 일단 파일 읽어서 확인)
-        temp_df = pd.read_excel(file, header=1) 
-        # 첫번째 날짜로 월 확인
-        first_date = pd.to_datetime(temp_df.iloc[0, 0])
-        month = first_date.month
-        month_files[month] = file
+        try:
+            # 헤더 없이 일단 읽음
+            temp_df = pd.read_excel(file, header=None)
+            
+            # 날짜 찾기 함수 실행
+            first_date, start_row_idx = find_first_date(temp_df)
+            
+            if first_date:
+                month_num = first_date.month
+                month_map[month_num] = (file, start_row_idx) # 파일과 데이터 시작 위치 저장
+        except Exception as e:
+            st.error(f"파일 분류 중 오류 ({file.name}): {e}")
 
-    # 각 탭별로 리포트 생성 루프
+    # [2] 탭별 리포트 생성
     for i, tab in enumerate(tabs):
         current_month = i + 1
         with tab:
-            if current_month in month_files:
-                file = month_files[current_month]
-                
-                # 1. 데이터 로드 (RAW)
-                # Streamlit의 file_uploader는 seek(0) 필요할 수 있음
-                file.seek(0) 
-                
-                # RAW 데이터 읽기 (복잡한 헤더 처리)
-                # *중요*: 사용자 엑셀 양식에 맞춰 iloc로 위치 지정
-                raw_df = pd.read_excel(file, header=1)
-                
-                # 데이터 전처리 (필요한 컬럼 추출)
-                # 가정: [일자, ..., 개인매출, ..., 단체매출, ..., 전체객실수, 전체점유율, 전체객단가, 전체매출]
-                # 사용자 이미지 기준:
-                # 합계 부분(맨 오른쪽) -> 객실수(-5), 점유율(-4), 객단가(-3), RevPAR(-2), 매출(-1) 이라고 가정
+            if current_month in month_map:
+                file, start_row = month_map[current_month]
+                file.seek(0) # 파일 포인터 초기화
                 
                 try:
+                    # 데이터 시작 위치(start_row)를 알았으니 거기부터 다시 읽음
+                    # header=start_row-2 (헤더가 2줄 위에 있다고 가정) 하거나
+                    # 그냥 헤더 없이 읽어서 인덱싱으로 처리하는게 가장 안전
+                    
+                    df_raw = pd.read_excel(file, header=None)
+                    
+                    # 데이터 영역만 자르기 (날짜가 시작되는 행부터 끝까지)
+                    df_data = df_raw.iloc[start_row:].copy()
+                    
+                    # 컬럼 매핑 (이미지2 기준)
+                    # 0: 날짜, 맨뒤(-1): 매출, 맨뒤-1: RevPAR, -3: 객단가, -4: 점유율, -5: 객실수
                     df_clean = pd.DataFrame()
-                    df_clean['Date'] = pd.to_datetime(raw_df.iloc[:, 0]) # 날짜
-                    df_clean = df_clean[df_clean['Date'].notna()] # 날짜 없는 행 제거
-
-                    # 주요 데이터 추출 (엑셀 구조에 따라 숫자 조정 필수!)
-                    # 이미지2 기준 '합계' 섹션의 데이터 가져오기
-                    df_clean['RMS'] = raw_df.iloc[:, -5]  # 객실수 (맨 뒤에서 5번째)
-                    df_clean['OCC'] = raw_df.iloc[:, -4]  # 점유율
-                    df_clean['ADR'] = raw_df.iloc[:, -3]  # 객단가
-                    df_clean['REV'] = raw_df.iloc[:, -1]  # 매출 (맨 뒤)
+                    df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0])
                     
-                    # 요약용 FIT/GROUP 매출 (앞쪽 컬럼에서 찾아야 함)
-                    # 대략 개인매출(4번째?), 단체매출(9번째?) -> 확인 필요. 임시로 추정값
-                    # (정확히 하려면 컬럼명 검색 로직 추가 필요)
+                    # 중요: 엑셀 컬럼 위치가 정확해야 합니다.
+                    # 만약 숫자가 이상하면 이 인덱스(-1, -3 등)를 조절해야 합니다.
+                    df_clean['RMS'] = pd.to_numeric(df_data.iloc[:, -5], errors='coerce').fillna(0)
+                    df_clean['OCC'] = pd.to_numeric(df_data.iloc[:, -4], errors='coerce').fillna(0)
+                    df_clean['ADR'] = pd.to_numeric(df_data.iloc[:, -3], errors='coerce').fillna(0)
+                    df_clean['REV'] = pd.to_numeric(df_data.iloc[:, -1], errors='coerce').fillna(0)
+                    
+                    # 날짜 문자열 컬럼 추가 (매칭용)
+                    df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
+                    
+                    # ----------------------
+                    # 상단 요약 (Budget)
+                    # ----------------------
                     total_rev = df_clean['REV'].sum()
-                    
-                    # 2. Summary (Budget vs Actual) 계산
                     budget = BUDGET_DATA.get(current_month, 0)
                     achv_rate = (total_rev / budget * 100) if budget > 0 else 0
+                    diff_val = total_rev - budget
+                    
+                    # 색상 서식
+                    diff_color = "red" if diff_val < 0 else "blue"
                     
                     st.markdown(f"""
-                    ### 📊 {current_month}월 Summary
-                    | 구분 | Budget | Actual | Vs Budget | 달성률 |
+                    ### 📊 {current_month}월 Performance
+                    | Category | Budget | Actual | Vs Budget | Achv % |
                     | :--- | :---: | :---: | :---: | :---: |
-                    | **Total** | {budget:,.0f} | **{total_rev:,.0f}** | {total_rev-budget:,.0f} | **{achv_rate:.1f}%** |
-                    """)
+                    | **Total Rev** | {budget:,.0f} | **{total_rev:,.0f}** | <span style='color:{diff_color}'>{diff_val:,.0f}</span> | **{achv_rate:.1f}%** |
+                    """, unsafe_allow_html=True)
                     
                     st.divider()
-
-                    # 3. 어제 데이터 불러오기 및 비교
+                    
+                    # ----------------------
+                    # Daily Report (Comparison)
+                    # ----------------------
                     df_prev = get_yesterday_data(current_month)
                     
+                    display_df = df_clean.copy()
+                    
                     if df_prev is not None:
-                        # 날짜 문자열 통일
-                        df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
-                        df_prev['DateStr'] = pd.to_datetime(df_prev['Date']).dt.strftime('%Y-%m-%d')
+                         # 저장된 데이터 날짜 포맷 통일
+                        if 'Date' in df_prev.columns:
+                            df_prev['DateStr'] = pd.to_datetime(df_prev['Date']).dt.strftime('%Y-%m-%d')
                         
-                        # 병합 (오늘 vs 어제)
-                        merged = pd.merge(df_clean, df_prev[['DateStr', 'REV', 'RMS']], on='DateStr', how='left', suffixes=('', '_prev'))
+                        # 병합
+                        merged = pd.merge(
+                            df_clean, 
+                            df_prev[['DateStr', 'REV', 'RMS']], 
+                            on='DateStr', 
+                            how='left', 
+                            suffixes=('', '_prev')
+                        )
                         
-                        # 변화량(PickUp) 계산
-                        merged['PickUp_REV'] = merged['REV'] - merged['REV_prev'].fillna(0)
-                        merged['PickUp_RMS'] = merged['RMS'] - merged['RMS_prev'].fillna(0)
+                        # 변화량 계산
+                        merged['PickUp_REV'] = merged['REV'] - merged['REV_prev'].fillna(merged['REV']) # 없으면 0변화가 아니라 당일값으로? 보통은 0처리
+                        # *수정: 전일 데이터가 없으면 변화량은 0이어야 함 (또는 신규발생)
+                        # 여기서는 "전일 데이터가 없으면 변화량 0"으로 처리
+                        merged['PickUp_REV'] = merged['REV'] - merged['REV_prev'].fillna(merged['REV']) 
+                        # 로직 수정: 비교대상이 없으면 변화량 0 (즉, 어제값=오늘값으로 가정) 
+                        # 혹은 아예 신규 예약으로 칠거면 fillna(0) -> 이 경우 전체 매출이 픽업으로 잡힘.
+                        # 보통 Pace Report는 전일자 파일과 비교이므로 fillna(0)하면 첫날 전체가 픽업이 됨. 
+                        # 일단 fillna(0)으로 해서 "전체 증가"로 보이게 하거나, 첫날은 0으로 숨기는게 나음.
                         
-                        # 표시할 데이터프레임 정리
-                        display_df = merged[['DateStr', 'RMS', 'RMS_prev', 'PickUp_RMS', 'REV', 'REV_prev', 'PickUp_REV']].copy()
-                        display_df.columns = ['날짜', '객실(Today)', '객실(Yst)', '객실(Var)', '매출(Today)', '매출(Yst)', '매출(Var)']
+                        # 깔끔한 로직: 
+                        # DB값이 있으면 차이 계산, 없으면 0
+                        merged['REV_prev'] = merged['REV_prev'].fillna(merged['REV']) # 비교값 없으면 변화 없음 처리
+                        merged['RMS_prev'] = merged['RMS_prev'].fillna(merged['RMS'])
                         
-                        st.dataframe(display_df, use_container_width=True, height=500)
+                        merged['Var_REV'] = merged['REV'] - merged['REV_prev']
+                        merged['Var_RMS'] = merged['RMS'] - merged['RMS_prev']
                         
+                        # 컬럼 정리
+                        final_show = merged[['DateStr', 'RMS', 'RMS_prev', 'Var_RMS', 'REV', 'REV_prev', 'Var_REV']].copy()
                     else:
-                        st.info("비교할 과거 데이터가 없습니다. (오늘이 첫 저장입니다)")
-                        st.dataframe(df_clean, use_container_width=True)
+                        # 비교 데이터 없음
+                        final_show = df_clean[['DateStr', 'RMS', 'RMS', 'REV', 'REV']].copy()
+                        final_show.columns = ['DateStr', 'RMS', 'RMS_prev', 'REV', 'REV_prev']
+                        final_show['Var_RMS'] = 0
+                        final_show['Var_REV'] = 0
 
-                    # 4. 저장 버튼
-                    if st.button(f"{current_month}월 데이터 DB 저장 (확정)", key=f"save_{current_month}"):
+                    # 컬럼 이름 예쁘게
+                    final_show.columns = ['Date', 'Rms(Act)', 'Rms(Pre)', 'Rms(Pick)', 'Rev(Act)', 'Rev(Pre)', 'Rev(Pick)']
+                    
+                    # 데이터프레임 표시 (하이라이트 기능 사용)
+                    st.dataframe(
+                        final_show,
+                        column_config={
+                            "Rev(Act)": st.column_config.NumberColumn(format="%d"),
+                            "Rev(Pre)": st.column_config.NumberColumn(format="%d"),
+                            "Rev(Pick)": st.column_config.NumberColumn(format="%d"),
+                        },
+                        height=600,
+                        use_container_width=True
+                    )
+                    
+                    # ----------------------
+                    # 저장 버튼
+                    # ----------------------
+                    if st.button(f"💾 {current_month}월 데이터 확정 및 저장", key=f"save_{current_month}"):
                         save_today_data(current_month, df_clean)
-                        st.success(f"{current_month}월 데이터가 저장되었습니다! 내일 비교 데이터로 사용됩니다.")
+                        st.toast(f"✅ {current_month}월 데이터가 안전하게 저장되었습니다!", icon="cloud")
                         
                 except Exception as e:
-                    st.error(f"데이터 파싱 에러: {e}. 엑셀 컬럼 위치를 확인해주세요.")
-
+                    st.error(f"데이터 처리 중 에러 발생: {e}")
             else:
-                st.write(f"{current_month}월 데이터 파일이 업로드되지 않았습니다.")
-
-else:
-    st.info("👆 위 영역에 엑셀 파일을 업로드해주세요.")
+                st.info(f"📂 {current_month}월 파일을 아직 업로드하지 않았습니다.")
