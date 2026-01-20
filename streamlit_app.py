@@ -40,7 +40,6 @@ def find_first_date(df):
     데이터프레임의 첫 번째 열을 훑어서 '진짜 날짜'가 언제인지 찾아냄
     """
     first_col = df.iloc[:, 0]
-    # errors='coerce'를 써서 '소계', '구분' 같은 문자는 NaT(시간아님)로 변환
     dates = pd.to_datetime(first_col, errors='coerce')
     valid_dates = dates.dropna()
     
@@ -109,13 +108,11 @@ if uploaded_files:
                     
                     df_clean = pd.DataFrame()
                     
-                    # [핵심 수정] errors='coerce' 추가 -> '소계' 같은 문자는 NaT로 변환
+                    # '소계' 등 문자는 NaT로 변환 후 제거
                     df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
-                    
-                    # NaT(날짜가 아닌 행) 제거 -> 즉, '소계', '합계' 행 삭제됨
                     df_clean = df_clean.dropna(subset=['Date'])
 
-                    # 나머지 데이터 숫자 변환
+                    # 데이터 숫자 변환
                     df_clean['RMS'] = pd.to_numeric(df_data.iloc[:, -5], errors='coerce').fillna(0)
                     df_clean['OCC'] = pd.to_numeric(df_data.iloc[:, -4], errors='coerce').fillna(0)
                     df_clean['ADR'] = pd.to_numeric(df_data.iloc[:, -3], errors='coerce').fillna(0)
@@ -158,7 +155,7 @@ if uploaded_files:
                             suffixes=('', '_prev')
                         )
                         
-                        # 비교 데이터가 없으면 오늘 값으로 채우기 (변화량 0)
+                        # 비교값 채우기
                         merged['REV_prev'] = merged['REV_prev'].fillna(merged['REV'])
                         merged['RMS_prev'] = merged['RMS_prev'].fillna(merged['RMS'])
                         
@@ -174,7 +171,6 @@ if uploaded_files:
 
                     final_show.columns = ['Date', 'Rms(Act)', 'Rms(Pre)', 'Rms(Pick)', 'Rev(Act)', 'Rev(Pre)', 'Rev(Pick)']
                     
-                    # 데이터프레임 표시
                     st.dataframe(
                         final_show,
                         column_config={
@@ -186,9 +182,13 @@ if uploaded_files:
                         use_container_width=True
                     )
                     
+                    # ----------------------
+                    # 저장 버튼 (여기가 수정됨!)
+                    # ----------------------
                     if st.button(f"💾 {current_month}월 데이터 확정 및 저장", key=f"save_{current_month}"):
                         save_today_data(current_month, df_clean)
-                        st.toast(f"✅ {current_month}월 데이터가 안전하게 저장되었습니다!", icon="cloud")
+                        # icon="cloud" -> icon="💾" 로 수정
+                        st.toast(f"✅ {current_month}월 데이터가 안전하게 저장되었습니다!", icon="💾")
                         
                 except Exception as e:
                     st.error(f"데이터 처리 중 에러 발생: {e}")
