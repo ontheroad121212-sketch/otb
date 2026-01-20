@@ -4,9 +4,9 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import datetime
 
-# 1. 페이지 기본 설정
+# 1. 페이지 설정
 st.set_page_config(page_title="객실 데이터 관리", layout="wide")
-st.title("📅 객실 데이터 업로드 및 관리")
+st.title("📅 객실 데이터 업로드 및 분석 대시보드")
 
 # 2. 파이어베이스 연결
 if not firebase_admin._apps:
@@ -14,165 +14,193 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- 중복된 행 이름(Index)을 강제로 살려내는 함수 ---
+# --- 공통 함수: 인덱스 중복 해결 ---
 def make_index_unique(df):
-    # 인덱스가 없는 경우(0, 1, 2...)는 처리 안 함
     if df.index.name is None and df.index.dtype == 'int64':
         return df
-        
     new_index = []
-    seen = {} # 등장한 이름 횟수 체크
-    
+    seen = {}
     for idx in df.index:
-        # 빈 값(NaN)은 'Unknown'으로 변경
-        if pd.isna(idx) or str(idx).strip() == "":
-            name = "Unknown"
-        else:
-            name = str(idx).strip()
-            
+        name = "Unknown" if pd.isna(idx) or str(idx).strip() == "" else str(idx).strip()
         if name in seen:
             seen[name] += 1
-            new_name = f"{name}_{seen[name]}" # 중복되면 이름_1, 이름_2 ...
+            new_name = f"{name}_{seen[name]}"
         else:
             seen[name] = 0
             new_name = name
-            
         new_index.append(new_name)
-    
     df.index = new_index
     return df
 
 # --- 탭 구성 ---
-tab1, tab2 = st.tabs(["📤 데이터 업로드", "💾 저장된 데이터 확인"])
+tab1, tab2 = st.tabs(["📤 데이터 업로드 (오늘자)", "📊 대시보드 (OCC & 변화량)"])
 
+# =========================================================
+# [TAB 1] 데이터 업로드 (기존과 동일, 저장 기능)
+# =========================================================
 with tab1:
-    # ==========================================
-    # 1. 룸 스냅샷 (예약 현황) 업로드 섹션
-    # ==========================================
-    st.subheader("1. 룸 스냅샷 업로드 (예약 현황)")
-    st.info("4개월치 엑셀 파일 4개를 한꺼번에 선택해서 드래그하세요. (모든 행 포함)")
-    
-    snapshot_files = st.file_uploader(
-        "스냅샷 파일 4개 선택", 
-        accept_multiple_files=True,
-        type=['xlsx', 'xls'],
-        key="snapshot_uploader"
-    )
-
-    if st.button("스냅샷 파이어베이스에 저장하기"):
-        if snapshot_files:
-            try:
-                df_list = []
-                for file in snapshot_files:
-                    # 1. 엑셀 읽기 (헤더는 첫 줄로 가정)
-                    df = pd.read_excel(file)
-                    
-                    # 2. 첫 번째 컬럼을 기준으로 삼음 (여기에 GDB, 합계 등이 있다고 가정)
-                    # 데이터가 비어있지 않은 첫 번째 열을 찾아서 인덱스로 만듦
-                    first_col_name = df.columns[0]
-                    df.set_index(first_col_name, inplace=True)
-                    
-                    # 3. [핵심] 중복된 행 이름 강제 변경 (삭제하지 않음!)
-                    df = make_index_unique(df)
-                    
-                    # 4. 쓸모없는 행(요일 등) 제거 로직은 뺍니다. 일단 다 가져옵니다.
-                    # 다만, 데이터가 전부 비어있는 행 정도는 제거
-                    df = df.dropna(how='all')
-                    
-                    df_list.append(df)
-                
-                # 5. 옆으로 합치기 (axis=1)
-                # 이제 인덱스가 유니크해졌으므로 에러가 나지 않습니다.
-                merged_df = pd.concat(df_list, axis=1)
-                
-                # 6. 날짜(컬럼) 중복 제거 (혹시 파일 간 겹치는 날짜가 있으면 하나만 유지)
-                merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
-
-                # 7. 파이어베이스 저장 준비
-                today_str = datetime.date.today().strftime("%Y-%m-%d")
-                merged_df.columns = merged_df.columns.astype(str) # 컬럼 이름 문자열로
-                merged_df = merged_df.fillna(0) # 빈칸 0으로 채우기
-                
-                # 저장
-                doc_ref = db.collection("daily_room_snapshots").document(today_str)
-                doc_ref.set({
-                    "data": merged_df.to_dict(), 
-                    "created_at": datetime.datetime.now()
-                })
-                
-                st.success(f"✅ {today_str} 스냅샷 저장 완료! (총 {len(merged_df)}개 행 저장됨)")
-                st.write("▼ 저장된 데이터 확인 (합계, 점유율 등 포함)")
-                st.dataframe(merged_df) # head() 대신 전체 다 보여줌
-                
-            except Exception as e:
-                st.error(f"오류가 발생했습니다: {e}")
-                st.write("힌트: 엑셀 파일의 첫 번째 열이 '객실타입'이나 'GDB' 같은 이름이어야 합니다.")
-        else:
-            st.warning("파일을 먼저 업로드해주세요.")
-
-    st.markdown("---")
-
-    # ==========================================
-    # 2. 사용가능 객실 (Availability) 업로드 섹션
-    # ==========================================
-    st.subheader("2. 사용가능 객실(Availability) 업로드")
-    
-    avail_files = st.file_uploader(
-        "가용 객실 파일 4개 선택", 
-        accept_multiple_files=True, 
-        type=['xlsx', 'xls'], 
-        key="avail_uploader"
-    )
-    
-    if st.button("가용 객실 설정 업데이트"):
-        if avail_files:
-            try:
-                df_list = []
-                for file in avail_files:
-                    df = pd.read_excel(file)
-                    # 첫 번째 열 인덱스 설정
-                    df.set_index(df.columns[0], inplace=True)
-                    # 중복 인덱스 처리
-                    df = make_index_unique(df)
-                    df_list.append(df)
-                
-                merged_avail_df = pd.concat(df_list, axis=1)
-                merged_avail_df = merged_avail_df.loc[:, ~merged_avail_df.columns.duplicated()]
-                merged_avail_df.columns = merged_avail_df.columns.astype(str)
-                merged_avail_df = merged_avail_df.fillna(0)
-                
-                db.collection("hotel_settings").document("latest_availability").set({
-                    "data": merged_avail_df.to_dict(),
-                    "updated_at": datetime.datetime.now()
-                })
-                
-                st.success("✅ 가용 객실 설정 업데이트 완료!")
-                st.dataframe(merged_avail_df)
-                
-            except Exception as e:
-                st.error(f"오류가 발생했습니다: {e}")
-        else:
-            st.warning("파일을 먼저 업로드해주세요.")
-
-with tab2:
-    st.write("### 🔍 데이터 저장 확인")
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("오늘자 스냅샷 확인"):
-            today_str = datetime.date.today().strftime("%Y-%m-%d")
-            doc = db.collection("daily_room_snapshots").document(today_str).get()
-            if doc.exists:
-                st.success(f"Load Success: {today_str}")
-                st.dataframe(pd.DataFrame.from_dict(doc.to_dict()['data']))
-            else:
-                st.warning("데이터 없음")
+        st.subheader("1. 룸 스냅샷 (오늘 판매량)")
+        st.caption("4개월치 파일 4개를 드래그해서 올리세요.")
+        snapshot_files = st.file_uploader("스냅샷 파일 업로드", accept_multiple_files=True, type=['xlsx', 'xls'], key="snap")
+        
+        if st.button("스냅샷 저장하기"):
+            if snapshot_files:
+                try:
+                    df_list = []
+                    for file in snapshot_files:
+                        df = pd.read_excel(file)
+                        if not df.empty:
+                            df.set_index(df.columns[0], inplace=True)
+                            df = make_index_unique(df)
+                            df_list.append(df)
+                    
+                    merged_df = pd.concat(df_list, axis=1)
+                    merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()] # 날짜 중복 제거
+                    merged_df.columns = merged_df.columns.astype(str)
+                    merged_df = merged_df.fillna(0)
+                    
+                    today_str = datetime.date.today().strftime("%Y-%m-%d")
+                    db.collection("daily_room_snapshots").document(today_str).set({
+                        "data": merged_df.to_dict(),
+                        "created_at": datetime.datetime.now()
+                    })
+                    st.success(f"✅ {today_str} 데이터 저장 완료!")
+                except Exception as e:
+                    st.error(f"에러 발생: {e}")
 
     with col2:
-        if st.button("최신 가용 객실 확인"):
-            doc = db.collection("hotel_settings").document("latest_availability").get()
-            if doc.exists:
-                st.success("Load Success")
-                st.dataframe(pd.DataFrame.from_dict(doc.to_dict()['data']))
-            else:
-                st.warning("데이터 없음")
+        st.subheader("2. 객실 총 수량 (Capacity)")
+        st.caption("OCC 계산을 위한 분모 데이터입니다. (한 번만 올리면 됨)")
+        avail_files = st.file_uploader("가용 객실 파일 업로드", accept_multiple_files=True, type=['xlsx', 'xls'], key="avail")
+        
+        if st.button("객실 세팅 업데이트"):
+            if avail_files:
+                try:
+                    df_list = []
+                    for file in avail_files:
+                        df = pd.read_excel(file)
+                        if not df.empty:
+                            df.set_index(df.columns[0], inplace=True)
+                            df = make_index_unique(df)
+                            df_list.append(df)
+                    
+                    merged_avail = pd.concat(df_list, axis=1)
+                    merged_avail = merged_avail.loc[:, ~merged_avail.columns.duplicated()]
+                    merged_avail.columns = merged_avail.columns.astype(str)
+                    merged_avail = merged_avail.fillna(0)
+                    
+                    db.collection("hotel_settings").document("latest_availability").set({
+                        "data": merged_avail.to_dict(),
+                        "updated_at": datetime.datetime.now()
+                    })
+                    st.success("✅ 객실 총 수량(Capacity) 설정 완료!")
+                except Exception as e:
+                    st.error(f"에러 발생: {e}")
+
+# =========================================================
+# [TAB 2] 대시보드 (여기가 핵심입니다!)
+# =========================================================
+with tab2:
+    st.header("🏨 객실 현황 대시보드")
+    
+    # 1. 날짜 선택
+    search_date = st.date_input("조회 기준일 (오늘)", datetime.date.today())
+    search_date_str = search_date.strftime("%Y-%m-%d")
+    yesterday_date = search_date - datetime.timedelta(days=1)
+    yesterday_str = yesterday_date.strftime("%Y-%m-%d")
+
+    # 2. 데이터 불러오기 (오늘, 어제, 캐파)
+    if st.button("데이터 불러오기 및 계산"):
+        with st.spinner("데이터를 계산 중입니다..."):
+            try:
+                # (A) 오늘 판매량 로드
+                doc_today = db.collection("daily_room_snapshots").document(search_date_str).get()
+                df_today = pd.DataFrame()
+                if doc_today.exists:
+                    df_today = pd.DataFrame.from_dict(doc_today.to_dict()['data'])
+                
+                # (B) 어제 판매량 로드 (변화량 계산용)
+                doc_yesterday = db.collection("daily_room_snapshots").document(yesterday_str).get()
+                df_yesterday = pd.DataFrame()
+                if doc_yesterday.exists:
+                    df_yesterday = pd.DataFrame.from_dict(doc_yesterday.to_dict()['data'])
+
+                # (C) 총 객실 수(Capacity) 로드 (OCC 계산용)
+                doc_capa = db.collection("hotel_settings").document("latest_availability").get()
+                df_capacity = pd.DataFrame()
+                if doc_capa.exists:
+                    df_capacity = pd.DataFrame.from_dict(doc_capa.to_dict()['data'])
+
+                # 데이터가 없으면 중단
+                if df_today.empty:
+                    st.error(f"❌ {search_date_str} (오늘) 데이터가 없습니다. 먼저 업로드해주세요.")
+                else:
+                    # 데이터 전처리: 계산을 위해 숫자로 변환 (문자열 제거)
+                    df_today = df_today.apply(pd.to_numeric, errors='coerce').fillna(0)
+                    
+                    if not df_yesterday.empty:
+                        df_yesterday = df_yesterday.apply(pd.to_numeric, errors='coerce').fillna(0)
+                    
+                    if not df_capacity.empty:
+                        df_capacity = df_capacity.apply(pd.to_numeric, errors='coerce').fillna(0)
+
+                    # ------------------------------------------------
+                    # 1. 판매 수량 (Availability / Sales)
+                    # ------------------------------------------------
+                    st.subheader(f"1. 판매 객실 수 ({search_date_str})")
+                    st.dataframe(df_today, height=300)
+
+                    # ------------------------------------------------
+                    # 2. OCC 자동 계산 (판매량 / 총객실수 * 100)
+                    # ------------------------------------------------
+                    st.subheader("2. 객실 점유율 (OCC %)")
+                    
+                    if df_capacity.empty:
+                        st.warning("⚠️ '객실 총 수량(Capacity)' 데이터가 없어서 OCC를 계산할 수 없습니다. 업로드 탭에서 올려주세요.")
+                    else:
+                        # 인덱스(룸타입)와 컬럼(날짜)을 맞춰서 나누기
+                        # 공통된 룸타입과 날짜만 남겨서 계산
+                        common_index = df_today.index.intersection(df_capacity.index)
+                        common_cols = df_today.columns.intersection(df_capacity.columns)
+                        
+                        # 계산 실행
+                        df_occ = (df_today.loc[common_index, common_cols] / df_capacity.loc[common_index, common_cols] * 100).round(1)
+                        df_occ = df_occ.fillna(0) # 0으로 나누거나 빈 값 처리
+
+                        # 히트맵 스타일링 (빨강색)
+                        st.dataframe(
+                            df_occ.style.background_gradient(cmap='Reds', vmin=0, vmax=100).format("{:.1f}%"), 
+                            height=300
+                        )
+
+                    # ------------------------------------------------
+                    # 3. 변화량 계산 (오늘 - 어제)
+                    # ------------------------------------------------
+                    st.subheader(f"3. 전일 대비 변화량 (Pickup)")
+                    st.caption(f"비교 대상: {yesterday_str} vs {search_date_str}")
+
+                    if df_yesterday.empty:
+                        st.warning(f"⚠️ {yesterday_str} (어제) 데이터가 없어서 변화량을 계산할 수 없습니다.")
+                    else:
+                        # 날짜 컬럼 맞추기 (오늘 데이터에는 있는데 어제는 없는 날짜가 있을 수 있음)
+                        # sub 함수는 인덱스와 컬럼을 자동으로 맞춰서 빼줍니다.
+                        df_pickup = df_today.sub(df_yesterday, fill_value=0)
+                        
+                        # 보기 좋게 0인 값은 흐리게 처리하거나 그대로 표시
+                        # 색상: 양수는 파랑, 음수는 빨강
+                        def color_pickup(val):
+                            if val > 0: return 'color: blue; font-weight: bold'
+                            elif val < 0: return 'color: red; font-weight: bold'
+                            else: return 'color: lightgrey'
+
+                        st.dataframe(
+                            df_pickup.style.applymap(color_pickup).format("{:+.0f}"),
+                            height=300
+                        )
+
+            except Exception as e:
+                st.error(f"계산 중 오류 발생: {e}")
+                st.write("힌트: 엑셀 파일의 룸타입 이름(행)과 날짜(열) 형식이 오늘과 어제 파일 간에 똑같은지 확인해보세요.")
