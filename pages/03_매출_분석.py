@@ -18,6 +18,7 @@ st.markdown("""
     div[data-testid="stMetricValue"] { font-size: 24px !important; font-weight: 800; color: #333; }
     div[data-testid="stMetricLabel"] { font-size: 16px !important; font-weight: 600; }
     button[data-baseweb="tab"] { font-size: 16px !important; font-weight: 700; }
+    .stSelectbox label { font-size: 1.1rem; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -43,7 +44,7 @@ def save_to_firestore(df):
         doc_ref.set({
             'data': records,
             'uploaded_at': datetime.now(),
-            'snapshot_date': datetime.now().strftime('%Y-%m-%d'), # 조회 기준일
+            'snapshot_date': datetime.now().strftime('%Y-%m-%d'), # 조회 기준일(오늘)
             'count': len(records)
         })
         return True
@@ -61,7 +62,7 @@ def load_data_from_firestore():
         for doc in docs:
             doc_dict = doc.to_dict()
             if 'data' in doc_dict:
-                # 각 행에 스냅샷 날짜가 없다면 문서의 날짜를 사용 (하위 호환성)
+                # 각 행에 스냅샷 날짜(업로드일) 정보 추가
                 doc_date = doc_dict.get('snapshot_date', '')
                 rows = doc_dict['data']
                 
@@ -189,8 +190,8 @@ def process_data(uploaded_file, status, sub_segment="General"):
             df['Is_Zero_Rate'] = df['Room_Revenue'] <= 0
             df['ADR'] = df.apply(lambda x: x['Room_Revenue'] / x['RN'] if x['RN'] > 0 else 0, axis=1)
 
-        # 공통 필드 추가
-        df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d') # 여기가 조회 기준일이 됩니다
+        # 공통 필드 추가 (저장 시점 기준이 아닌 파일 자체의 스냅샷 날짜가 중요하지만, 여기선 오늘 날짜로 태깅)
+        df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d') 
         df['Status'] = status
         
         df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
@@ -326,151 +327,169 @@ def render_rich_analysis(target_df, title_prefix, color_scale="Blues"):
 # UI 메인
 # ------------------------------------------------------------------------------
 try:
-    st.title("🏛️ 앰버 호텔 경영 리포트 (History Mode)")
+    st.title("🏛️ 앰버 호텔 경영 리포트 (History & Analytics)")
 
-    # 1. 데이터 로드
+    # 1. 데이터 로드 (항상 로드 시도)
     raw_data = load_data_from_firestore()
-
-    # 2. 날짜 필터링 로직
-    df_filtered = pd.DataFrame()
+    
+    # 2. 날짜 필터링을 위한 데이터프레임 준비
+    df_all = pd.DataFrame()
+    available_dates = []
     
     if raw_data:
         df_all = pd.DataFrame(raw_data)
-        
-        # 스냅샷 날짜 목록 추출 (중복제거 및 내림차순 정렬)
         if 'Snapshot_Date' in df_all.columns:
+            # 날짜 정렬 (최신순)
             available_dates = sorted(df_all['Snapshot_Date'].unique(), reverse=True)
+
+    # =========================================================================
+    # [사이드바] 설정 및 업로드 (항상 보임)
+    # =========================================================================
+    with st.sidebar:
+        st.header("📅 조회 설정")
+        
+        selected_date = None
+        if available_dates:
+            selected_date = st.selectbox(
+                "조회할 데이터 기준일 (Snapshot)", 
+                available_dates, 
+                index=0
+            )
+            st.success(f"선택됨: {selected_date}")
         else:
-            available_dates = []
+            st.warning("저장된 데이터가 없습니다.")
+            st.info("아래에서 파일을 업로드해주세요.")
 
-        # 사이드바 구성
-        with st.sidebar:
-            st.header("📅 조회 기준일 (Snapshot)")
-            
-            if available_dates:
-                # [핵심] 날짜 선택 박스
-                selected_date = st.selectbox(
-                    "데이터 업로드 날짜 선택",
-                    available_dates,
-                    index=0 # 기본값: 가장 최근 날짜
-                )
-                
-                # 선택된 날짜로 데이터 필터링
-                df_filtered = df_all[df_all['Snapshot_Date'] == selected_date].copy()
-                st.success(f"기준일: {selected_date}")
-            else:
-                st.warning("저장된 데이터가 없습니다.")
-
-            st.divider()
-            st.header("📤 데이터 추가 (Append)")
-            
-            with st.expander("📝 상세 리스트 업로드"):
-                f1 = st.file_uploader("신규 예약", type=['xlsx','csv'], key="f1")
-                if f1 and st.button("신규 예약 저장"):
-                    df = process_data(f1, "Booked")
-                    if not df.empty and save_to_firestore(df):
-                        st.cache_data.clear()
-                        st.success("저장 완료!")
-                        time.sleep(1)
-                        st.rerun()
-                
-                f2 = st.file_uploader("취소 리스트", type=['xlsx','csv'], key="f2")
-                if f2 and st.button("취소 저장"):
-                    df = process_data(f2, "Cancelled")
-                    if not df.empty and save_to_firestore(df):
-                        st.cache_data.clear()
-                        st.success("저장 완료!")
-                        time.sleep(1)
-                        st.rerun()
-
-            with st.expander("🎯 OTB 업로드"):
-                # 다중 파일 업로드 지원
-                f3_list = st.file_uploader("당월 OTB (여러개 가능)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
-                if f3_list and st.button("당월 OTB 저장"):
-                    for f in f3_list:
-                        df = process_data(f, "Booked", "Month")
-                        if not df.empty: save_to_firestore(df)
+        st.markdown("---")
+        st.header("📤 데이터 추가 (Append)")
+        st.caption("파일을 올리면 오늘 날짜로 DB에 저장됩니다.")
+        
+        with st.expander("📝 상세 리스트 (Booked/Cancel)", expanded=False):
+            f1 = st.file_uploader("신규 예약 리스트", type=['xlsx','csv'], key="f1")
+            if f1 and st.button("신규 예약 저장"):
+                df = process_data(f1, "Booked")
+                if not df.empty and save_to_firestore(df):
                     st.cache_data.clear()
                     st.success("저장 완료!")
                     time.sleep(1)
                     st.rerun()
-                
-                f4_list = st.file_uploader("전체 OTB (여러개 가능)", type=['xlsx','csv'], key="f4", accept_multiple_files=True)
-                if f4_list and st.button("전체 OTB 저장"):
-                    for f in f4_list:
-                        df = process_data(f, "Booked", "Total")
-                        if not df.empty: save_to_firestore(df)
+            
+            f2 = st.file_uploader("취소 리스트", type=['xlsx','csv'], key="f2")
+            if f2 and st.button("취소 저장"):
+                df = process_data(f2, "Cancelled")
+                if not df.empty and save_to_firestore(df):
                     st.cache_data.clear()
                     st.success("저장 완료!")
                     time.sleep(1)
                     st.rerun()
 
-    # 3. 대시보드 출력
-    if df_filtered.empty:
-        st.info("👈 사이드바에서 파일을 업로드하거나, 조회할 날짜를 선택해주세요.")
+        with st.expander("🎯 세일즈 온더북 (OTB)", expanded=False):
+            # 다중 파일 업로드 지원
+            f3_list = st.file_uploader("당월 OTB (여러개 가능)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
+            if f3_list and st.button("당월 OTB 저장"):
+                for f in f3_list:
+                    df = process_data(f, "Booked", "Month")
+                    if not df.empty: save_to_firestore(df)
+                st.cache_data.clear()
+                st.success("저장 완료!")
+                time.sleep(1)
+                st.rerun()
+            
+            f4_list = st.file_uploader("전체 OTB (여러개 가능)", type=['xlsx','csv'], key="f4", accept_multiple_files=True)
+            if f4_list and st.button("전체 OTB 저장"):
+                for f in f4_list:
+                    df = process_data(f, "Booked", "Total")
+                    if not df.empty: save_to_firestore(df)
+                st.cache_data.clear()
+                st.success("저장 완료!")
+                time.sleep(1)
+                st.rerun()
+
+    # =========================================================================
+    # [메인] 대시보드 출력
+    # =========================================================================
+    
+    if selected_date and not df_all.empty:
+        # 선택된 날짜의 데이터만 필터링
+        df_filtered = df_all[df_all['Snapshot_Date'] == selected_date].copy()
+        
+        if df_filtered.empty:
+            st.warning("선택한 날짜에 해당하는 데이터가 없습니다.")
+        else:
+            # 데이터 전처리 (문자열 -> 숫자 변환 등)
+            df = df_filtered.copy()
+            for col in ['RN', 'Room_Revenue', 'Total_Revenue', 'ADR', 'Lead_Time']:
+                if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
+            if 'Booking_Date' not in df.columns: df['Booking_Date'] = df['CheckIn']
+            df['Booking_dt'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
+            df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
+            df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
+            
+            df['Is_Zero_Rate'] = df['Total_Revenue'] <= 0
+            df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
+            df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
+            
+            # 데이터 분리
+            df_otb_m = df[df['Segment'] == 'OTB_Month']
+            df_otb_t = df[df['Segment'] == 'OTB_Total']
+            
+            df_list = df[~df['Segment'].str.contains('OTB')]
+            df_paid_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Is_Zero_Rate'] == False)]
+            df_zero_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Is_Zero_Rate'] == True)]
+            df_list_cn = df_list[df_list['Status'] == 'Cancelled']
+            df_total_paid = pd.concat([df_paid_bk, df_list_cn])
+
+            curr_month = datetime.now().strftime('%Y-%m')
+
+            # 탭 구성
+            main_tab0, main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs([
+                "👑 총지배인(GM) 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약"
+            ])
+
+            with main_tab0:
+                st.header(f"👑 Executive Summary ({selected_date})")
+                
+                st.subheader("🚀 최근 예약 유입 속도 (Booking Velocity)")
+                if not df_paid_bk.empty:
+                    recent_bk = df_paid_bk.groupby('Booking_Month').agg({'RN':'sum', 'Room_Revenue':'sum'}).reset_index()
+                    recent_bk = recent_bk.sort_values('Booking_Month').tail(12)
+                    c1, c2 = st.columns(2)
+                    c1.plotly_chart(px.line(recent_bk, x='Booking_Month', y='RN', title="월별 예약 생성량 (RN)", markers=True), use_container_width=True)
+                    c2.plotly_chart(px.bar(recent_bk, x='Booking_Month', y='Room_Revenue', title="월별 예약 생성액 (매출)", text_auto='.2s'), use_container_width=True)
+                else:
+                    st.info("예약 데이터가 없습니다.")
+
+                st.divider()
+                
+                st.subheader("🏆 Top 5 효자 거래처")
+                if not df_paid_bk.empty:
+                    top_acc = df_paid_bk.groupby('Account').agg({'Room_Revenue':'sum', 'RN':'sum'}).reset_index()
+                    top_acc['ADR'] = top_acc['Room_Revenue'] / top_acc['RN']
+                    top_acc = top_acc.sort_values('Room_Revenue', ascending=False).head(5)
+                    st.dataframe(top_acc, column_config={"Room_Revenue": st.column_config.NumberColumn("매출", format="%d원"), "ADR": st.column_config.NumberColumn(format="%d원")}, use_container_width=True, hide_index=True)
+
+            with main_tab1:
+                render_rich_analysis(df_paid_bk, "유료 예약", "Blues")
+            
+            with main_tab2:
+                render_rich_analysis(df_list_cn, "취소 데이터", "Reds")
+                
+            with main_tab3:
+                render_rich_analysis(df_total_paid, "종합(예약+취소)", "Greens")
+                
+            with main_tab4:
+                st.write(f"총 {len(df_zero_bk)}건")
+                st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
     else:
-        # 데이터 전처리 및 타입 변환 (JSON 문자열 -> 숫자)
-        df = df_filtered.copy()
-        for col in ['RN', 'Room_Revenue', 'Total_Revenue', 'ADR', 'Lead_Time']:
-            if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        if 'Booking_Date' not in df.columns: df['Booking_Date'] = df['CheckIn']
-        df['Booking_dt'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
-        df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
-        df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
-        
-        df['Is_Zero_Rate'] = df['Total_Revenue'] <= 0
-        df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
-        df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
-        
-        # 데이터 분리
-        df_otb_m = df[df['Segment'] == 'OTB_Month']
-        df_otb_t = df[df['Segment'] == 'OTB_Total']
-        
-        df_list = df[~df['Segment'].str.contains('OTB')]
-        df_paid_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Is_Zero_Rate'] == False)]
-        df_zero_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Is_Zero_Rate'] == True)]
-        df_list_cn = df_list[df_list['Status'] == 'Cancelled']
-        df_total_paid = pd.concat([df_paid_bk, df_list_cn])
-
-        main_tab0, main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs([
-            "👑 총지배인(GM) 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약"
-        ])
-
-        with main_tab0:
-            st.header(f"👑 Executive Summary ({selected_date} 기준)")
-            
-            st.subheader("🚀 최근 예약 유입 속도 (Booking Velocity)")
-            if not df_paid_bk.empty:
-                recent_bk = df_paid_bk.groupby('Booking_Month').agg({'RN':'sum', 'Room_Revenue':'sum'}).reset_index()
-                recent_bk = recent_bk.sort_values('Booking_Month').tail(12)
-                c1, c2 = st.columns(2)
-                c1.plotly_chart(px.line(recent_bk, x='Booking_Month', y='RN', title="월별 예약 생성량 (RN)", markers=True), use_container_width=True)
-                c2.plotly_chart(px.bar(recent_bk, x='Booking_Month', y='Room_Revenue', title="월별 예약 생성액 (매출)", text_auto='.2s'), use_container_width=True)
-            else:
-                st.info("예약 데이터가 없습니다.")
-
-            st.divider()
-            
-            st.subheader("🏆 Top 5 효자 거래처")
-            if not df_paid_bk.empty:
-                top_acc = df_paid_bk.groupby('Account').agg({'Room_Revenue':'sum', 'RN':'sum'}).reset_index()
-                top_acc['ADR'] = top_acc['Room_Revenue'] / top_acc['RN']
-                top_acc = top_acc.sort_values('Room_Revenue', ascending=False).head(5)
-                st.dataframe(top_acc, column_config={"Room_Revenue": st.column_config.NumberColumn("매출", format="%d원"), "ADR": st.column_config.NumberColumn(format="%d원")}, use_container_width=True, hide_index=True)
-
-        with main_tab1:
-            render_rich_analysis(df_paid_bk, "유료 예약", "Blues")
-        
-        with main_tab2:
-            render_rich_analysis(df_list_cn, "취소 데이터", "Reds")
-            
-        with main_tab3:
-            render_rich_analysis(df_total_paid, "종합(예약+취소)", "Greens")
-            
-        with main_tab4:
-            st.write(f"총 {len(df_zero_bk)}건")
-            st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
+        # 데이터가 없을 때 메인 화면 안내
+        st.info("👈 왼쪽 사이드바에서 파일을 업로드하여 데이터를 추가해주세요.")
+        st.markdown("""
+        ### 📋 사용 방법
+        1. **데이터 업로드**: 사이드바의 '데이터 추가' 섹션에서 엑셀 파일을 업로드하고 저장하세요.
+        2. **자동 저장**: 파일은 업로드한 날짜(오늘) 기준으로 자동 저장됩니다.
+        3. **날짜 선택**: 데이터가 쌓이면 사이드바 상단의 '조회할 데이터 기준일'에서 과거 데이터를 선택해 조회할 수 있습니다.
+        """)
 
 except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
