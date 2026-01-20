@@ -10,7 +10,7 @@ import io
 # ------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
-# 스타일 커스텀 (화면 너비 최대한 활용)
+# 스타일 커스텀 (화면 너비 최대한 활용 + 테이블 헤더 고정 등)
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem; padding-bottom: 0rem; padding-left: 1rem; padding-right: 1rem;}
@@ -184,7 +184,7 @@ if uploaded_files:
             st.divider()
 
             # ----------------------
-            # 2. 상세 리포트 (데이터 가공)
+            # 2. 상세 리포트 (데이터 가공) - 여기가 수정됨!
             # ----------------------
             # 오늘 데이터 준비
             display_df = df_curr[['DateStr', 'WeekDay', 'RMS', 'OCC', 'ADR', 'REV']].copy()
@@ -195,14 +195,16 @@ if uploaded_files:
                 if 'DateStr' not in df_prev.columns:
                     df_prev['Date'] = pd.to_datetime(df_prev['Date'])
                     df_prev['DateStr'] = df_prev['Date'].dt.strftime('%Y-%m-%d')
+                
+                # [수정] df_prev 컬럼명을 강제로 변경해서 Key Error 방지
+                # 필요한 컬럼만 뽑아서 이름 변경
+                prev_subset = df_prev[['DateStr', 'RMS', 'OCC', 'ADR', 'REV']].copy()
+                prev_subset.columns = ['DateStr', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'REV_prev']
 
-                merged = pd.merge(display_df, df_prev, left_on='Date', right_on='DateStr', how='left', suffixes=('', '_prev'))
+                # 이제 병합 (이름이 다르니 헷갈릴 일 없음)
+                merged = pd.merge(display_df, prev_subset, left_on='Date', right_on='DateStr', how='left')
                 
-                # 어제 데이터 컬럼 정리 (값 채우기)
-                merged['Prev_RMS'] = merged['RMS'].fillna(0) # RMS_prev가 실제 컬럼명일 수 있음 확인 필요
-                # 실제로는 df_prev의 컬럼명이 RMS, OCC.. 일 것임. process_excel_file 참고.
-                # merge시 _prev 접미사가 붙음 -> RMS_prev, OCC_prev...
-                
+                # 결측치 채우기 (비교값이 없으면 오늘 값으로 대체)
                 merged['Prev_RMS'] = merged['RMS_prev'].fillna(merged['Curr_RMS'])
                 merged['Prev_OCC'] = merged['OCC_prev'].fillna(merged['Curr_OCC'])
                 merged['Prev_ADR'] = merged['ADR_prev'].fillna(merged['Curr_ADR'])
@@ -224,7 +226,7 @@ if uploaded_files:
             else:
                 # 비교 데이터 없을 때
                 final_df = display_df.copy()
-                # 빈 컬럼 추가 (어제 데이터 위치에 오늘 데이터 넣어서 0 차이로 보이게 하거나 비워둠)
+                # 빈 컬럼 추가
                 final_df['Prev_RMS'] = final_df['Curr_RMS']
                 final_df['Prev_OCC'] = final_df['Curr_OCC']
                 final_df['Prev_ADR'] = final_df['Curr_ADR']
@@ -234,7 +236,6 @@ if uploaded_files:
                 final_df['Var_ADR'] = 0
                 final_df['Var_REV'] = 0
                 
-                # 순서 배치
                 final_df = final_df[[
                     'Date', 'Day',
                     'Prev_RMS', 'Prev_OCC', 'Prev_ADR', 'Prev_REV',
@@ -263,15 +264,14 @@ if uploaded_files:
             # 스타일 적용
             styler = final_df.style.format(format_dict)
             
-            # 1) 마이너스 빨간색 (전체 적용 or 변화량만 적용)
+            # 1) 마이너스 빨간색
             styler = styler.map(color_negative_red, subset=['Pick RMS', 'Pick OCC', 'Pick ADR', 'Pick REV'])
             
-            # 2) 히트맵 (상위/하위 데이터 표시) - 점유율과 매출에 적용
-            # 색상: 낮은 값(연함) -> 높은 값(진함) / Blues, Greens, Reds 등
+            # 2) 히트맵 (상위/하위 데이터 표시)
             styler = styler.background_gradient(cmap='Blues', subset=['Curr RMS', 'Curr REV'])
-            styler = styler.background_gradient(cmap='Oranges', subset=['Curr OCC']) # 점유율은 오렌지톤
+            styler = styler.background_gradient(cmap='Oranges', subset=['Curr OCC'])
 
-            # 화면 출력 (높이 조절로 촘촘하게)
+            # 화면 출력
             st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
             
             # ----------------------
