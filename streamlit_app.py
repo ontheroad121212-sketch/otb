@@ -11,32 +11,65 @@ import numpy as np
 # ------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
-# 스타일 커스텀: 폰트 초소형화, 줄바꿈 허용, 여백 제거
+# 스타일 커스텀: KPI 카드 디자인 + 테이블 폰트 미세 조정
 st.markdown("""
 <style>
-    /* 전체 컨테이너 여백 삭제 */
+    /* 전체 여백 최소화 */
     .block-container {
-        padding-top: 0.5rem; 
-        padding-bottom: 1rem; 
+        padding-top: 1rem; 
+        padding-bottom: 2rem; 
         padding-left: 0.5rem; 
         padding-right: 0.5rem;
     }
+    
+    /* [테이블 스타일] */
     iframe[title="streamlit.dataframe"] {width: 100% !important;}
     
-    /* 헤더 스타일 (줄바꿈 허용, 중앙 정렬, 폰트 축소) */
+    /* 헤더: 중앙 정렬, 줄바꿈, 폰트 적당히 */
     th {
-        font-size: 11px !important;
         text-align: center !important;
         vertical-align: bottom !important;
-        white-space: pre-wrap !important; /* 줄바꿈 강제 적용 */
-        padding: 4px !important;
-        line-height: 1.2 !important;
+        white-space: pre-wrap !important;
+        padding: 2px !important;
+        font-size: 11px !important;
+        line-height: 1.1 !important;
     }
     
-    /* 데이터 셀 스타일 (폰트 축소, 패딩 축소) */
+    /* 데이터 셀 기본: 패딩 축소 */
     td {
-        font-size: 11px !important;
-        padding: 4px 2px !important; /* 상하 4px, 좌우 2px */
+        padding: 2px !important;
+    }
+
+    /* [상단 요약 KPI 카드 스타일] */
+    .kpi-container {
+        display: flex;
+        justify_content: space-between;
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        border: 1px solid #e0e0e0;
+    }
+    .kpi-box {
+        text-align: center;
+        flex: 1;
+        border-right: 1px solid #ddd;
+    }
+    .kpi-box:last-child { border-right: none; }
+    .kpi-label {
+        font-size: 14px;
+        color: #666;
+        margin-bottom: 5px;
+        font-weight: bold;
+    }
+    .kpi-value {
+        font-size: 24px; /* 숫자 크게! */
+        font-weight: 800;
+        color: #333;
+    }
+    .kpi-sub {
+        font-size: 16px;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -88,14 +121,12 @@ def process_excel_file(file):
         
         df_clean = pd.DataFrame()
         
-        # 데이터 파싱
         df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_clean = df_clean.dropna(subset=['Date'])
 
         def safe_num(col_idx):
             return pd.to_numeric(df_data.iloc[:, col_idx], errors='coerce').fillna(0)
 
-        # 컬럼 매핑
         df_clean['HU'] = safe_num(-7)
         df_clean['Comp'] = safe_num(-6)
         df_clean['RMS'] = safe_num(-5)
@@ -139,7 +170,7 @@ def color_negative_red(val):
     return 'color: black;'
 
 # ------------------------------------------------------------------
-# 4. 사이드바 (날짜 선택)
+# 4. 사이드바
 # ------------------------------------------------------------------
 st.sidebar.title("📅 Settings")
 report_date = st.sidebar.date_input("기준 일자", datetime.now())
@@ -186,38 +217,51 @@ if uploaded_files:
                         df_curr, df_prev = f1['data'], f2['data']
                     else:
                         df_curr, df_prev = f2['data'], f1['data']
-                    mode_msg = "🔥 **파일 vs 파일**"
+                    mode_msg = "File Comparison"
                 else:
                     df_curr = files[0]['data']
                     df_prev = get_data_by_date(compare_date_str, current_month)
-                    if df_prev is not None:
-                        mode_msg = f"🗓️ **vs {compare_date_str} DB**"
-                    else:
-                        mode_msg = f"⚠️ **비교 데이터 없음**"
+                    mode_msg = f"vs {compare_date_str}" if df_prev is not None else "No Prev Data"
             else:
                 st.info(f"📂 {current_month}월 데이터 없음")
                 continue
 
             # ----------------------
-            # 1. 상단 요약
+            # 1. 상단 요약 (HTML/CSS로 크게!)
             # ----------------------
             total_rev = df_curr['REV'].sum()
             budget = BUDGET_DATA.get(current_month, 0)
             achv_rate = (total_rev / budget * 100) if budget > 0 else 0
             diff_val = total_rev - budget
-            diff_color = "red" if diff_val < 0 else "blue"
+            diff_color = "#d9534f" if diff_val < 0 else "#0275d8" # 빨강 / 파랑
+            diff_sign = "-" if diff_val < 0 else "+"
             
+            # HTML 코드로 KPI 카드 직접 그리기
             st.markdown(f"""
-            ### 📊 {current_month}월 Summary ({mode_msg})
-            | Category | Budget | Actual | Vs Budget | Achv % |
-            | :--- | :---: | :---: | :---: | :---: |
-            | **Total Rev** | {budget:,.0f} | **{total_rev:,.0f}** | <span style='color:{diff_color}'>{diff_val:,.0f}</span> | **{achv_rate:.1f}%** |
+            <div class="kpi-container">
+                <div class="kpi-box">
+                    <div class="kpi-label">BUDGET</div>
+                    <div class="kpi-value">{budget:,.0f}</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-label">ACTUAL (Total)</div>
+                    <div class="kpi-value" style="color: #0275d8;">{total_rev:,.0f}</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-label">VAR</div>
+                    <div class="kpi-value" style="color: {diff_color};">
+                        <span class="kpi-sub">{diff_sign} {abs(diff_val):,.0f}</span>
+                    </div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-label">ACHIEVEMENT</div>
+                    <div class="kpi-value">{achv_rate:.1f}%</div>
+                </div>
+            </div>
             """, unsafe_allow_html=True)
-            
-            st.divider()
 
             # ----------------------
-            # 2. 데이터 병합
+            # 2. 데이터 처리
             # ----------------------
             cols_base = ['DateStr', 'WeekDay', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
             cols_curr = ['Date', 'Day', 'Curr_HU', 'Curr_Comp', 'Curr_RMS', 'Curr_OCC', 'Curr_ADR', 'Curr_RevPAR', 'Curr_REV']
@@ -235,7 +279,6 @@ if uploaded_files:
                 prev_subset = prev_subset.drop(columns=['Day_p'])
 
                 merged = pd.merge(display_df, prev_subset, left_on='Date', right_on='DateStr', how='left')
-                
                 for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                     merged[f'{col}_prev'] = merged[f'{col}_prev'].fillna(merged[f'Curr_{col}'])
             else:
@@ -243,12 +286,11 @@ if uploaded_files:
                 for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                     merged[f'{col}_prev'] = merged[f'Curr_{col}']
 
-            # 변화량 계산
             for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                 merged[f'Pick_{col}'] = merged[f'Curr_{col}'] - merged[f'{col}_prev']
             
             # ----------------------
-            # 3. 합계(TOTAL) 계산
+            # 3. 합계
             # ----------------------
             sum_cols = []
             for prefix in ['Curr', 'prev', 'Pick']:
@@ -263,14 +305,11 @@ if uploaded_files:
             def calc_weighted_rates(row_source, prefix):
                 s_rms = totals[f'{prefix}RMS'] if prefix == 'Curr_' else totals[f'RMS{prefix}']
                 s_rev = totals[f'{prefix}REV'] if prefix == 'Curr_' else totals[f'REV{prefix}']
-                
                 if prefix == 'Curr_':
                     avail_series = merged['Curr_RMS'] / (merged['Curr_OCC'].replace(0, np.nan) / 100)
                 else:
                     avail_series = merged['RMS_prev'] / (merged['OCC_prev'].replace(0, np.nan) / 100)
-                
                 total_avail = avail_series.fillna(0).sum()
-                
                 t_adr = (s_rev / s_rms) if s_rms else 0
                 t_occ = (s_rms / total_avail * 100) if total_avail else 0
                 t_revpar = (s_rev / total_avail) if total_avail else 0
@@ -288,11 +327,10 @@ if uploaded_files:
                 'Pick_HU': totals['Pick_HU'], 'Pick_Comp': totals['Pick_Comp'], 'Pick_RMS': totals['Pick_RMS'],
                 'Pick_OCC': curr_occ - prev_occ, 'Pick_ADR': curr_adr - prev_adr, 'Pick_RevPAR': curr_revpar - prev_revpar, 'Pick_REV': totals['Pick_REV']
             }
-
             merged = pd.concat([merged, pd.DataFrame([total_row_data])], ignore_index=True)
 
             # ----------------------
-            # 4. 컬럼 배치 및 이름 정리 (줄바꿈 \n 적용)
+            # 4. 컬럼 정리 (Pre는 작게 보이게)
             # ----------------------
             final_cols = ['Date', 'Day']
             items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
@@ -305,15 +343,14 @@ if uploaded_files:
 
             col_map = {'Date': 'Date', 'Day': 'Day'}
             for item in items:
-                # [핵심] 줄바꿈(\n)을 넣어서 헤더 폭을 강제로 줄임
                 col_map[f'{item}_prev'] = f'Pre\n{item}'  
-                col_map[f'Curr_{item}'] = f'{item}'  # 현재는 중요하니까 한줄로 깔끔하게
-                col_map[f'Pick_{item}'] = f'Var\n{item}' # 변화량도 줄바꿈
+                col_map[f'Curr_{item}'] = f'{item}'  
+                col_map[f'Pick_{item}'] = f'Var\n{item}'
 
             final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
             # ----------------------
-            # 5. 스타일링
+            # 5. 스타일링 (폰트 크기 차별화)
             # ----------------------
             fmt = {}
             for col in final_df.columns:
@@ -325,31 +362,41 @@ if uploaded_files:
 
             styler = final_df.style.format(fmt)
             
-            # 색상 구분
-            # 1. Pre (회색)
+            # [폰트 사이즈 전략]
+            # Pre(어제) 컬럼 -> 폰트 10px로 작게
             pre_cols = [c for c in final_df.columns if 'Pre' in c]
-            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#666666'})
+            styler = styler.set_properties(subset=pre_cols, **{
+                'background-color': '#f8f9fa', 
+                'color': '#888888',
+                'font-size': '10px' 
+            })
 
-            # 2. Curr (흰색/강조)
+            # Curr(오늘) 컬럼 -> 폰트 12px + Bold (강조)
             curr_cols = [c for c in final_df.columns if c not in pre_cols and 'Var' not in c and c not in ['Date', 'Day']]
-            styler = styler.set_properties(subset=curr_cols, **{'background-color': '#ffffff', 'font-weight': 'bold'})
+            styler = styler.set_properties(subset=curr_cols, **{
+                'background-color': '#ffffff', 
+                'font-weight': 'bold',
+                'font-size': '12px',
+                'border-left': '1px solid #ddd',
+                'border-right': '1px solid #ddd'
+            })
 
-            # 3. Var (노랑)
+            # Var(변화) 컬럼 -> 폰트 11px
             var_cols = [c for c in final_df.columns if 'Var' in c]
-            styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffdeb'})
+            styler = styler.set_properties(subset=var_cols, **{
+                'background-color': '#fffdeb',
+                'font-size': '11px'
+            })
 
-            # 4. 마이너스 빨간색
+            # 마이너스 빨간색
             styler = styler.map(color_negative_red, subset=var_cols)
             
-            # 5. Total 행 강조
-            styler = styler.apply(lambda x: ['font-weight: bold; background-color: #e6f3ff; border-top: 2px solid black'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
+            # Total 행
+            styler = styler.apply(lambda x: ['font-weight: bold; font-size: 13px; background-color: #e6f3ff; border-top: 2px solid #333'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
 
             st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
             
-            # ----------------------
-            # 6. 저장 버튼
-            # ----------------------
             if st.button(f"💾 {report_date_str}일자 저장", key=f"save_{current_month}"):
                 data_to_save = df_curr.copy()
                 save_data_by_date(report_date_str, current_month, data_to_save)
-                st.toast(f"✅ {current_month}월 저장 완료!", icon="💾")
+                st.toast(f"✅ 저장 완료!", icon="💾")
