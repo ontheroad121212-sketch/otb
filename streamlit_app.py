@@ -7,89 +7,93 @@ import io
 import numpy as np
 
 # ------------------------------------------------------------------
-# 1. 기본 설정 및 스타일링
+# 1. 페이지 설정 및 CSS 디자인
 # ------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
 st.markdown("""
 <style>
-    /* 전체 여백 최소화 (화면 꽉 채우기) */
+    /* 전체 레이아웃 최적화 */
     .block-container {
-        padding-top: 1rem; 
-        padding-bottom: 2rem; 
-        padding-left: 0.5rem; 
-        padding-right: 0.5rem;
+        padding-top: 1rem;
+        padding-bottom: 3rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
     
-    /* [테이블 공통 스타일] */
-    iframe[title="streamlit.dataframe"] {width: 100% !important;}
-    
-    /* 메인 리포트 헤더: 중앙 정렬, 줄바꿈 허용, 폰트 작게 */
-    th {
-        text-align: center !important;
-        vertical-align: bottom !important;
-        white-space: pre-wrap !important; /* 줄바꿈 강제 적용 */
-        padding: 4px !important;
-        font-size: 11px !important;
-        line-height: 1.2 !important;
-        background-color: #f0f2f6;
+    /* [카드 스타일 S.O.B 테이블] */
+    .sob-container {
+        background-color: white;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        padding: 20px;
+        margin-bottom: 20px;
+        border: 1px solid #e0e0e0;
+    }
+    .sob-header {
+        font-size: 16px;
+        font-weight: 700;
+        color: #1f2937;
+        margin-bottom: 15px;
+        border-bottom: 2px solid #f3f4f6;
+        padding-bottom: 10px;
+    }
+    .sob-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr; /* 2분할 (Budget vs SOB) */
+        gap: 30px;
     }
     
-    /* 데이터 셀: 패딩 축소 */
-    td {
-        padding: 4px 2px !important;
-        font-size: 11px !important;
-    }
-
-    /* [상단 S.O.B 요약표 스타일 - 이미지 완벽 재현] */
-    .sob-table {
+    /* 내부 테이블 스타일 */
+    .modern-table {
         width: 100%;
         border-collapse: collapse;
-        font-family: Arial, sans-serif;
-        font-size: 13px;
-        margin-bottom: 20px;
-        background-color: white;
-        border: 1px solid #000;
-        table-layout: fixed; /* 테이블 폭 고정 */
+        font-family: 'Segoe UI', sans-serif;
     }
-    .sob-table th {
-        background-color: #e1f5fe; /* 헤더: 연한 파랑 */
-        border: 1px solid #000;
-        padding: 6px;
-        text-align: center;
-        font-weight: bold;
-        font-size: 13px !important;
-        vertical-align: middle;
+    .modern-table th {
+        text-align: left;
+        color: #6b7280;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 8px 4px;
+        border-bottom: 1px solid #e5e7eb;
     }
-    .sob-table td {
-        border: 1px solid #000;
-        padding: 6px;
+    .modern-table td {
+        padding: 8px 4px;
+        font-size: 14px;
+        color: #111827;
+        font-weight: 500;
         text-align: right;
-        vertical-align: middle;
     }
-    .sob-label {
-        background-color: #fff9c4; /* 라벨: 연한 노랑 */
-        text-align: center !important;
-        font-weight: bold;
+    .modern-table td.label {
+        text-align: left;
+        font-weight: 600;
+        color: #374151;
     }
-    .sob-total-row {
-        background-color: #fff9c4; /* 합계행: 연한 노랑 */
-        font-weight: bold;
+    .highlight-row td {
+        background-color: #f9fafb;
+        font-weight: 700;
+        color: #2563eb; /* 강조색 파랑 */
     }
-    .sob-occ-cell {
-        font-size: 24px; /* 점유율 폰트 키움 */
-        font-weight: 800;
-        text-align: center !important;
-        vertical-align: middle;
-        background-color: #ffffff;
-        color: #000;
-    }
-    /* 값 정렬용 flex 컨테이너 */
-    .val-container {
+    
+    /* KPI 박스 (점유율 등) */
+    .kpi-card {
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        color: white;
+        border-radius: 10px;
+        padding: 15px;
+        text-align: center;
         display: flex;
-        justify-content: space-between;
-        align-items: center;
+        flex-direction: column;
+        justify-content: center;
+        height: 100%;
     }
+    .kpi-title { font-size: 12px; opacity: 0.9; margin-bottom: 5px; }
+    .kpi-value { font-size: 28px; font-weight: 800; }
+
+    /* [하단 상세 리포트 테이블 스타일] */
+    iframe[title="streamlit.dataframe"] { width: 100% !important; }
+    
 </style>
 """, unsafe_allow_html=True)
 
@@ -106,18 +110,10 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # ------------------------------------------------------------------
-# 2. 예산(Budget) 설정
+# 2. 데이터 처리 함수 (좌표 수정됨)
 # ------------------------------------------------------------------
-BUDGET_DATA = {
-    1: 514992575,  
-    2: 480000000,
-    3: 520000000,
-    4: 600000000
-}
 
-# ------------------------------------------------------------------
-# 3. 데이터 처리 함수 (인덱스 수정됨)
-# ------------------------------------------------------------------
+BUDGET_DATA = { 1: 514992575, 2: 480000000, 3: 520000000, 4: 600000000 }
 
 def find_first_date(df):
     first_col = df.iloc[:, 0]
@@ -143,37 +139,40 @@ def process_excel_file(file):
         df_clean['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_clean = df_clean.dropna(subset=['Date'])
 
-        # 안전하게 숫자 변환하는 헬퍼 함수
+        # [좌표 매핑] - 보내주신 이미지 기반 (0부터 시작)
+        # A=0: 날짜
+        # B=1: FIT RMS, D=3: FIT ADR, E=4: FIT REV
+        # G=6: GRP RMS, I=8: GRP ADR, J=9: GRP REV
+        # L=11: HU, M=12: Comp
+        # N=13: Total RMS, O=14: OCC, P=15: Total ADR, Q=16: RevPAR, R=17: Total REV
+        
         def safe_num(col_idx):
             return pd.to_numeric(df_data.iloc[:, col_idx], errors='coerce').fillna(0)
 
-        # [1] 상세 리포트용 (Total 데이터) - 우측 합계 섹션(역순 인덱스 사용)
-        df_clean['HU'] = safe_num(-7)
-        df_clean['Comp'] = safe_num(-6)
-        df_clean['RMS'] = safe_num(-5)
-        df_clean['OCC'] = safe_num(-4)
-        df_clean['ADR'] = safe_num(-3)
-        df_clean['RevPAR'] = safe_num(-2)
-        df_clean['REV'] = safe_num(-1)
+        # 1. 상세 리포트용 (Total 섹션 데이터)
+        df_clean['HU'] = safe_num(11)      # L열
+        df_clean['Comp'] = safe_num(12)    # M열
+        df_clean['RMS'] = safe_num(13)     # N열 (Total RMS)
+        df_clean['OCC'] = safe_num(14)     # O열 (OCC)
+        df_clean['ADR'] = safe_num(15)     # P열 (Total ADR)
+        df_clean['RevPAR'] = safe_num(16)  # Q열
+        df_clean['REV'] = safe_num(17)     # R열 (Total REV)
         
         df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_clean['Date'].dt.strftime('%a')
 
-        # [2] S.O.B 요약용 (FIT/GROUP 데이터 추출) - 좌측 섹션 수정!
-        # 개인(FIT): [1]객실수, [2]비율, [3]객단가, [4]매출, [5]비율
-        # 단체(GRP): [6]객실수, [7]비율, [8]객단가, [9]매출, [10]비율
+        # 2. S.O.B 요약용 (FIT / GROUP 합계 계산)
+        fit_rms = safe_num(1).sum()  # B열
+        fit_rev = safe_num(4).sum()  # E열
         
-        fit_rms = safe_num(1).sum()  # 개인 객실수 (Index 1)
-        fit_rev = safe_num(4).sum()  # 개인 매출 (Index 4)
+        grp_rms = safe_num(6).sum()  # G열
+        grp_rev = safe_num(9).sum()  # J열
         
-        grp_rms = safe_num(6).sum()  # 단체 객실수 (Index 6) - 수정됨
-        grp_rev = safe_num(9).sum()  # 단체 매출 (Index 9) - 수정됨
-        
-        # Total OCC 계산
+        # Total OCC 계산 (가중평균)
+        # 역산: Daily RMS / (Daily OCC / 100) = Daily Avail
         avail_daily = df_clean['RMS'] / (df_clean['OCC'].replace(0, np.nan) / 100)
         total_avail = avail_daily.fillna(0).sum()
         total_rms = df_clean['RMS'].sum()
-        
         total_occ_pct = (total_rms / total_avail * 100) if total_avail > 0 else 0
 
         sob_data = {
@@ -185,7 +184,6 @@ def process_excel_file(file):
         return df_clean, first_date.month, sob_data
 
     except Exception as e:
-        st.error(f"엑셀 처리 중 에러: {e}")
         return None, None, None
 
 def get_data_by_date(target_date_str, month_num):
@@ -216,20 +214,21 @@ def color_negative_red(val):
     return 'color: black;'
 
 # ------------------------------------------------------------------
-# 4. 사이드바
+# 3. 사이드바
 # ------------------------------------------------------------------
-st.sidebar.title("📅 Settings")
-report_date = st.sidebar.date_input("기준 일자 (저장일)", datetime.now())
+st.sidebar.header("⚙️ Report Settings")
+report_date = st.sidebar.date_input("기준 일자", datetime.now())
 report_date_str = report_date.strftime("%Y-%m-%d")
 
 compare_date_default = report_date - timedelta(days=1)
-compare_date = st.sidebar.date_input("비교 일자 (DB조회)", compare_date_default)
+compare_date = st.sidebar.date_input("비교 일자", compare_date_default)
 compare_date_str = compare_date.strftime("%Y-%m-%d")
 
 # ------------------------------------------------------------------
-# 5. 메인 UI
+# 4. 메인 UI
 # ------------------------------------------------------------------
-st.title(f"🏨 Daily Pace Report ({report_date_str})")
+st.title(f"🏨 Daily Pace Report")
+st.caption(f"기준일: **{report_date_str}** | 비교일: **{compare_date_str}**")
 
 uploaded_files = st.file_uploader("오늘자 엑셀 파일 업로드", accept_multiple_files=True, type=['xlsx'])
 
@@ -250,7 +249,6 @@ if uploaded_files:
             df_curr = None
             df_prev = None
             sob_curr = None
-            mode_msg = ""
             
             if files:
                 if len(files) >= 2:
@@ -261,22 +259,20 @@ if uploaded_files:
                     else:
                         df_curr, df_prev = f2['data'], f1['data']
                         sob_curr = f2['sob']
-                    mode_msg = "File Comparison"
                 else:
                     df_curr = files[0]['data']
                     sob_curr = files[0]['sob']
                     df_prev = get_data_by_date(compare_date_str, current_month)
-                    mode_msg = f"vs {compare_date_str}" if df_prev is not None else "No History"
             else:
                 st.info(f"📂 {current_month}월 데이터가 없습니다.")
                 continue
 
             # ----------------------
-            # [상단] S.O.B 요약표
+            # [상단] 모던 S.O.B 카드
             # ----------------------
             budget = BUDGET_DATA.get(current_month, 0)
             
-            # S.O.B 데이터 (인덱스 수정됨)
+            # FIT/GROUP/TOTAL 계산
             fit_rms = sob_curr['FIT_RMS']
             fit_rev = sob_curr['FIT_REV']
             fit_adr = (fit_rev / fit_rms) if fit_rms else 0
@@ -293,57 +289,82 @@ if uploaded_files:
 
             vs_budget = total_rev - budget
             achv_rate = (total_rev / budget * 100) if budget > 0 else 0
+            
+            vs_budget_color = "#ef4444" if vs_budget < 0 else "#10b981" # red/green
 
-            # HTML 테이블 (폭 비율 조정)
-            html_table = f"""
-            <table class="sob-table">
-                <colgroup>
-                    <col style="width: 20%;"> <col style="width: 10%;"> <col style="width: 15%;"> <col style="width: 15%;"> <col style="width: 25%;"> <col style="width: 15%;"> </colgroup>
-                <tr class="sob-header-row">
-                    <th>OTB(On The Book) vs Budget</th>
-                    <th>S.O.B</th>
-                    <th>RMS</th>
-                    <th>ADR</th>
-                    <th>REV</th>
-                    <th>OCC</th>
-                </tr>
-                <tr>
-                    <td>
-                        <div class="val-container">
-                            <span>Budget</span> <span>{budget:,.0f}</span>
+            html_card = f"""
+            <div class="sob-container">
+                <div class="sob-header">📊 {current_month}월 Performance Summary</div>
+                
+                <div class="sob-grid">
+                    <div>
+                        <table class="modern-table">
+                            <thead>
+                                <tr><th>Category</th><th>Amount</th><th>Status</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="label">Budget</td>
+                                    <td>{budget:,.0f}</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr>
+                                    <td class="label">Actual</td>
+                                    <td style="font-weight:bold;">{total_rev:,.0f}</td>
+                                    <td>-</td>
+                                </tr>
+                                <tr class="highlight-row">
+                                    <td class="label">Variance</td>
+                                    <td style="color:{vs_budget_color}">{vs_budget:+,.0f}</td>
+                                    <td>Achv: {achv_rate:.1f}%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div style="margin-top:15px; display:flex; gap:10px;">
+                            <div class="kpi-card" style="flex:1;">
+                                <div class="kpi-title">TOTAL OCC</div>
+                                <div class="kpi-value">{total_occ:.1f}%</div>
+                            </div>
+                            <div class="kpi-card" style="flex:1; background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                                <div class="kpi-title">ACHIEVEMENT</div>
+                                <div class="kpi-value">{achv_rate:.1f}%</div>
+                            </div>
                         </div>
-                    </td>
-                    <td class="sob-label">FIT</td>
-                    <td>{fit_rms:,.0f}</td>
-                    <td>{fit_adr:,.0f}</td>
-                    <td>{fit_rev:,.0f}</td>
-                    <td rowspan="3" class="sob-occ-cell">{total_occ:.1f}%</td>
-                </tr>
-                <tr>
-                    <td>
-                        <div class="val-container">
-                            <span>VS Budget</span> <span>{vs_budget:,.0f}</span>
-                        </div>
-                    </td>
-                    <td class="sob-label">GROUP</td>
-                    <td>{grp_rms:,.0f}</td>
-                    <td>{grp_adr:,.0f}</td>
-                    <td>{grp_rev:,.0f}</td>
-                </tr>
-                <tr class="sob-total-row">
-                    <td>
-                        <div class="val-container">
-                            <span>Achv.R</span> <span>{achv_rate:.1f}%</span>
-                        </div>
-                    </td>
-                    <td class="sob-label">TOTAL</td>
-                    <td>{total_rms:,.0f}</td>
-                    <td>{total_adr:,.0f}</td>
-                    <td>{total_rev:,.0f}</td>
-                </tr>
-            </table>
+                    </div>
+
+                    <div>
+                        <table class="modern-table">
+                            <thead>
+                                <tr>
+                                    <th>Segment</th><th>RMS</th><th>ADR</th><th>REV</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="label">FIT (개인)</td>
+                                    <td>{fit_rms:,.0f}</td>
+                                    <td>{fit_adr:,.0f}</td>
+                                    <td>{fit_rev:,.0f}</td>
+                                </tr>
+                                <tr>
+                                    <td class="label">GROUP (단체)</td>
+                                    <td>{grp_rms:,.0f}</td>
+                                    <td>{grp_adr:,.0f}</td>
+                                    <td>{grp_rev:,.0f}</td>
+                                </tr>
+                                <tr class="highlight-row" style="border-top:2px solid #e5e7eb;">
+                                    <td class="label">TOTAL</td>
+                                    <td>{total_rms:,.0f}</td>
+                                    <td>{total_adr:,.0f}</td>
+                                    <td>{total_rev:,.0f}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
             """
-            st.markdown(html_table, unsafe_allow_html=True)
+            st.markdown(html_card, unsafe_allow_html=True)
 
             # ----------------------
             # [하단] 상세 리포트
@@ -372,7 +393,7 @@ if uploaded_files:
             for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                 merged[f'Pick_{col}'] = merged[f'Curr_{col}'] - merged[f'{col}_prev']
             
-            # 합계
+            # 합계 행
             sum_cols = []
             for prefix in ['Curr', 'prev', 'Pick']:
                 for item in ['HU', 'Comp', 'RMS', 'REV']:
@@ -409,7 +430,6 @@ if uploaded_files:
             }
             merged = pd.concat([merged, pd.DataFrame([total_row_data])], ignore_index=True)
 
-            # 컬럼 정리
             final_cols = ['Date', 'Day']
             items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
             for item in items: final_cols.append(f'{item}_prev')
@@ -436,18 +456,23 @@ if uploaded_files:
 
             styler = final_df.style.format(fmt)
             
+            # 스타일링: Pre(회색), Curr(강조), Var(노랑)
             pre_cols = [c for c in final_df.columns if 'Pre' in c]
-            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#888888', 'font-size': '10px'})
+            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f9fafb', 'color': '#9ca3af', 'font-size': '10px'})
+            
             curr_cols = [c for c in final_df.columns if c not in pre_cols and 'Var' not in c and c not in ['Date', 'Day']]
-            styler = styler.set_properties(subset=curr_cols, **{'background-color': '#ffffff', 'font-weight': 'bold', 'font-size': '12px', 'border-left': '1px solid #ddd', 'border-right': '1px solid #ddd'})
+            styler = styler.set_properties(subset=curr_cols, **{'background-color': '#ffffff', 'font-weight': '700', 'font-size': '12px', 'border-left': '1px solid #e5e7eb', 'border-right': '1px solid #e5e7eb'})
+            
             var_cols = [c for c in final_df.columns if 'Var' in c]
-            styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffdeb', 'font-size': '11px'})
+            styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb', 'font-size': '11px'})
             styler = styler.map(color_negative_red, subset=var_cols)
-            styler = styler.apply(lambda x: ['font-weight: bold; font-size: 13px; background-color: #e6f3ff; border-top: 2px solid #333'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
+            
+            # Total 행
+            styler = styler.apply(lambda x: ['font-weight: 800; font-size: 13px; background-color: #eff6ff; border-top: 2px solid #1e40af'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
 
             st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
             
             if st.button(f"💾 {report_date_str}일자 저장", key=f"save_{current_month}"):
                 data_to_save = df_curr.copy()
                 save_data_by_date(report_date_str, current_month, data_to_save)
-                st.toast(f"✅ 저장 완료!", icon="💾")
+                st.toast(f"✅ 데이터 저장 완료!", icon="💾")
