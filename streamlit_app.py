@@ -50,6 +50,7 @@ st.markdown("""
         margin-bottom: 20px;
         background-color: white;
         border: 1px solid #000;
+        table-layout: fixed; /* 테이블 폭 고정 */
     }
     .sob-table th {
         background-color: #e1f5fe; /* 헤더: 연한 파랑 */
@@ -58,11 +59,13 @@ st.markdown("""
         text-align: center;
         font-weight: bold;
         font-size: 13px !important;
+        vertical-align: middle;
     }
     .sob-table td {
         border: 1px solid #000;
         padding: 6px;
         text-align: right;
+        vertical-align: middle;
     }
     .sob-label {
         background-color: #fff9c4; /* 라벨: 연한 노랑 */
@@ -74,11 +77,18 @@ st.markdown("""
         font-weight: bold;
     }
     .sob-occ-cell {
-        font-size: 20px;
+        font-size: 24px; /* 점유율 폰트 키움 */
         font-weight: 800;
         text-align: center !important;
         vertical-align: middle;
         background-color: #ffffff;
+        color: #000;
+    }
+    /* 값 정렬용 flex 컨테이너 */
+    .val-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -106,7 +116,7 @@ BUDGET_DATA = {
 }
 
 # ------------------------------------------------------------------
-# 3. 데이터 처리 함수 (FIT/GROUP 분리 로직 포함)
+# 3. 데이터 처리 함수 (인덱스 수정됨)
 # ------------------------------------------------------------------
 
 def find_first_date(df):
@@ -149,19 +159,17 @@ def process_excel_file(file):
         df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_clean['Date'].dt.strftime('%a')
 
-        # [2] S.O.B 요약용 (FIT/GROUP 데이터 추출) - 좌측 섹션(정순 인덱스 사용)
-        # 이미지 기준: 
-        # FIT(개인): 2번째열(객실수), 5번째열(매출) -> 인덱스 1, 4
-        # GROUP(단체): 6번째열(객실수), 9번째열(매출) -> 인덱스 5, 8
+        # [2] S.O.B 요약용 (FIT/GROUP 데이터 추출) - 좌측 섹션 수정!
+        # 개인(FIT): [1]객실수, [2]비율, [3]객단가, [4]매출, [5]비율
+        # 단체(GRP): [6]객실수, [7]비율, [8]객단가, [9]매출, [10]비율
         
-        fit_rms = safe_num(1).sum()
-        fit_rev = safe_num(4).sum()
+        fit_rms = safe_num(1).sum()  # 개인 객실수 (Index 1)
+        fit_rev = safe_num(4).sum()  # 개인 매출 (Index 4)
         
-        grp_rms = safe_num(5).sum()
-        grp_rev = safe_num(8).sum()
+        grp_rms = safe_num(6).sum()  # 단체 객실수 (Index 6) - 수정됨
+        grp_rev = safe_num(9).sum()  # 단체 매출 (Index 9) - 수정됨
         
-        # Total OCC 계산 (전체 RMS / 전체 가동가능객실)
-        # 역산법: Total RMS / (Total OCC / 100) = Total Avail
+        # Total OCC 계산
         avail_daily = df_clean['RMS'] / (df_clean['OCC'].replace(0, np.nan) / 100)
         total_avail = avail_daily.fillna(0).sum()
         total_rms = df_clean['RMS'].sum()
@@ -177,11 +185,11 @@ def process_excel_file(file):
         return df_clean, first_date.month, sob_data
 
     except Exception as e:
+        st.error(f"엑셀 처리 중 에러: {e}")
         return None, None, None
 
 def get_data_by_date(target_date_str, month_num):
     try:
-        # DB 구조: daily_snapshots/{YYYY-MM-DD}/months/{month_num}
         doc_ref = db.collection('daily_snapshots').document(target_date_str)\
                     .collection('months').document(str(month_num))
         doc = doc_ref.get()
@@ -194,9 +202,7 @@ def get_data_by_date(target_date_str, month_num):
 
 def save_data_by_date(target_date_str, month_num, df):
     json_str = df.to_json(orient='records', date_format='iso')
-    # 메인 문서 업데이트
     db.collection('daily_snapshots').document(target_date_str).set({'created_at': firestore.SERVER_TIMESTAMP}, merge=True)
-    # 서브 컬렉션 저장
     doc_ref = db.collection('daily_snapshots').document(target_date_str)\
                 .collection('months').document(str(month_num))
     doc_ref.set({
@@ -210,7 +216,7 @@ def color_negative_red(val):
     return 'color: black;'
 
 # ------------------------------------------------------------------
-# 4. 사이드바 (날짜 설정)
+# 4. 사이드바
 # ------------------------------------------------------------------
 st.sidebar.title("📅 Settings")
 report_date = st.sidebar.date_input("기준 일자 (저장일)", datetime.now())
@@ -246,9 +252,7 @@ if uploaded_files:
             sob_curr = None
             mode_msg = ""
             
-            # [데이터 로드 로직]
             if files:
-                # 파일 2개 이상이면 파일끼리 비교
                 if len(files) >= 2:
                     f1, f2 = files[0], files[1]
                     if f1['data']['REV'].sum() >= f2['data']['REV'].sum():
@@ -257,23 +261,22 @@ if uploaded_files:
                     else:
                         df_curr, df_prev = f2['data'], f1['data']
                         sob_curr = f2['sob']
-                    mode_msg = "File vs File"
-                # 파일 1개면 DB와 비교
+                    mode_msg = "File Comparison"
                 else:
                     df_curr = files[0]['data']
                     sob_curr = files[0]['sob']
                     df_prev = get_data_by_date(compare_date_str, current_month)
-                    mode_msg = f"vs DB({compare_date_str})" if df_prev is not None else "No History"
+                    mode_msg = f"vs {compare_date_str}" if df_prev is not None else "No History"
             else:
                 st.info(f"📂 {current_month}월 데이터가 없습니다.")
                 continue
 
             # ----------------------
-            # [상단 1] S.O.B 요약표 (HTML 구현)
+            # [상단] S.O.B 요약표
             # ----------------------
             budget = BUDGET_DATA.get(current_month, 0)
             
-            # FIT/GROUP/TOTAL 계산
+            # S.O.B 데이터 (인덱스 수정됨)
             fit_rms = sob_curr['FIT_RMS']
             fit_rev = sob_curr['FIT_REV']
             fit_adr = (fit_rev / fit_rms) if fit_rms else 0
@@ -291,20 +294,22 @@ if uploaded_files:
             vs_budget = total_rev - budget
             achv_rate = (total_rev / budget * 100) if budget > 0 else 0
 
-            # HTML 생성
+            # HTML 테이블 (폭 비율 조정)
             html_table = f"""
             <table class="sob-table">
+                <colgroup>
+                    <col style="width: 20%;"> <col style="width: 10%;"> <col style="width: 15%;"> <col style="width: 15%;"> <col style="width: 25%;"> <col style="width: 15%;"> </colgroup>
                 <tr class="sob-header-row">
-                    <th style="width: 25%;">OTB(On The Book) vs Budget</th>
-                    <th style="width: 10%;">S.O.B</th>
-                    <th style="width: 15%;">RMS</th>
-                    <th style="width: 15%;">ADR</th>
-                    <th style="width: 20%;">REV</th>
-                    <th style="width: 15%;">OCC</th>
+                    <th>OTB(On The Book) vs Budget</th>
+                    <th>S.O.B</th>
+                    <th>RMS</th>
+                    <th>ADR</th>
+                    <th>REV</th>
+                    <th>OCC</th>
                 </tr>
                 <tr>
                     <td>
-                        <div style="display:flex; justify-content:space-between;">
+                        <div class="val-container">
                             <span>Budget</span> <span>{budget:,.0f}</span>
                         </div>
                     </td>
@@ -316,7 +321,7 @@ if uploaded_files:
                 </tr>
                 <tr>
                     <td>
-                        <div style="display:flex; justify-content:space-between;">
+                        <div class="val-container">
                             <span>VS Budget</span> <span>{vs_budget:,.0f}</span>
                         </div>
                     </td>
@@ -327,7 +332,7 @@ if uploaded_files:
                 </tr>
                 <tr class="sob-total-row">
                     <td>
-                        <div style="display:flex; justify-content:space-between;">
+                        <div class="val-container">
                             <span>Achv.R</span> <span>{achv_rate:.1f}%</span>
                         </div>
                     </td>
@@ -341,7 +346,7 @@ if uploaded_files:
             st.markdown(html_table, unsafe_allow_html=True)
 
             # ----------------------
-            # [하단 2] 상세 리포트 (데이터 병합 및 계산)
+            # [하단] 상세 리포트
             # ----------------------
             cols_base = ['DateStr', 'WeekDay', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
             cols_curr = ['Date', 'Day', 'Curr_HU', 'Curr_Comp', 'Curr_RMS', 'Curr_OCC', 'Curr_ADR', 'Curr_RevPAR', 'Curr_REV']
@@ -357,7 +362,6 @@ if uploaded_files:
                 prev_subset.columns = ['DateStr', 'Day_p', 'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev']
                 prev_subset = prev_subset.drop(columns=['Day_p'])
                 merged = pd.merge(display_df, prev_subset, left_on='Date', right_on='DateStr', how='left')
-                # 결측치 처리
                 for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                     merged[f'{col}_prev'] = merged[f'{col}_prev'].fillna(merged[f'Curr_{col}'])
             else:
@@ -365,13 +369,10 @@ if uploaded_files:
                 for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                     merged[f'{col}_prev'] = merged[f'Curr_{col}']
 
-            # 변화량(PickUp) 계산
             for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                 merged[f'Pick_{col}'] = merged[f'Curr_{col}'] - merged[f'{col}_prev']
             
-            # ----------------------
-            # [하단 3] Total 합계 행 계산
-            # ----------------------
+            # 합계
             sum_cols = []
             for prefix in ['Curr', 'prev', 'Pick']:
                 for item in ['HU', 'Comp', 'RMS', 'REV']:
@@ -381,7 +382,6 @@ if uploaded_files:
                     sum_cols.append(item_col)
             totals = merged[sum_cols].sum()
             
-            # 가중 평균 재계산 함수
             def calc_weighted_rates(row_source, prefix):
                 s_rms = totals[f'{prefix}RMS'] if prefix == 'Curr_' else totals[f'RMS{prefix}']
                 s_rev = totals[f'{prefix}REV'] if prefix == 'Curr_' else totals[f'REV{prefix}']
@@ -409,9 +409,7 @@ if uploaded_files:
             }
             merged = pd.concat([merged, pd.DataFrame([total_row_data])], ignore_index=True)
 
-            # ----------------------
-            # [하단 4] 컬럼 및 스타일링 (컴팩트 뷰)
-            # ----------------------
+            # 컬럼 정리
             final_cols = ['Date', 'Day']
             items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
             for item in items: final_cols.append(f'{item}_prev')
@@ -420,7 +418,6 @@ if uploaded_files:
 
             final_df = merged[final_cols].copy()
 
-            # 줄바꿈으로 폭 좁히기
             col_map = {'Date': 'Date', 'Day': 'Day'}
             for item in items:
                 col_map[f'{item}_prev'] = f'Pre\n{item}'  
@@ -439,20 +436,13 @@ if uploaded_files:
 
             styler = final_df.style.format(fmt)
             
-            # Pre(어제): 작고 회색
             pre_cols = [c for c in final_df.columns if 'Pre' in c]
             styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#888888', 'font-size': '10px'})
-            
-            # Curr(오늘): 굵고 흰색 (경계선 추가)
             curr_cols = [c for c in final_df.columns if c not in pre_cols and 'Var' not in c and c not in ['Date', 'Day']]
             styler = styler.set_properties(subset=curr_cols, **{'background-color': '#ffffff', 'font-weight': 'bold', 'font-size': '12px', 'border-left': '1px solid #ddd', 'border-right': '1px solid #ddd'})
-            
-            # Var(변화): 노란색
             var_cols = [c for c in final_df.columns if 'Var' in c]
             styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffdeb', 'font-size': '11px'})
             styler = styler.map(color_negative_red, subset=var_cols)
-            
-            # Total 행 강조
             styler = styler.apply(lambda x: ['font-weight: bold; font-size: 13px; background-color: #e6f3ff; border-top: 2px solid #333'] * len(x) if x.name == final_df.index[-1] else [''] * len(x), axis=1)
 
             st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
