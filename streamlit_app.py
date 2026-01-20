@@ -5,6 +5,7 @@ from firebase_admin import credentials, firestore
 from datetime import datetime, timedelta
 import io
 import numpy as np
+import textwrap  # [추가] 들여쓰기 제거용 라이브러리
 
 # ------------------------------------------------------------------
 # 1. 페이지 설정 및 CSS 디자인
@@ -24,7 +25,7 @@ st.markdown("""
     .sob-container {
         background-color: white;
         border-radius: 12px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         padding: 20px;
         margin-bottom: 20px;
         border: 1px solid #e5e7eb;
@@ -37,10 +38,12 @@ st.markdown("""
         display: flex;
         align-items: center;
         gap: 10px;
+        border-bottom: 2px solid #f3f4f6;
+        padding-bottom: 10px;
     }
     .sob-grid {
         display: grid;
-        grid-template-columns: 1fr 1.2fr; /* 왼쪽(Budget) : 오른쪽(Detail) 비율 조정 */
+        grid-template-columns: 1fr 1.2fr;
         gap: 40px;
     }
     
@@ -48,7 +51,7 @@ st.markdown("""
     .modern-table {
         width: 100%;
         border-collapse: collapse;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     .modern-table th {
         text-align: right;
@@ -97,6 +100,7 @@ st.markdown("""
         border-radius: 8px;
         padding: 15px;
         text-align: center;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
     }
     .kpi-title { font-size: 11px; color: #6b7280; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 4px; }
     .kpi-value { font-size: 24px; color: #111827; font-weight: 800; }
@@ -121,7 +125,7 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # ------------------------------------------------------------------
-# 2. 데이터 처리 (지능형 컬럼 찾기)
+# 2. 데이터 처리
 # ------------------------------------------------------------------
 
 BUDGET_DATA = { 1: 514992575, 2: 480000000, 3: 520000000, 4: 600000000 }
@@ -129,20 +133,16 @@ BUDGET_DATA = { 1: 514992575, 2: 480000000, 3: 520000000, 4: 600000000 }
 def find_header_and_process(file):
     try:
         file.seek(0)
-        # 헤더를 찾기 위해 앞부분을 읽어봄
         df_preview = pd.read_excel(file, header=None, nrows=10)
         
         header_row_idx = None
         rms_indices = []
         rev_indices = []
-        date_col_idx = 0
         
-        # '객실수'와 '매출'이라는 단어가 모두 포함된 행을 찾음
         for idx, row in df_preview.iterrows():
             row_str = row.astype(str).values
             if np.any(['객실수' in s for s in row_str]) and np.any(['매출' in s for s in row_str]):
                 header_row_idx = idx
-                # 해당 행에서 '객실수', '매출' 컬럼 인덱스 추출
                 rms_indices = [i for i, val in enumerate(row_str) if '객실수' in str(val)]
                 rev_indices = [i for i, val in enumerate(row_str) if '매출' in str(val)]
                 break
@@ -150,63 +150,47 @@ def find_header_and_process(file):
         if header_row_idx is None:
             return None, None, None
 
-        # 데이터 로드 (헤더 다음 행부터)
         df_raw = pd.read_excel(file, header=None)
         start_row = header_row_idx + 1 
         df_data = df_raw.iloc[start_row:].copy()
         
-        # 날짜 컬럼 찾기 (보통 맨 앞이지만, 확실하게 '일자'나 날짜형식 확인)
-        # 여기서는 0번째 컬럼을 날짜로 가정하되, 검증
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
-        df_data = df_data.dropna(subset=['Date']) # 날짜 없는 행 제거 (합계 등)
+        df_data = df_data.dropna(subset=['Date']) 
 
         def safe_num(col_idx):
             if col_idx >= df_data.shape[1]: return 0
             return pd.to_numeric(df_data.iloc[:, col_idx], errors='coerce').fillna(0)
 
         # [지능형 매핑]
-        # rms_indices는 보통 [FIT RMS, GRP RMS, Total RMS] 순서로 나옴
-        # rev_indices는 보통 [FIT REV, GRP REV, Total REV] 순서로 나옴
-        # 엑셀 구조상 (개인 -> 단체 -> 합계) 순서라고 가정
-        
         if len(rms_indices) >= 3 and len(rev_indices) >= 3:
             fit_rms_idx, grp_rms_idx, total_rms_idx = rms_indices[0], rms_indices[1], rms_indices[-1]
             fit_rev_idx, grp_rev_idx, total_rev_idx = rev_indices[0], rev_indices[1], rev_indices[-1]
         else:
-            # 못 찾으면 기존 하드코딩 방식 (Fallback)
             fit_rms_idx, grp_rms_idx = 1, 6
             fit_rev_idx, grp_rev_idx = 4, 9
-            # Total 섹션은 보통 끝부분
             total_rms_idx, total_rev_idx = 13, 17 
             
-        # 상세 데이터 추출 (Total 기준) - OCC, ADR 등은 Total 섹션 근처에 있음
-        # Total RMS(N) 바로 옆이 OCC(O) -> total_rms_idx + 1
         df_clean = pd.DataFrame()
         df_clean['Date'] = df_data['Date']
         df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_clean['Date'].dt.strftime('%a')
         
-        # 합계 섹션 데이터 (맨 뒤쪽)
-        # Total RMS 인덱스를 기준으로 상대 위치 추정 (이미지: RMS(N)=13, OCC(O)=14, ADR(P)=15, RevPAR(Q)=16, REV(R)=17)
         base_idx = total_rms_idx 
         
         df_clean['RMS'] = safe_num(base_idx)
         df_clean['OCC'] = safe_num(base_idx + 1)
         df_clean['ADR'] = safe_num(base_idx + 2)
         df_clean['RevPAR'] = safe_num(base_idx + 3)
-        df_clean['REV'] = safe_num(base_idx + 4) # 혹은 total_rev_idx 사용
+        df_clean['REV'] = safe_num(base_idx + 4)
         
-        # HU, Comp는 Total RMS 앞쪽 (L=11, M=12) -> base_idx - 2, -1
         df_clean['HU'] = safe_num(base_idx - 2)
         df_clean['Comp'] = safe_num(base_idx - 1)
 
-        # S.O.B 요약 데이터 계산
         fit_rms_sum = safe_num(fit_rms_idx).sum()
         fit_rev_sum = safe_num(fit_rev_idx).sum()
         grp_rms_sum = safe_num(grp_rms_idx).sum()
         grp_rev_sum = safe_num(grp_rev_idx).sum()
         
-        # Total OCC 재계산
         avail_daily = df_clean['RMS'] / (df_clean['OCC'].replace(0, np.nan) / 100)
         total_avail = avail_daily.fillna(0).sum()
         total_rms = df_clean['RMS'].sum()
@@ -274,7 +258,7 @@ if uploaded_files:
     month_files_map = {1: [], 2: [], 3: [], 4: []}
     
     for file in uploaded_files:
-        df, month, sob = find_header_and_process(file) # 지능형 함수 사용
+        df, month, sob = find_header_and_process(file)
         if df is not None and month in month_files_map:
             month_files_map[month].append({'file_name': file.name, 'data': df, 'sob': sob})
 
@@ -305,7 +289,7 @@ if uploaded_files:
                 continue
 
             # ----------------------
-            # [상단] 모던 S.O.B 카드
+            # [상단] 모던 S.O.B 카드 (여기가 핵심!)
             # ----------------------
             budget = BUDGET_DATA.get(current_month, 0)
             
@@ -328,7 +312,8 @@ if uploaded_files:
             
             vs_class = "variance-negative" if vs_budget < 0 else "variance-positive"
             
-            html_card = f"""
+            # [수정됨] textwrap.dedent를 사용하여 들여쓰기로 인한 코드 블록 렌더링 방지
+            html_card = textwrap.dedent(f"""
             <div class="sob-container">
                 <div class="sob-header">📊 {current_month}월 Performance Summary</div>
                 
@@ -399,7 +384,7 @@ if uploaded_files:
                     </div>
                 </div>
             </div>
-            """
+            """)
             st.markdown(html_card, unsafe_allow_html=True)
 
             # ----------------------
