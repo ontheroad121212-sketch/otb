@@ -8,11 +8,11 @@ import numpy as np
 import textwrap
 
 # ==============================================================================
-# 1. 페이지 기본 설정 및 디자인 (CSS)
+# 1. 페이지 기본 설정 및 디자인 (CSS) - 사이즈 대폭 축소
 # ==============================================================================
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
-# CSS 스타일 정의 (사이즈 최적화 적용)
+# CSS 스타일 정의 (기능 변경 없음, 오직 사이즈만 축소)
 st.markdown(textwrap.dedent("""
 <style>
     /* 전체 여백 최소화 */
@@ -28,14 +28,14 @@ st.markdown(textwrap.dedent("""
         background-color: white;
         border-radius: 8px;
         box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        padding: 15px;
+        padding: 15px; /* 25px -> 15px */
         margin-bottom: 15px;
         border: 1px solid #e0e0e0;
     }
     
-    /* S.O.B 헤더 */
+    /* S.O.B 헤더 (폰트 축소) */
     .sob-header {
-        font-size: 16px;
+        font-size: 16px; /* 20px -> 16px */
         font-weight: 800;
         color: #111827;
         margin-bottom: 10px;
@@ -47,7 +47,7 @@ st.markdown(textwrap.dedent("""
     .sob-grid {
         display: grid;
         grid-template-columns: 1fr 1.3fr;
-        gap: 20px;
+        gap: 20px; /* 40px -> 20px */
     }
     
     /* [상단] 모던 테이블 스타일 (컴팩트 버전) */
@@ -59,17 +59,17 @@ st.markdown(textwrap.dedent("""
     .modern-table th {
         text-align: right;
         color: #6b7280;
-        font-size: 11px; /* 폰트 줄임 */
+        font-size: 11px; /* 13px -> 11px */
         font-weight: 600;
-        padding: 4px 6px; /* 패딩 줄임 */
+        padding: 4px 6px; /* 10px -> 4px */
         border-bottom: 2px solid #e5e7eb;
         background-color: #f9fafb;
     }
     .modern-table th:first-child { text-align: left; }
     
     .modern-table td {
-        padding: 4px 6px; /* 패딩 줄임 */
-        font-size: 12px; /* 폰트 줄임 */
+        padding: 4px 6px; /* 12px -> 4px */
+        font-size: 12px; /* 15px -> 12px */
         color: #1f2937;
         text-align: right;
         border-bottom: 1px solid #f3f4f6;
@@ -108,17 +108,17 @@ st.markdown(textwrap.dedent("""
         background: #f8fafc;
         border: 1px solid #e2e8f0;
         border-radius: 6px;
-        padding: 10px;
+        padding: 10px; /* 20px -> 10px */
         text-align: center;
     }
     .kpi-title {
-        font-size: 11px;
+        font-size: 11px; /* 12px -> 11px */
         color: #64748b;
         font-weight: 700;
         margin-bottom: 2px;
     }
     .kpi-value {
-        font-size: 20px;
+        font-size: 20px; /* 28px -> 20px */
         color: #0f172a;
         font-weight: 900;
     }
@@ -131,19 +131,19 @@ st.markdown(textwrap.dedent("""
     /* [하단] DataFrame 스타일 강제 적용 (초소형화) */
     iframe[title="streamlit.dataframe"] { width: 100% !important; }
     
-    /* [하단] 헤더 줄바꿈 허용 및 간격 최소화 */
+    /* [하단] 헤더 및 셀 강제 스타일링 (작게!) */
     th {
         white-space: pre-wrap !important;
         text-align: center !important;
         vertical-align: bottom !important;
         line-height: 1.1 !important; /* 줄간격 축소 */
         font-size: 11px !important; /* 폰트 축소 */
-        padding: 4px 2px !important; /* 패딩 최소화 */
+        padding: 2px 2px !important; /* 패딩 최소화 */
     }
     td {
         vertical-align: middle !important;
         font-size: 11px !important; /* 데이터 폰트 축소 */
-        padding: 3px 2px !important; /* 데이터 패딩 최소화 */
+        padding: 2px 2px !important; /* 데이터 패딩 최소화 */
     }
     
     /* 텍스트 색상 유틸리티 */
@@ -167,10 +167,9 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # ==============================================================================
-# 3. 데이터 처리 로직 (12개월 지원)
+# 3. 데이터 처리 로직 (12개월 지원 - 로직 변경 없음)
 # ==============================================================================
 
-# [수정됨] 1월~12월 예산 설정 (5월~12월은 임시로 0 처리)
 BUDGET_DATA = { 
     1: 514992575, 
     2: 786570856, 
@@ -187,7 +186,6 @@ BUDGET_DATA = {
 }
 
 def find_header_and_process(file):
-    """엑셀 파일을 읽어 FIT/GROUP/TOTAL 데이터를 추출하는 함수"""
     try:
         file.seek(0)
         df_preview = pd.read_excel(file, header=None, nrows=10)
@@ -218,7 +216,6 @@ def find_header_and_process(file):
             if col_idx >= df_data.shape[1]: return 0
             return pd.to_numeric(df_data.iloc[:, col_idx], errors='coerce').fillna(0)
 
-        # 좌표 매핑 (기본값 fallback 포함)
         if len(rms_indices) >= 3 and len(rev_indices) >= 3:
             fit_rms_idx, grp_rms_idx, total_rms_idx = rms_indices[0], rms_indices[1], rms_indices[-1]
             fit_rev_idx, grp_rev_idx, total_rev_idx = rev_indices[0], rev_indices[1], rev_indices[-1]
@@ -226,7 +223,6 @@ def find_header_and_process(file):
             fit_rms_idx, grp_rms_idx, total_rms_idx = 1, 6, 13
             fit_rev_idx, grp_rev_idx, total_rev_idx = 4, 9, 17
             
-        # 상세 데이터 추출
         df_clean = pd.DataFrame()
         df_clean['Date'] = df_data['Date']
         df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
@@ -241,7 +237,6 @@ def find_header_and_process(file):
         df_clean['HU'] = safe_num(base_idx - 2)
         df_clean['Comp'] = safe_num(base_idx - 1)
 
-        # S.O.B 합계 계산 (int/float 변환)
         fit_rms_sum = int(safe_num(fit_rms_idx).sum())
         fit_rev_sum = int(safe_num(fit_rev_idx).sum())
         grp_rms_sum = int(safe_num(grp_rms_idx).sum())
@@ -346,7 +341,7 @@ def render_sob_dashboard(current_month, budget, total_rev, vs_budget, achv_rate,
     st.markdown(html, unsafe_allow_html=True)
 
 # ==============================================================================
-# 4. 메인 UI & 실행 로직 (12개월 탭 지원)
+# 4. 메인 UI & 실행 로직
 # ==============================================================================
 st.sidebar.header("⚙️ Report Settings")
 report_date = st.sidebar.date_input("기준 일자 (오늘)", datetime.now())
@@ -360,9 +355,7 @@ st.caption("어제와 오늘 파일을 모두 업로드하면, 자동으로 날�
 
 uploaded_files = st.file_uploader("엑셀 파일 업로드", accept_multiple_files=True, type=['xlsx'])
 
-# [수정됨] 1월부터 12월까지 탭 생성
 tabs = st.tabs([f"{i}월" for i in range(1, 13)])
-# [수정됨] 1월~12월 딕셔너리 초기화
 month_files_map = {i: [] for i in range(1, 13)}
 
 if uploaded_files:
@@ -377,7 +370,6 @@ for i, tab in enumerate(tabs):
         files = month_files_map.get(current_month, [])
         df_curr, df_prev, sob_curr = None, None, None
         
-        # 파일/DB 데이터 로드 로직
         if files:
             files.sort(key=lambda x: x['name'])
             if len(files) >= 2:
@@ -403,7 +395,6 @@ for i, tab in enumerate(tabs):
         if sob_curr is None and df_curr is not None:
              sob_curr = {'FIT_RMS': 0, 'FIT_REV': 0, 'GRP_RMS': 0, 'GRP_REV': 0, 'TOTAL_OCC': 0}
 
-        # 상단 대시보드 렌더링
         render_sob_dashboard(
             current_month=current_month,
             budget=budget,
@@ -421,7 +412,6 @@ for i, tab in enumerate(tabs):
             total_adr=((sob_curr['FIT_REV'] + sob_curr['GRP_REV']) / (sob_curr['FIT_RMS'] + sob_curr['GRP_RMS'])) if (sob_curr['FIT_RMS'] + sob_curr['GRP_RMS']) else 0
         )
 
-        # 상세 데이터 가공
         cols_base = ['DateStr', 'WeekDay', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
         cols_curr = ['Date', 'Day', 'Curr_HU', 'Curr_Comp', 'Curr_RMS', 'Curr_OCC', 'Curr_ADR', 'Curr_RevPAR', 'Curr_REV']
         
@@ -494,7 +484,6 @@ for i, tab in enumerate(tabs):
             col_map[f'Pick_{item}'] = f'Var\n{item}'
         final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
-        # [스타일링] 파스텔톤 + 히트맵 + 강조 (사이즈 축소 적용됨)
         fmt = {}
         for col in final_df.columns:
             if 'OCC' in col: fmt[col] = '{:.1f}%'
