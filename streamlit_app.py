@@ -12,44 +12,45 @@ import textwrap
 # ==============================================================================
 st.set_page_config(layout="wide", page_title="Daily Pace Report")
 
-# CSS 스타일 정의
+# CSS 스타일 정의 (사이즈 최적화 적용)
 st.markdown(textwrap.dedent("""
 <style>
+    /* 전체 여백 최소화 */
     .block-container {
-        padding-top: 1rem;
-        padding-bottom: 3rem;
-        padding-left: 1rem;
-        padding-right: 1rem;
+        padding-top: 0.5rem;
+        padding-bottom: 2rem;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
     }
     
-    /* S.O.B 카드 컨테이너 */
+    /* S.O.B 카드 컨테이너 (여백 축소) */
     .sob-container {
         background-color: white;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-        padding: 25px;
-        margin-bottom: 25px;
+        border-radius: 8px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        padding: 15px;
+        margin-bottom: 15px;
         border: 1px solid #e0e0e0;
     }
     
     /* S.O.B 헤더 */
     .sob-header {
-        font-size: 20px;
+        font-size: 16px;
         font-weight: 800;
         color: #111827;
-        margin-bottom: 20px;
+        margin-bottom: 10px;
         border-bottom: 2px solid #f3f4f6;
-        padding-bottom: 10px;
+        padding-bottom: 5px;
     }
     
     /* S.O.B 그리드 */
     .sob-grid {
         display: grid;
         grid-template-columns: 1fr 1.3fr;
-        gap: 40px;
+        gap: 20px;
     }
     
-    /* 모던 테이블 */
+    /* [상단] 모던 테이블 스타일 (컴팩트 버전) */
     .modern-table {
         width: 100%;
         border-collapse: collapse;
@@ -58,17 +59,17 @@ st.markdown(textwrap.dedent("""
     .modern-table th {
         text-align: right;
         color: #6b7280;
-        font-size: 13px;
+        font-size: 11px; /* 폰트 줄임 */
         font-weight: 600;
-        padding: 10px 8px;
+        padding: 4px 6px; /* 패딩 줄임 */
         border-bottom: 2px solid #e5e7eb;
         background-color: #f9fafb;
     }
     .modern-table th:first-child { text-align: left; }
     
     .modern-table td {
-        padding: 12px 8px;
-        font-size: 15px;
+        padding: 4px 6px; /* 패딩 줄임 */
+        font-size: 12px; /* 폰트 줄임 */
         color: #1f2937;
         text-align: right;
         border-bottom: 1px solid #f3f4f6;
@@ -96,28 +97,28 @@ st.markdown(textwrap.dedent("""
         border-top: 2px solid #bfdbfe;
     }
 
-    /* KPI 카드 */
+    /* KPI 카드 (사이즈 축소) */
     .kpi-wrapper {
         display: flex;
-        gap: 15px;
-        margin-top: 20px;
+        gap: 8px;
+        margin-top: 10px;
     }
     .kpi-card {
         flex: 1;
         background: #f8fafc;
         border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 20px;
+        border-radius: 6px;
+        padding: 10px;
         text-align: center;
     }
     .kpi-title {
-        font-size: 12px;
+        font-size: 11px;
         color: #64748b;
         font-weight: 700;
-        margin-bottom: 5px;
+        margin-bottom: 2px;
     }
     .kpi-value {
-        font-size: 28px;
+        font-size: 20px;
         color: #0f172a;
         font-weight: 900;
     }
@@ -127,19 +128,22 @@ st.markdown(textwrap.dedent("""
     .kpi-accent .kpi-title { color: rgba(255,255,255,0.8); }
     .kpi-accent .kpi-value { color: white; }
     
-    /* DataFrame 스타일 */
+    /* [하단] DataFrame 스타일 강제 적용 (초소형화) */
     iframe[title="streamlit.dataframe"] { width: 100% !important; }
     
-    /* 헤더 줄바꿈 허용 */
+    /* [하단] 헤더 줄바꿈 허용 및 간격 최소화 */
     th {
         white-space: pre-wrap !important;
         text-align: center !important;
         vertical-align: bottom !important;
-        line-height: 1.4 !important;
-        font-size: 11px !important;
+        line-height: 1.1 !important; /* 줄간격 축소 */
+        font-size: 11px !important; /* 폰트 축소 */
+        padding: 4px 2px !important; /* 패딩 최소화 */
     }
     td {
         vertical-align: middle !important;
+        font-size: 11px !important; /* 데이터 폰트 축소 */
+        padding: 3px 2px !important; /* 데이터 패딩 최소화 */
     }
     
     /* 텍스트 색상 유틸리티 */
@@ -490,7 +494,7 @@ for i, tab in enumerate(tabs):
             col_map[f'Pick_{item}'] = f'Var\n{item}'
         final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
-        # [스타일링] 파스텔톤 + 히트맵 + 강조
+        # [스타일링] 파스텔톤 + 히트맵 + 강조 (사이즈 축소 적용됨)
         fmt = {}
         for col in final_df.columns:
             if 'OCC' in col: fmt[col] = '{:.1f}%'
