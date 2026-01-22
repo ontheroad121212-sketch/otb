@@ -38,41 +38,59 @@ def upload_to_firestore(df_new):
     if df_new.empty or db is None: return
     
     df_new = df_new.copy()
-    df_new['입실일자'] = pd.to_datetime(df_new['입실일자'], errors='coerce')
-    df_new['예약일자'] = pd.to_datetime(df_new['예약일자'], errors='coerce')
-    df_new['예약번호'] = df_new['예약번호'].astype(str)
     
-    df_new = df_new.fillna({
-        '거래처': 'Direct', '국적': 'Unknown', '객실타입': 'Unknown', 
-        '상태': 'Unknown', '총금액': 0, '객실수': 1
-    })
+    # 1. 날짜 컬럼들을 먼저 안전하게 변환
+    date_columns = ['입실일자', '예약일자', '퇴실일자', '취소일자', '확인일자']
+    for col in date_columns:
+        if col in df_new.columns:
+            df_new[col] = pd.to_datetime(df_new[col], errors='coerce')
+
+    # 2. [핵심] 파이어베이스 에러 방지 처리
+    # NaT(빈 날짜)나 NaN(빈 값)은 파이어베이스가 인식을 못하므로 None으로 변환
+    df_upload = df_new.where(pd.notnull(df_new), None)
     
+    # 3. 예약번호 문자열 고정
+    df_upload['예약번호'] = df_upload['예약번호'].astype(str)
+
+    total = len(df_upload)
     batch = db.batch()
     count = 0
-    total = len(df_new)
     
     status_bar = st.progress(0)
     status_text = st.empty()
     
-    for idx, row in df_new.iterrows():
-        doc_ref = db.collection('hotel_bookings').document(row['예약번호'])
+    # 4. 루프 최적화
+    for _, row in df_upload.iterrows():
+        doc_id = row['예약번호']
+        if not doc_id or doc_id == 'None': continue # 예약번호 없는 유령 데이터 건너뜀
+        
+        doc_ref = db.collection('hotel_bookings').document(doc_id)
+        
+        # 행 데이터를 딕셔너리로 변환
         row_dict = row.to_dict()
         
-        if pd.notnull(row_dict['입실일자']): row_dict['입실일자'] = row_dict['입실일자']
-        if pd.notnull(row_dict['예약일자']): row_dict['예약일자'] = row_dict['예약일자']
+        # [에러 방지] 딕셔너리 내부의 NaT 객체들을 다시 한번 검사하여 제거
+        final_payload = {}
+        for k, v in row_dict.items():
+            if pd.isna(v): # NaT, NaN 모두 포함
+                final_payload[k] = None
+            else:
+                final_payload[k] = v
         
-        batch.set(doc_ref, row_dict, merge=True)
+        batch.set(doc_ref, final_payload, merge=True)
         count += 1
         
+        # 5. 전송 묶음(Batch) 최적화
         if count % 400 == 0:
             batch.commit()
             batch = db.batch()
             status_bar.progress(count / total)
-            status_text.text(f"🚀 업로드 중... ({count}/{total})")
+            status_text.text(f"🚀 고속 업데이트 중... ({count}/{total})")
             
+    # 남은 잔여 데이터 처리
     batch.commit()
     status_bar.empty()
-    status_text.success(f"✅ {total}건 업데이트 완료!")
+    status_text.success(f"✅ {total}건 업데이트 완료! 이제 정상적으로 조회됩니다.")
 
 # -----------------------------------------------------------------------------
 # [⚡수정됨] 데이터 고속 삭제 함수 (Batch Delete)
@@ -260,7 +278,7 @@ if target_df.empty:
     st.stop()
 
 # 시각화 (5개 탭)
-tabs = st.tabs(["💰 매출", "💳 ADR", "⏳ 리드타임", "📅 요일", "🌏 국적/객실"])
+tabs = st.tabs(["💰 매출", "💳 ADR", "⏳ 리드타임", "📅 요일", "🌏 국적/객실", "🔁 고객 로열티 & 재방문 분석"])
 
 with tabs[0]: # Revenue
     st.subheader(f"매출 페이스: {chart_sub}")
@@ -326,6 +344,65 @@ with tabs[4]: # Demographics
         top = rt_t.sort_values('총금액', ascending=False).head(10)['객실타입']
         fig6 = px.bar(pd.concat([rt_t, rt_r])[pd.concat([rt_t, rt_r])['객실타입'].isin(top)], x='객실타입', y='총금액', color='Type', barmode='group')
         st.plotly_chart(fig6, use_container_width=True)
+
+# --- TAB 6: Guest Loyalty (재방문 분석) ---
+with tabs[4]: # 기존 탭 뒤에 추가하거나 순서를 조정하세요
+    st.subheader("🔁 고객 로열티 & 재방문 분석")
+    
+    # 1. 고객 식별키 생성 (성함 + 휴대폰 뒷자리 조합)
+    # 데이터에 '고객명'과 '휴대폰' 컬럼이 있는 경우 사용
+    df_loyalty = target_df.copy()
+    df_loyalty['GuestKey'] = df_loyalty['고객명'].astype(str) + "_" + df_loyalty['휴대폰'].astype(str).str[-4:]
+    
+    # 전체 기간(df_clean) 기준으로 이 고객들이 몇 번이나 왔는지 계산
+    guest_counts = df_clean.groupby(['고객명', df_clean['휴대폰'].astype(str).str[-4:]]).size().reset_index(name='TotalVisits')
+    guest_counts['GuestKey'] = guest_counts['고객명'].astype(str) + "_" + guest_counts['휴대폰'].astype(str)
+    
+    # 현재 선택된 기간(target_df)의 고객들에게 '과거 방문 횟수' 매핑
+    target_loyalty = pd.merge(df_loyalty, guest_counts[['GuestKey', 'TotalVisits']], on='GuestKey', how='left')
+    target_loyalty['GuestType'] = target_loyalty['TotalVisits'].apply(lambda x: '첫 방문 (New)' if x == 1 else '재방문 (Return)')
+
+    col_l1, col_l2 = st.columns(2)
+    
+    with col_l1:
+        st.markdown("**재방문 고객 비중**")
+        loyalty_pie = px.pie(target_loyalty, names='GuestType', hole=0.4, 
+                             color='GuestType', color_discrete_map={'첫 방문 (New)':'#E5ECF6', '재방문 (Return)':'#0052cc'})
+        st.plotly_chart(loyalty_pie, use_container_width=True)
+
+    with col_l2:
+        st.markdown("**재방문객은 어디서 예약하는가?**")
+        return_guests = target_loyalty[target_loyalty['GuestType'] == '재방문 (Return)']
+        if not return_guests.empty:
+            chan_loyalty = return_guests.groupby('거래처').size().reset_index(name='Count').sort_values('Count', ascending=False)
+            fig_chan = px.bar(chan_loyalty.head(10), x='거래처', y='Count', color='Count', color_continuous_scale='Blues')
+            st.plotly_chart(fig_chan, use_container_width=True)
+        else:
+            st.info("해당 기간에 재방문 고객이 없습니다.")
+
+    st.divider()
+    
+    col_l3, col_l4 = st.columns(2)
+    with col_l3:
+        st.markdown("**고객 등급별 매출 기여도**")
+        # 방문 횟수별 그룹화 (1회, 2회, 3~5회, 6회 이상)
+        def guest_grade(n):
+            if n == 1: return "1. 신규고객"
+            elif n == 2: return "2. 리피터(2회)"
+            elif n >= 3 and n <= 5: return "3. 단골(3-5회)"
+            else: return "4. VIP(6회+)"
+        
+        target_loyalty['Grade'] = target_loyalty['TotalVisits'].apply(guest_grade)
+        grade_rev = target_loyalty.groupby('Grade')['총금액'].sum().reset_index()
+        fig_grade = px.bar(grade_rev, x='Grade', y='총금액', text_auto='.2s', color='Grade')
+        st.plotly_chart(fig_grade, use_container_width=True)
+
+    with col_l4:
+        st.markdown("**재방문객 vs 신규객 객단가(ADR) 비교**")
+        # 신규객과 재방문객 중 누가 더 비싼 방을 예약하는가?
+        adr_comp = target_loyalty.groupby('GuestType').apply(lambda x: x['총금액'].sum() / x['객실수'].sum()).reset_index(name='ADR')
+        fig_adr_comp = px.bar(adr_comp, x='GuestType', y='ADR', color='GuestType', text_auto=',.0f')
+        st.plotly_chart(fig_adr_comp, use_container_width=True)
 
 # 검증기
 st.divider()
