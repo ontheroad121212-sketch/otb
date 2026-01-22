@@ -58,7 +58,7 @@ def load_and_merge_data(base_file_path, new_files):
         if df_new['총금액'].dtype == object:
             df_new['총금액'] = df_new['총금액'].astype(str).str.replace(',', '').astype(float)
         
-    # 합치기 (필터링은 나중에 함)
+    # 합치기
     df_master = pd.concat([df_base, df_new], ignore_index=True)
     
     # 날짜 없는 행 삭제
@@ -72,7 +72,9 @@ def load_and_merge_data(base_file_path, new_files):
     df_master['Year'] = df_master['입실일자'].dt.isocalendar().year.astype(int)
     df_master['Week'] = df_master['입실일자'].dt.isocalendar().week.astype(int)
     df_master['Month'] = df_master['입실일자'].dt.month.astype(int)
-    df_master['거래처'] = df_master['거래처'].fillna('Direct/Unknown')
+    
+    # 거래처 공백 처리
+    df_master['거래처'] = df_master['거래처'].fillna('Direct/Unknown').astype(str).str.strip()
     
     return df_master
 
@@ -95,7 +97,6 @@ with st.sidebar:
                     st.error(f"저장 중 에러: {e}")
             
             if not temp_df.empty:
-                # 저장 시에는 전처리 최소화
                 temp_df.to_csv(DATA_FILE_PATH, index=False)
                 st.success(f"저장 완료! (총 {len(temp_df)}건)")
                 st.rerun()
@@ -116,27 +117,19 @@ with st.sidebar:
     st.divider()
     st.header("🚫 상태 필터 (취소 제외)")
     
-    # 데이터에 있는 모든 상태값 가져오기
     all_statuses = df['상태'].unique().astype(str)
     
-    # [핵심 수정] RC, RX를 기본 제외 키워드에 포함!
+    # RC, RX, 취소 등 키워드 포함시 자동 선택
     cancel_keywords = ['취소', 'CXL', 'CANCEL', 'NO', 'NOSHOW', 'RC', 'RX']
-    
-    # 위 키워드가 포함된 상태값은 자동으로 체크박스 선택됨
     default_excludes = [s for s in all_statuses if any(x in s.upper() for x in cancel_keywords)]
     
-    # 멀티 셀렉트박스
     exclude_statuses = st.multiselect(
-        "매출에서 제외할 상태값을 선택하세요",
+        "매출에서 제외할 상태값",
         options=all_statuses,
-        default=default_excludes,
-        help="RC, RX 등 취소 코드가 포함된 예약은 그래프에서 빠집니다."
+        default=default_excludes
     )
     
-    if exclude_statuses:
-        st.caption(f"💡 {', '.join(exclude_statuses)} 상태는 매출에서 제외됩니다.")
-
-# 필터 적용 (여기서 취소된 데이터를 날림)
+# 필터 적용
 df_clean = df[~df['상태'].isin(exclude_statuses)]
 
 # -----------------------------------------------------------------------------
@@ -144,20 +137,20 @@ df_clean = df[~df['상태'].isin(exclude_statuses)]
 # -----------------------------------------------------------------------------
 st.title("📈 Booking Pace Analysis")
 
-# 어카운트 필터링
 st.markdown("### 🔍 Filter Condition")
 col_filter1, col_filter2 = st.columns([1, 2])
 
 with col_filter1:
-    view_mode = st.radio("분석 기간 단위", ["월별 (Monthly)", "주별 (Weekly)", "연간 (Yearly)"], horizontal=True)
+    # [업데이트] 분기별 옵션 추가
+    view_mode = st.radio("분석 기간 단위", ["월별 (Monthly)", "분기별 (Quarterly)", "주별 (Weekly)", "연간 (Yearly)"], horizontal=True)
 
 with col_filter2:
-    all_accounts = sorted(df_clean['거래처'].unique().astype(str))
+    all_accounts = sorted(df_clean['거래처'].unique())
     selected_acc = st.multiselect(
-        "분석할 거래처 선택 (비워두면 '전체 매출'로 분석)", 
+        "분석할 거래처 선택 (이름이 다르면 모두 선택해야 합니다!)", 
         options=all_accounts,
         default=[],
-        placeholder="여기를 클릭하여 부킹닷컴, 아고다 등을 선택하세요..."
+        placeholder="예: Booking.com, 부킹닷컴, Expedia, 익스피디아..."
     )
 
 if selected_acc:
@@ -171,12 +164,12 @@ else:
 st.divider()
 
 # -----------------------------------------------------------------------------
-# 4. 차트 그리기 (Target vs Reference)
+# 4. 차트 그리기
 # -----------------------------------------------------------------------------
 available_years = sorted(df_filtered['Year'].unique(), reverse=True)
 
 if not available_years:
-    st.error("유효한 데이터가 없습니다. 필터를 확인해주세요.")
+    st.error("데이터가 없습니다. 날짜나 필터를 확인해주세요.")
     st.stop()
 
 c1, c2 = st.columns(2)
@@ -184,7 +177,15 @@ target_df = pd.DataFrame()
 ref_df = pd.DataFrame()
 chart_sub_title = ""
 
-# 뷰 모드 설정
+# --- [로직 추가] 분기 정의 ---
+quarters_map = {
+    "1분기 (1~3월)": [1, 2, 3],
+    "2분기 (4~6월)": [4, 5, 6],
+    "3분기 (7~9월)": [7, 8, 9],
+    "4분기 (10~12월)": [10, 11, 12]
+}
+
+# 날짜 선택 UI
 if view_mode == "월별 (Monthly)":
     with c1:
         t_year = st.selectbox("Target 연도", available_years, index=0)
@@ -198,10 +199,27 @@ if view_mode == "월별 (Monthly)":
     ref_df = df_filtered[(df_filtered['Year'] == r_year) & (df_filtered['Month'] == r_month)]
     chart_sub_title = f"{t_year}.{t_month} vs {r_year}.{r_month}"
 
+elif view_mode == "분기별 (Quarterly)":
+    quarter_list = list(quarters_map.keys())
+    with c1:
+        t_year = st.selectbox("Target 연도", available_years, index=0)
+        t_q = st.selectbox("Target 분기", quarter_list, index=0)
+    with c2:
+        ref_idx = available_years.index(t_year-1) if (t_year-1) in available_years else (1 if len(available_years)>1 else 0)
+        r_year = st.selectbox("Ref 연도", available_years, index=ref_idx)
+        r_q = st.selectbox("Ref 분기", quarter_list, index=quarter_list.index(t_q))
+    
+    # 해당 분기의 월(Month) 리스트로 필터링
+    t_months = quarters_map[t_q]
+    r_months = quarters_map[r_q]
+    
+    target_df = df_filtered[(df_filtered['Year'] == t_year) & (df_filtered['Month'].isin(t_months))]
+    ref_df = df_filtered[(df_filtered['Year'] == r_year) & (df_filtered['Month'].isin(r_months))]
+    chart_sub_title = f"{t_year}년 {t_q} vs {r_year}년 {r_q}"
+
 elif view_mode == "주별 (Weekly)":
     with c1:
         t_year = st.selectbox("Target 연도", available_years, index=0)
-        # 해당 연도의 주차만 가져오기
         weeks_in_year = sorted(df_filtered[df_filtered['Year']==t_year]['Week'].unique())
         if not weeks_in_year: weeks_in_year = range(1, 53)
         t_week = st.selectbox("Target 주차 (Week)", weeks_in_year)
@@ -209,8 +227,6 @@ elif view_mode == "주별 (Weekly)":
     with c2:
         ref_idx = available_years.index(t_year-1) if (t_year-1) in available_years else (1 if len(available_years)>1 else 0)
         r_year = st.selectbox("Ref 연도", available_years, index=ref_idx)
-        
-        # [에러 수정 완료] index 값을 int로 강제 변환
         valid_idx = int(min(t_week-1, 52))
         r_week = st.selectbox("Ref 주차 (Week)", range(1, 54), index=valid_idx)
 
@@ -242,48 +258,45 @@ if not target_df.empty:
     pace_r = calculate_pace(ref_df)
 
     fig = go.Figure()
-    
-    # Target Line
     fig.add_trace(go.Scatter(x=pace_t.index, y=pace_t.values, mode='lines', name=f'Target ({t_year})', line=dict(color='#0052cc', width=3)))
-    
-    # Ref Line
     if not pace_r.empty:
         fig.add_trace(go.Scatter(x=pace_r.index, y=pace_r.values, mode='lines', name=f'Ref ({r_year})', line=dict(color='gray', dash='dot')))
 
-    # Marker
     if not pace_t.empty:
         last_pt = pace_t.index.min()
         last_val = pace_t[last_pt]
-        fig.add_trace(go.Scatter(
-            x=[last_pt], y=[last_val],
-            mode='markers+text',
-            text=[f"{last_val/10000:,.0f}만"],
-            textposition="top left",
-            marker=dict(color='red', size=8),
-            showlegend=False
-        ))
+        fig.add_trace(go.Scatter(x=[last_pt], y=[last_val], mode='markers+text',
+            text=[f"{last_val/10000:,.0f}만"], textposition="top left", marker=dict(color='red', size=8), showlegend=False))
 
-    fig.update_layout(
-        xaxis_title="리드타임 (D-Day)",
-        yaxis_title="누적 매출 (KRW)",
-        xaxis=dict(autorange="reversed"), 
-        hovermode="x unified",
-        height=550
-    )
+    fig.update_layout(xaxis_title="리드타임 (D-Day)", yaxis_title="누적 매출 (KRW)", xaxis=dict(autorange="reversed"), hovermode="x unified", height=500)
     st.plotly_chart(fig, use_container_width=True)
     
     # Summary
     st.markdown("#### 🔢 Summary")
     final_t_val = pace_t.values[-1]
     final_r_val = pace_r.values[-1] if not pace_r.empty else 0
-    
     gap = final_t_val - final_r_val
     gap_pct = (gap / final_r_val * 100) if final_r_val != 0 else 0
     
-    col_sum1, col_sum2, col_sum3 = st.columns(3)
-    col_sum1.metric("Target 최종 예약고", f"{final_t_val:,.0f} 원")
-    col_sum2.metric("Ref 최종 예약고", f"{final_r_val:,.0f} 원")
-    col_sum3.metric("차이 (Gap)", f"{gap:,.0f} 원", f"{gap_pct:.1f}%")
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Target 최종", f"{final_t_val:,.0f} 원")
+    s2.metric("Ref 최종", f"{final_r_val:,.0f} 원")
+    s3.metric("차이", f"{gap:,.0f} 원", f"{gap_pct:.1f}%")
+
+    # ---------------------------------------------------------
+    # 데이터 검증기
+    # ---------------------------------------------------------
+    st.divider()
+    st.markdown("### 🕵️‍♂️ 데이터 검증")
+    st.info("거래처 필터나 제외할 상태값을 확인할 때 아래 표를 참고하세요.")
+
+    with st.expander("📄 Target 데이터 상세 보기", expanded=False):
+        st.dataframe(target_df[['입실일자', '예약일자', '거래처', '상태', '총금액', '고객명']].sort_values('총금액', ascending=False), use_container_width=True)
+        st.write(f"포함된 거래처: {target_df['거래처'].unique()}")
+
+    with st.expander("📄 Reference 데이터 상세 보기", expanded=False):
+        st.dataframe(ref_df[['입실일자', '예약일자', '거래처', '상태', '총금액', '고객명']].sort_values('총금액', ascending=False), use_container_width=True)
+        st.write(f"포함된 거래처: {ref_df['거래처'].unique()}")
 
 else:
-    st.warning("선택하신 조건에 해당하는 데이터가 없습니다.")
+    st.warning("선택하신 조건에 해당하는 예약 데이터가 없습니다.")
