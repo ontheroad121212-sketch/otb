@@ -18,7 +18,6 @@ st.set_page_config(
 
 # ==============================================================================
 # [2] CSS 스타일링 (절대 생략 없음 - 상세 설정 포함)
-#     사용자 요청: "상단은 크게 유지, 하단 표는 극한으로 작게(Ultra Compact)"
 # ==============================================================================
 st.markdown(textwrap.dedent("""
 <style>
@@ -140,45 +139,43 @@ st.markdown(textwrap.dedent("""
        기존 st.dataframe은 CSS가 안 먹혀서, HTML Table로 직접 제어합니다.
        ========================================================================== */
     
-    .compact-table {
+    /* 이 클래스 안에 있는 모든 테이블 요소를 강제로 작게 만듭니다 */
+    .compact-table-wrapper {
+        overflow-x: auto;
+        margin-top: 10px;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+    }
+
+    .compact-table-wrapper table {
         width: 100%;
         border-collapse: collapse;
         font-family: 'Segoe UI', sans-serif;
-        margin-top: 10px;
+        font-size: 10px !important; /* 폰트 10px 강제 고정 */
     }
     
-    /* 헤더: 아주 작게 */
-    .compact-table th {
-        background-color: #f1f5f9;
-        position: sticky;
-        top: 0;
-        z-index: 100;
-        font-size: 10px !important;  /* 10px 강제 적용 */
-        padding: 4px 2px !important; /* 패딩 최소화 */
+    /* 헤더 스타일링: 작고, 줄바꿈 허용 */
+    .compact-table-wrapper th {
+        background-color: #f8fafc;
+        color: #475569;
+        font-weight: 700;
         text-align: center;
+        padding: 3px 2px !important; /* 패딩 최소화 */
         border: 1px solid #e2e8f0;
-        color: #64748b;
-        white-space: pre-wrap; /* 줄바꿈 허용 */
-        line-height: 1.1;
+        font-size: 10px !important;
+        line-height: 1.1 !important;
+        white-space: pre-wrap;
     }
     
-    /* 데이터 셀: 아주 작게 */
-    .compact-table td {
-        font-size: 10px !important;  /* 10px 강제 적용 */
-        padding: 2px 2px !important; /* 패딩 2px로 축소 */
+    /* 데이터 셀 스타일링: 작고, 줄간격 좁게 */
+    .compact-table-wrapper td {
+        padding: 2px 2px !important; /* 상하좌우 패딩 2px */
+        border: 1px solid #e2e8f0;
         text-align: right;
-        border: 1px solid #e2e8f0;
-        line-height: 1.0; /* 줄 높이 축소 */
-        white-space: nowrap; /* 데이터 줄바꿈 방지 */
-    }
-
-    /* 스크롤 가능한 영역 설정 */
-    .table-scroll-container {
-        max-height: 800px;
-        overflow-y: auto;
-        overflow-x: auto;
-        border: 1px solid #e2e8f0;
-        border-radius: 4px;
+        font-size: 10px !important;
+        line-height: 1.0 !important; /* 줄 높이 최소화 */
+        white-space: nowrap;
+        vertical-align: middle;
     }
 
     /* ==========================================================================
@@ -679,7 +676,8 @@ for i, tab in enumerate(tabs):
         final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
         # ----------------------------------------------------------------------
-        # [D] 하단 표 스타일링 (Styler + HTML 강제 변환) - 핵심 파트
+        # [D] 하단 표 스타일링 (Styler -> HTML 강제 변환) - 핵심 파트
+        #     st.dataframe()을 쓰지 않고 HTML로 변환 후 .compact-table-wrapper 클래스 적용
         # ----------------------------------------------------------------------
         # 숫자 포맷 정의
         fmt = {}
@@ -737,11 +735,12 @@ for i, tab in enumerate(tabs):
 
         styler = styler.apply(lambda x: highlight_total_curr(x) if x.name == final_df.index[-1] else ['' for _ in x], axis=1)
 
-        # [핵심 변경] st.dataframe을 쓰지 않고, HTML로 변환하여 CSS(.compact-table)를 강제 적용합니다.
-        html = styler.to_html(classes="compact-table")
+        # [핵심 변경] st.dataframe을 쓰지 않고, HTML로 변환하여 CSS(.compact-table-wrapper)를 강제 적용합니다.
+        # 이렇게 해야 폰트 10px, 줄간격 1.0이 확실하게 먹힙니다.
+        html_table = styler.to_html()
         
-        # HTML 렌더링 (스크롤 가능한 div 안에 넣음)
-        st.markdown(f'<div class="table-scroll-container">{html}</div>', unsafe_allow_html=True)
+        # HTML 렌더링 (스크롤 가능한 div 안에 넣고, 위에서 정의한 CSS 클래스로 감쌉니다)
+        st.markdown(f'<div class="compact-table-wrapper">{html_table}</div>', unsafe_allow_html=True)
 
         # ----------------------------------------------------------------------
         # [E] 저장 버튼 (파일이 있을 때만 활성화)
