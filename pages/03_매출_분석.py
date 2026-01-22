@@ -22,7 +22,7 @@ st.markdown("""
         padding-bottom: 5rem;
     }
     
-    /* 숫자(Metric) 스타일: 크고 진하게 */
+    /* 숫자(Metric) 스타일 */
     div[data-testid="stMetricValue"] { 
         font-size: 26px !important; 
         font-weight: 900; 
@@ -71,15 +71,16 @@ COLLECTION_NAME = "revenue_integrity_history"
 def clean_numeric_columns(df):
     """
     [핵심] 데이터프레임의 숫자 컬럼을 강제로 숫자형(Float/Int)으로 변환
+    OTB 관련 컬럼(OTB_Rev 등)도 포함하여 확실하게 정제합니다.
     """
     target_cols = ['RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total', 'Lead_Time', 
-                   'OTB_Rev', 'Actual_Rev', 'OTB_RN', 'Actual_RN']
+                   'OTB_Rev', 'Actual_Rev', 'OTB_RN', 'Actual_RN', 'OTB_ADR', 'Actual_ADR']
     
     for col in target_cols:
         if col in df.columns:
             # 1. 문자열 변환 -> 2. 콤마 제거 -> 3. 숫자 변환 -> 4. NaN은 0으로
             df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(',', ''), 
+                df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), 
                 errors='coerce'
             ).fillna(0)
             
@@ -196,6 +197,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
             df['CheckIn'] = pd.to_datetime(df_raw[date_col], errors='coerce')
             
             try:
+                # OTB 파일은 보통 우측에 RN, Revenue 등이 위치함
                 df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
                 df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
                 df['ADR_Room'] = pd.to_numeric(df_raw.iloc[:, -3], errors='coerce').fillna(0)
@@ -350,17 +352,6 @@ def show_dataframe_with_style(df):
     
     styler = styler.apply(highlight_total, axis=1)
     st.dataframe(styler, hide_index=True, use_container_width=True)
-
-def get_fmt_config():
-    """스트림릿용 포맷 설정 (Styler와 병행 사용)"""
-    return {
-        "RN": st.column_config.NumberColumn("객실수", format="%d"),
-        "Room_Revenue": st.column_config.NumberColumn("객실매출", format="%d"),
-        "Total_Revenue": st.column_config.NumberColumn("총매출", format="%d"),
-        "ADR_Room": st.column_config.NumberColumn("객실 ADR", format="%d"),
-        "ADR_Total": st.column_config.NumberColumn("총 ADR", format="%d"),
-        "Lead_Time": st.column_config.NumberColumn("리드타임", format="%d")
-    }
 
 def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
     """분석 탭 렌더링"""
@@ -536,6 +527,7 @@ try:
             # 데이터 분리
             df_otb_m = df[df['Segment'] == 'OTB_Month']
             df_otb_t = df[df['Segment'] == 'OTB_Total']
+            
             # OTB 통합처리 (Segment가 OTB이거나 OTB_Month 등인 경우)
             df_otb = df[df['Segment'].astype(str).str.contains('OTB')]
             
@@ -615,7 +607,7 @@ try:
                     
                     # 원하는 순서로 컬럼 정렬
                     cols_order = ['Segment', 'RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total']
-                    # 존재하는 컬럼만 선택
+                    # 존재하는 컬럼만 선택 (혹시 모를 에러 방지)
                     cols_final = [c for c in cols_order if c in seg_gm_final.columns]
                     seg_gm_final = seg_gm_final[cols_final]
                     
@@ -688,8 +680,31 @@ try:
                     
                     merged = merged.sort_values('Stay_Month')
                     
-                    # 합계 행
-                    merged_final = add_total_row(merged, 'Stay_Month')
+                    # [수정] OTB 탭용 ADR 계산 (Row별)
+                    merged['OTB_ADR'] = np.where(merged['OTB_RN'] > 0, merged['OTB_Rev'] / merged['OTB_RN'], 0)
+                    merged['Actual_ADR'] = np.where(merged['Actual_RN'] > 0, merged['Actual_Rev'] / merged['Actual_RN'], 0)
+
+                    # [수정] OTB용 합계 행 로직 (별도 계산 필요)
+                    total_otb_rev = merged['OTB_Rev'].sum()
+                    total_otb_rn = merged['OTB_RN'].sum()
+                    total_act_rev = merged['Actual_Rev'].sum()
+                    total_act_rn = merged['Actual_RN'].sum()
+                    
+                    total_otb_adr = total_otb_rev / total_otb_rn if total_otb_rn > 0 else 0
+                    total_act_adr = total_act_rev / total_act_rn if total_act_rn > 0 else 0
+                    
+                    # 합계 행 생성
+                    total_row_data = {
+                        'Stay_Month': 'TOTAL',
+                        'OTB_Rev': total_otb_rev,
+                        'OTB_RN': total_otb_rn,
+                        'OTB_ADR': total_otb_adr,
+                        'Actual_Rev': total_act_rev,
+                        'Actual_RN': total_act_rn,
+                        'Actual_ADR': total_act_adr
+                    }
+                    total_row = pd.DataFrame([total_row_data])
+                    merged_final = pd.concat([merged, total_row], ignore_index=True)
 
                     st.subheader("📊 OTB vs Actual 매출 비교")
                     fig_otb = go.Figure()
