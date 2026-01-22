@@ -222,27 +222,12 @@ with st.sidebar:
 df = load_from_firestore()
 
 if df.empty:
-    st.title("🏨 Hotel Dashboard")
+    st.title("🏨 Hotel Strategy Dashboard")
     st.info("표시할 데이터가 없습니다. 사이드바에서 데이터를 업로드해주세요.")
+    st.markdown(f"**Data:** {df_clean['입실일자'].min().date()} ~ {df_clean['입실일자'].max().date()} | **Total:** {len(df_clean):,} Bookings")
 else:
     # (기존 그래프 및 분석 탭 코드... 이하 생략)
-    st.title("🏨 Hotel Strategy Dashboard")
     st.write(f"현재 로드된 데이터: {len(df):,}건")
-
-# 상태 필터
-with st.sidebar:
-    st.divider()
-    st.markdown("**🚫 필터 설정**")
-    all_sts = df['상태'].unique().astype(str)
-    cancel_k = ['취소', 'CXL', 'CANCEL', 'NO', 'NOSHOW', 'RC', 'RX']
-    def_exc = [s for s in all_sts if any(x in s.upper() for x in cancel_k)]
-    exc_sts = st.multiselect("제외할 상태 (취소 등)", options=all_sts, default=def_exc)
-
-df_clean = df[~df['상태'].isin(exc_sts)]
-
-# 상단 정보
-st.title("🏨 Hotel Strategy Dashboard")
-st.markdown(f"**Data:** {df_clean['입실일자'].min().date()} ~ {df_clean['입실일자'].max().date()} | **Total:** {len(df_clean):,} Bookings")
 
 # 메인 필터
 c1, c2 = st.columns([1, 2])
