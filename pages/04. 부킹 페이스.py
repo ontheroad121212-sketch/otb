@@ -219,9 +219,6 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 # 5. 메인 화면
 # -----------------------------------------------------------------------------
-df = load_from_firestore()
-
-if df.empty:
     st.title("🏨 Hotel Strategy Dashboard")
     st.info("표시할 데이터가 없습니다. 사이드바에서 데이터를 업로드해주세요.")
     st.markdown(f"**Data:** {df_clean['입실일자'].min().date()} ~ {df_clean['입실일자'].max().date()} | **Total:** {len(df_clean):,} Bookings")
