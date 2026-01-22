@@ -219,21 +219,41 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 # 5. 메인 화면
 # -----------------------------------------------------------------------------
+# [A] 데이터가 하나도 없을 때
+if df_clean.empty:
     st.title("🏨 Hotel Strategy Dashboard")
-    st.info("표시할 데이터가 없습니다. 사이드바에서 데이터를 업로드해주세요.")
-    st.markdown(f"**Data:** {df_clean['입실일자'].min().date()} ~ {df_clean['입실일자'].max().date()} | **Total:** {len(df_clean):,} Bookings")
-else:
-    # (기존 그래프 및 분석 탭 코드... 이하 생략)
-    st.write(f"현재 로드된 데이터: {len(df):,}건")
+    st.info("👋 환영합니다! 아직 클라우드에 저장된 데이터가 없습니다.")
+    st.markdown("""
+    **데이터를 올리는 방법:**
+    1. 왼쪽 사이드바의 **[📤 데이터 업로드]** 칸을 클릭합니다.
+    2. PMS에서 다운받은 엑셀 파일을 선택합니다. (여러 개 가능)
+    3. **[🚀 DB 업데이트 시작]** 버튼을 누르고 잠시 기다려주세요.
+    """)
+    st.stop() # 여기서 실행 중단 (아래 코드는 데이터가 있을 때만 실행됨)
 
-# 메인 필터
+# [B] 데이터가 있을 때 (대시보드 출력)
+st.title("🏨 Hotel Strategy Dashboard")
+
+# 상단 요약 바 (중복 제거된 최종 수치)
+col_stat1, col_stat2, col_stat3 = st.columns(3)
+with col_stat1:
+    st.metric("분석 대상 예약건수", f"{len(df_clean):,} 건")
+with col_stat2:
+    st.metric("분석 시작일", str(df_clean['입실일자'].min().date()))
+with col_stat3:
+    st.metric("분석 종료일", str(df_clean['입실일자'].max().date()))
+
+st.caption("※ 모든 수치는 '예약번호' 기준으로 중복이 제거된 클라우드 실시간 데이터입니다.")
+
+# --- 메인 필터 (기간 단위 및 거래처) ---
 c1, c2 = st.columns([1, 2])
 with c1:
-    view_mode = st.radio("기간 단위", ["월별", "분기별", "주별", "연간"], horizontal=True)
+    view_mode = st.radio("📊 분석 단위 선택", ["월별", "분기별", "주별", "연간"], horizontal=True)
 with c2:
     all_acc = sorted(df_clean['거래처'].unique())
-    sel_acc = st.multiselect("거래처 필터", all_acc, placeholder="전체 (All Channels)")
+    sel_acc = st.multiselect("🏦 특정 거래처만 보기", all_acc, placeholder="전체 거래처(All Channels) 보기")
 
+# 필터링 적용
 df_view = df_clean[df_clean['거래처'].isin(sel_acc)] if sel_acc else df_clean
 st.divider()
 
