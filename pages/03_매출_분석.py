@@ -10,19 +10,21 @@ import numpy as np
 import time
 
 # ==============================================================================
-# 0. 페이지 설정 및 CSS
+# 0. 페이지 설정 및 CSS (합계 행 강조, 메트릭 크기 조정)
 # ==============================================================================
 st.set_page_config(page_title="ARI Final Integrity", layout="wide")
 
 st.markdown("""
 <style>
-    /* 전체 여백 조정 */
+    /* 1. 전체 메인 컨테이너 여백 조정 */
     .block-container {
         padding-top: 1rem;
         padding-bottom: 5rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
     
-    /* 숫자(Metric) 스타일: 크고 진하게 */
+    /* 2. 메트릭(숫자) 스타일 - GM 요약용 크고 진하게 */
     div[data-testid="stMetricValue"] { 
         font-size: 26px !important; 
         font-weight: 900; 
@@ -34,15 +36,19 @@ st.markdown("""
         color: #64748b; 
     }
     
-    /* 탭 스타일 */
+    /* 3. 탭 스타일 */
     button[data-baseweb="tab"] { 
         font-size: 16px !important; 
         font-weight: 700; 
     }
     
-    /* 데이터프레임 스타일 조정 */
-    [data-testid="stDataFrame"] {
-        font-size: 14px;
+    /* 4. 데이터프레임 합계(Total) 행 스타일 강조 (노란색 배경 + 진한 글씨) */
+    /* Streamlit 버전에 따라 적용 방식이 다를 수 있어 포괄적으로 지정 */
+    [data-testid="stDataFrame"] table tr:last-child td {
+        font-weight: 900 !important;
+        background-color: #fff9c4 !important; /* 연한 노란색 */
+        color: #000000 !important;
+        border-top: 2px solid #000000 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -52,6 +58,7 @@ st.markdown("""
 # ==============================================================================
 if not firebase_admin._apps:
     try:
+        # Streamlit Secrets에서 인증 정보를 가져옵니다.
         cred = credentials.Certificate(dict(st.secrets["firebase"]))
         firebase_admin.initialize_app(cred)
     except Exception as e:
@@ -62,19 +69,25 @@ db = firestore.client()
 COLLECTION_NAME = "revenue_integrity_history"
 
 # ==============================================================================
-# 2. 데이터 처리 함수 (숫자 변환 및 저장/로드)
+# 2. 핵심 유틸리티 함수: 데이터 정제 및 저장/로드
 # ==============================================================================
 
 def clean_numeric_columns(df):
     """
-    [핵심] 데이터프레임의 숫자 컬럼을 강제로 숫자형(Float/Int)으로 변환
+    [핵심 함수] 
+    데이터프레임의 숫자 컬럼을 강제로 숫자형(Float/Int)으로 변환합니다.
+    기존에 콤마(,)가 포함된 문자열로 저장되어 있어도 콤마를 제거하고 숫자로 만듭니다.
+    이 과정이 있어야 포맷팅과 합계 계산이 정상 작동합니다.
     """
     target_cols = ['RN', 'Room_Revenue', 'Total_Revenue', 'ADR', 'Lead_Time', 
                    'OTB_Rev', 'Actual_Rev', 'OTB_RN', 'Actual_RN']
     
     for col in target_cols:
         if col in df.columns:
-            # 콤마 제거 후 숫자로 변환, 실패시 0
+            # 1. 문자열로 변환 (안전장치)
+            # 2. 콤마 제거
+            # 3. 숫자로 변환 (실패시 NaN)
+            # 4. NaN을 0으로 채움
             df[col] = pd.to_numeric(
                 df[col].astype(str).str.replace(',', ''), 
                 errors='coerce'
@@ -82,9 +95,11 @@ def clean_numeric_columns(df):
     return df
 
 def save_to_firestore(df):
-    """데이터 저장"""
+    """데이터프레임을 파이어베이스에 저장 (JSON 직렬화 위해 문자열 변환)"""
     try:
+        # 저장할 때는 안전하게 문자열로 변환해서 저장
         records = df.fillna(0).astype(str).to_dict(orient='records')
+        
         doc_ref = db.collection(COLLECTION_NAME).document()
         doc_ref.set({
             'data': records,
@@ -97,32 +112,36 @@ def save_to_firestore(df):
         st.error(f"❌ 저장 오류: {e}")
         return False
 
-@st.cache_data(ttl=0)
+@st.cache_data(ttl=0) # 캐시를 쓰지 않고 매번 새로 불러옵니다. (반영 안됨 방지)
 def load_data_from_firestore():
-    """데이터 로드"""
+    """파이어베이스에서 데이터 로드"""
     try:
         docs = db.collection(COLLECTION_NAME).stream()
         all_data = []
+        
         for doc in docs:
             doc_dict = doc.to_dict()
             if 'data' in doc_dict:
                 doc_date = doc_dict.get('snapshot_date', '')
                 rows = doc_dict['data']
+                
                 for row in rows:
+                    # 스냅샷 날짜가 없으면 문서 날짜로 채워줌
                     if 'Snapshot_Date' not in row or not row['Snapshot_Date']:
                         row['Snapshot_Date'] = doc_date
                     all_data.append(row)
+        
         return all_data
     except Exception as e:
         st.error(f"❌ 데이터 로드 오류: {e}")
         return []
 
 # ==============================================================================
-# 3. 엑셀 파일 처리 로직
+# 3. 엑셀 파일 처리 및 전처리 로직
 # ==============================================================================
 
 def normalize_and_map_columns(df):
-    """컬럼명 표준화"""
+    """엑셀 컬럼명 표준화 (한글/영어 혼용 대응)"""
     col_map = {}
     rules = {
         'CheckIn': ['checkin', 'check-in', 'arrival', '입실', '일자', 'date'],
@@ -148,6 +167,7 @@ def normalize_and_map_columns(df):
                     if target_col == 'Room_Revenue' and 'total' in clean_col: continue
                     if target_col == 'Total_Revenue' and 'room' in clean_col and 'total' not in clean_col: continue
                     if target_col == 'CheckIn' and ('book' in clean_col or 'res' in clean_col): continue
+                    
                     if target_col not in col_map.values():
                         col_map[original_col] = target_col
                         mapped = True
@@ -156,7 +176,7 @@ def normalize_and_map_columns(df):
     return df.rename(columns=col_map)
 
 def find_valid_header_row(df):
-    """헤더 행 찾기"""
+    """헤더 행 자동 감지"""
     for i, row in df.iterrows():
         row_str = " ".join(row.astype(str).values).lower()
         keywords = ['guest', 'name', 'check', 'date', 'room', '고객', '입실', '객실']
@@ -166,7 +186,7 @@ def find_valid_header_row(df):
     return df
 
 def process_data(uploaded_file, status, sub_segment="General"):
-    """파일 업로드 처리"""
+    """업로드된 파일 처리"""
     try:
         is_otb = "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
         
@@ -221,6 +241,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
             df['Is_Zero_Rate'] = df['Room_Revenue'] <= 0
             df['ADR'] = df.apply(lambda x: x['Room_Revenue'] / x['RN'] if x['RN'] > 0 else 0, axis=1)
 
+        # 공통 전처리
         df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d') 
         df['Status'] = status
         
@@ -266,40 +287,55 @@ def process_data(uploaded_file, status, sub_segment="General"):
         final_df = pd.DataFrame()
         for c in cols:
             final_df[c] = df[c] if c in df.columns else ''
+        
+        # 여기서도 한번 더 확실하게 숫자 정제
+        final_df = clean_numeric_columns(final_df)
+        
         return final_df
 
     except Exception as e:
         return pd.DataFrame()
 
 # ==============================================================================
-# 3. [핵심] 합계 행 추가 및 스타일링 헬퍼
+# 3. [핵심] 합계 행 추가 및 스타일링 헬퍼 (Styler 사용)
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
-    """합계(TOTAL) 행 추가 및 ADR 재계산"""
+    """
+    데이터프레임 하단에 '합계(TOTAL)' 행을 추가합니다.
+    - 입력받은 df의 숫자가 반드시 숫자형이어야 합니다. (clean_numeric_columns 선행 필수)
+    - ADR은 (총매출 / 총객실수)로 재계산합니다.
+    """
     if df.empty: return df
     
+    # 1. 숫자형 컬럼만 골라서 합계 계산
     numeric_df = df.select_dtypes(include=[np.number]).fillna(0)
     totals = numeric_df.sum().to_dict()
     
+    # 2. 합계 행 딕셔너리
     total_row = {col: "" for col in df.columns}
     total_row.update(totals)
     
+    # 3. 그룹 컬럼 이름에 'TOTAL' 표시
     if group_col_name in df.columns:
         total_row[group_col_name] = "TOTAL"
     else:
         total_row[df.columns[0]] = "TOTAL"
 
+    # 4. ADR 재계산 (단순 합계가 아닌 가중평균)
     if 'Room_Revenue' in total_row and 'RN' in total_row:
         total_row['ADR'] = total_row['Room_Revenue'] / total_row['RN'] if total_row['RN'] > 0 else 0
             
+    # 5. 합치기
     df_total = pd.DataFrame([total_row])
-    return pd.concat([df, df_total], ignore_index=True)
+    df_final = pd.concat([df, df_total], ignore_index=True)
+    
+    return df_final
 
 def show_dataframe_with_style(df):
     """
     [해결책] Pandas Styler를 사용하여 무조건 콤마와 소수점 제거를 적용합니다.
-    Streamlit column_config보다 우선순위가 높습니다.
+    Streamlit column_config 설정이 안 먹힐 때 가장 확실한 방법입니다.
     """
     if df.empty:
         st.write("No Data")
@@ -326,10 +362,11 @@ def show_dataframe_with_style(df):
     
     styler = styler.apply(highlight_total, axis=1)
     
-    # 3. 렌더링
+    # 3. 렌더링 (height 자동 조절)
     st.dataframe(styler, hide_index=True, use_container_width=True)
 
 def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
+    """분석 탭 렌더링 (합계 행 추가 + Styler 포맷팅 적용)"""
     if target_df.empty:
         st.warning(f"⚠️ {title_prefix} 데이터가 없습니다.")
         return
@@ -352,8 +389,8 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
 
     with t2:
         st.subheader(f"📅 Pacing Analysis")
+        # Pacing은 히트맵이므로 숫자 포맷팅보다는 직관적인 숫자가 중요
         piv = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum').fillna(0)
-        # 히트맵은 콤마보다는 직관적인 숫자가 중요하므로 포맷 유지
         st.plotly_chart(px.imshow(piv, text_auto="d", aspect="auto", color_continuous_scale=color_scale), use_container_width=True)
 
     with t3:
@@ -427,6 +464,7 @@ try:
     # 2. 사이드바
     with st.sidebar:
         st.header("📅 조회 설정")
+        # 캐시 날리기 버튼 (데이터 반영 안될 때 사용)
         if st.button("🔄 캐시 데이터 초기화 (필수)"):
             st.cache_data.clear()
             st.rerun()
@@ -487,6 +525,7 @@ try:
             if 'Booking_Date' not in df.columns: df['Booking_Date'] = df['CheckIn']
             df['Booking_dt'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
             df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
+            # 날짜 없는 행 제거 및 보정
             df = df.dropna(subset=['CheckIn_dt'])
             df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
             
@@ -517,7 +556,7 @@ try:
                 st.header(f"👑 총지배인(GM) 요약 리포트 ({selected_date})")
                 
                 # A. 예약 vs 취소 KPI
-                st.subheader("1. 금일(Today) 예약 vs 취소")
+                st.subheader("1. 금일(Today) 예약 vs 취소 현황")
                 
                 bk_cnt = len(df_paid_bk)
                 bk_rn = df_paid_bk['RN'].sum()
@@ -545,7 +584,7 @@ try:
                 st.divider()
                 
                 # B. 세그먼트별 픽업 (합계 포함)
-                st.subheader("2. 세그먼트별 픽업 (예약)")
+                st.subheader("2. 세그먼트별 픽업 현황 (예약)")
                 if not df_paid_bk.empty:
                     seg_gm = df_paid_bk.groupby('Segment').agg({'RN':'sum', 'Room_Revenue':'sum'}).reset_index()
                     seg_gm_final = add_total_row(seg_gm, 'Segment')
@@ -617,7 +656,7 @@ try:
                     
                     merged = merged.sort_values('Stay_Month')
                     
-                    # OTB 합계 행
+                    # 합계 행
                     merged_final = add_total_row(merged, 'Stay_Month')
 
                     st.subheader("📊 OTB vs Actual 매출 비교")
@@ -632,4 +671,4 @@ try:
         st.info("👈 왼쪽에서 파일을 업로드해주세요.")
 
 except Exception as e:
-    st.error(f"🚨 시스템 오류: {e}")
+    st.error(f"🚨 오류 발생: {e}")
