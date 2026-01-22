@@ -72,7 +72,6 @@ def clean_numeric_columns(df):
     """
     [핵심] 데이터프레임의 숫자 컬럼을 강제로 숫자형(Float/Int)으로 변환
     """
-    # 처리할 숫자 컬럼 목록 (총매출, 객실매출, ADR 분리 포함)
     target_cols = ['RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total', 'Lead_Time', 
                    'OTB_Rev', 'Actual_Rev', 'OTB_RN', 'Actual_RN']
     
@@ -83,6 +82,13 @@ def clean_numeric_columns(df):
                 df[col].astype(str).str.replace(',', ''), 
                 errors='coerce'
             ).fillna(0)
+            
+    # [ADR 재계산 로직] 숫자가 된 상태에서 다시 계산하여 정확도 보장
+    if 'RN' in df.columns:
+        if 'Room_Revenue' in df.columns:
+            df['ADR_Room'] = np.where(df['RN'] > 0, df['Room_Revenue'] / df['RN'], 0)
+        if 'Total_Revenue' in df.columns:
+            df['ADR_Total'] = np.where(df['RN'] > 0, df['Total_Revenue'] / df['RN'], 0)
             
     return df
 
@@ -104,7 +110,7 @@ def save_to_firestore(df):
 
 @st.cache_data(ttl=0)
 def load_data_from_firestore():
-    """데이터 로드"""
+    """데이터 로드 (캐시 사용 안 함)"""
     try:
         docs = db.collection(COLLECTION_NAME).stream()
         all_data = []
@@ -371,6 +377,7 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
         st.subheader(f"📊 {title_prefix} 세그먼트 분석")
         # 매출 2개 모두 집계
         seg_stats = target_df.groupby('Segment').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
+        # ADR 각각 계산
         seg_stats['ADR_Room'] = np.where(seg_stats['RN']>0, seg_stats['Room_Revenue']/seg_stats['RN'], 0)
         seg_stats['ADR_Total'] = np.where(seg_stats['RN']>0, seg_stats['Total_Revenue']/seg_stats['RN'], 0)
         
@@ -471,10 +478,6 @@ try:
     # 2. 사이드바
     with st.sidebar:
         st.header("📅 조회 설정")
-        if st.button("🔄 캐시 데이터 초기화 (필수)"):
-            st.cache_data.clear()
-            st.rerun()
-            
         selected_date = None
         if available_dates:
             selected_date = st.selectbox("조회 기준일 (Snapshot)", available_dates, index=0)
