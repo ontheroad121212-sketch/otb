@@ -18,7 +18,7 @@ st.set_page_config(
 
 # ==============================================================================
 # [2] CSS 스타일링 (절대 생략 없음 - 상세 설정 포함)
-#     사용자 요청: "위에는 크게, 아래 표는 아주 작게(Compact)"
+#     사용자 요청: "상단은 크게 유지, 하단 표는 극한으로 작게(Ultra Compact)"
 # ==============================================================================
 st.markdown(textwrap.dedent("""
 <style>
@@ -26,8 +26,8 @@ st.markdown(textwrap.dedent("""
     .block-container {
         padding-top: 0.5rem;
         padding-bottom: 2rem;
-        padding-left: 1rem;
-        padding-right: 1rem;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
     }
     
     /* ==========================================================================
@@ -136,8 +136,7 @@ st.markdown(textwrap.dedent("""
     }
 
     /* ==========================================================================
-       [중앙/하단 구역] 메인 데이터 테이블 (컴팩트 & 슬림 최적화)
-       사용자 요청: "사이즈 자체를 줄여줘! 한눈에 들어오게!"
+       [중앙/하단 구역] 메인 데이터 테이블 (Ultra Compact - 극한으로 작게)
        ========================================================================== */
     
     /* Streamlit DataFrame 컨테이너 강제 제어 */
@@ -145,21 +144,22 @@ st.markdown(textwrap.dedent("""
         width: 100% !important;
     }
     
-    /* 테이블 헤더 (작고 빽빽하게) */
+    /* 테이블 헤더 (9px, 여백 최소화) */
     [data-testid="stDataFrame"] th {
-        font-size: 10px !important;      /* 폰트 10px */
-        padding: 2px 1px !important;     /* 패딩 최소화 */
+        font-size: 9px !important;       /* 폰트 9px로 축소 */
+        padding: 2px 1px !important;     /* 패딩 1px (거의 없음) */
         line-height: 1.0 !important;     /* 줄간격 붙이기 */
         white-space: pre-wrap !important; 
         text-align: center !important;
         vertical-align: bottom !important;
         color: #4b5563 !important;
+        min-width: 30px !important;      /* 컬럼 폭 강제 축소 유도 */
     }
     
-    /* 테이블 데이터 셀 (작고 빽빽하게) */
+    /* 테이블 데이터 셀 (9px, 여백 최소화) */
     [data-testid="stDataFrame"] td {
-        font-size: 10px !important;      /* 폰트 10px */
-        padding: 1px 1px !important;     /* 패딩 1px로 극한 축소 */
+        font-size: 9px !important;       /* 폰트 9px로 축소 */
+        padding: 1px 0px !important;     /* 좌우 여백 0px */
         line-height: 1.0 !important;     /* 높이 축소 */
         vertical-align: middle !important;
     }
@@ -662,7 +662,7 @@ for i, tab in enumerate(tabs):
         final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
         # ----------------------------------------------------------------------
-        # [D] 하단 표 스타일링 (Styler) - 컴팩트 사이즈(10px) 적용
+        # [D] 하단 표 스타일링 (Styler) - 컴팩트 사이즈(9px) 적용
         # ----------------------------------------------------------------------
         # 숫자 포맷 정의
         fmt = {}
@@ -680,10 +680,10 @@ for i, tab in enumerate(tabs):
         styler = styler.set_properties(subset=pre_cols, **{
             'background-color': '#f8f9fa', 
             'color': '#9ca3af', 
-            'font-size': '10px'
+            'font-size': '9px'  # [수정] 폰트 사이즈 9px
         })
         
-        # 2. Today(오늘) 그룹 - 히트맵 + 폰트 10px + 볼드
+        # 2. Today(오늘) 그룹 - 히트맵 + 폰트 9px + 볼드
         curr_cols = [c for c in final_df.columns if 'Today' in c]
         subset_idx = final_df.index[:-1] # Total행 제외하고 히트맵
         
@@ -692,7 +692,7 @@ for i, tab in enumerate(tabs):
         
         styler = styler.set_properties(subset=curr_cols, **{
             'font-weight': '700', 
-            'font-size': '10px', 
+            'font-size': '9px',  # [수정] 폰트 사이즈 9px
             'border-left': '1px solid #cbd5e1', 
             'border-right': '1px solid #cbd5e1'
         })
@@ -708,7 +708,7 @@ for i, tab in enumerate(tabs):
         styler = styler.map(color_variant, subset=var_cols)
         styler = styler.set_properties(subset=var_cols, **{
             'background-color': '#fffbeb', 
-            'font-size': '10px'
+            'font-size': '9px' # [수정] 폰트 사이즈 9px
         })
 
         # 4. Total 행 강조 (오늘 데이터 부분 진하게)
@@ -717,13 +717,13 @@ for i, tab in enumerate(tabs):
             for idx, col in enumerate(row.index):
                 base_style = 'background-color: #eff6ff; font-weight: 800; border-top: 2px solid #1d4ed8; font-size: 11px;'
                 if 'Today' in col:
-                    base_style += 'background-color: #dbeafe; color: #1e3a8a; font-size: 12px; border-left: 2px solid #1d4ed8; border-right: 2px solid #1d4ed8;'
+                    base_style += 'background-color: #dbeafe; color: #1e3a8a; font-size: 11px; border-left: 2px solid #1d4ed8; border-right: 2px solid #1d4ed8;'
                 styles.append(base_style)
             return styles
 
         styler = styler.apply(lambda x: highlight_total_curr(x) if x.name == final_df.index[-1] else ['' for _ in x], axis=1)
 
-        # 화면 출력
+        # 화면 출력 (height 유지, width 최대로)
         st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
 
         # ----------------------------------------------------------------------
