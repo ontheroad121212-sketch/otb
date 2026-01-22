@@ -730,27 +730,6 @@ try:
                     
                     st.plotly_chart(fig_otb, use_container_width=True)
                     
-                    # 5. 시각화 (Budget vs OTB 막대/선 그래프)
-                    st.subheader("📊 월별 Budget vs OTB 비교")
-                    fig_otb = go.Figure()
-                    fig_otb.add_trace(go.Bar(x=otb_monthly['Stay_Month'], y=otb_monthly['OTB_Rev'], name='OTB (현재예약)', marker_color='#2E86C1'))
-                    fig_otb.add_trace(go.Scatter(x=otb_monthly['Stay_Month'], y=otb_monthly['Budget_Rev'], name='Budget (목표)', line=dict(color='#E74C3C', width=3, dash='dot')))
-                    st.plotly_chart(fig_otb, use_container_width=True)
-                    
-                    # 6. 달성률 꺾은선 그래프
-                    st.subheader("📈 버짓 달성률 (%)")
-                    fig_rate = px.line(otb_monthly, x='Stay_Month', y='Budget_Achiev', markers=True)
-                    fig_rate.update_traces(line_color='green', texttemplate='%{y:.1f}%', textposition='top center')
-                    fig_rate.update_yaxes(range=[0, max(otb_monthly['Budget_Achiev'].max() + 10, 110)])
-                    st.plotly_chart(fig_rate, use_container_width=True)
-                    
-                    # 7. 표 출력 (Budget, OTB, %, RN) - Actual 제외
-                    cols = ['Stay_Month', 'Budget_Rev', 'OTB_Rev', 'Budget_Achiev', 'OTB_RN']
-                    styler = merged_final[cols].style.format({
-                        'Budget_Rev': "{:,.0f}", 'OTB_Rev': "{:,.0f}", 
-                        'OTB_RN': "{:,.0f}", 'Budget_Achiev': "{:.1f}%"
-                    })
-                    
                     def highlight_total(row):
                         return ['background-color: #fff9c4; font-weight: bold; color: black; border-top: 2px solid black'] * len(row) if row['Stay_Month'] == 'TOTAL' else [''] * len(row)
                     
