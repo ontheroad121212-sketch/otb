@@ -26,8 +26,8 @@ st.markdown(textwrap.dedent("""
     .block-container {
         padding-top: 0.5rem;
         padding-bottom: 2rem;
-        padding-left: 0.5rem;
-        padding-right: 0.5rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
     
     /* ==========================================================================
@@ -136,32 +136,49 @@ st.markdown(textwrap.dedent("""
     }
 
     /* ==========================================================================
-       [중앙/하단 구역] 메인 데이터 테이블 (Ultra Compact - 극한으로 작게)
+       [중앙/하단 구역] 메인 데이터 테이블 (HTML 강제 스타일링)
+       기존 st.dataframe은 CSS가 안 먹혀서, HTML Table로 직접 제어합니다.
        ========================================================================== */
     
-    /* Streamlit DataFrame 컨테이너 강제 제어 */
-    iframe[title="streamlit.dataframe"] {
-        width: 100% !important;
+    .compact-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: 'Segoe UI', sans-serif;
+        margin-top: 10px;
     }
     
-    /* 테이블 헤더 (9px, 여백 최소화) */
-    [data-testid="stDataFrame"] th {
-        font-size: 9px !important;       /* 폰트 9px로 축소 */
-        padding: 2px 1px !important;     /* 패딩 1px (거의 없음) */
-        line-height: 1.0 !important;     /* 줄간격 붙이기 */
-        white-space: pre-wrap !important; 
-        text-align: center !important;
-        vertical-align: bottom !important;
-        color: #4b5563 !important;
-        min-width: 30px !important;      /* 컬럼 폭 강제 축소 유도 */
+    /* 헤더: 아주 작게 */
+    .compact-table th {
+        background-color: #f1f5f9;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        font-size: 10px !important;  /* 10px 강제 적용 */
+        padding: 4px 2px !important; /* 패딩 최소화 */
+        text-align: center;
+        border: 1px solid #e2e8f0;
+        color: #64748b;
+        white-space: pre-wrap; /* 줄바꿈 허용 */
+        line-height: 1.1;
     }
     
-    /* 테이블 데이터 셀 (9px, 여백 최소화) */
-    [data-testid="stDataFrame"] td {
-        font-size: 9px !important;       /* 폰트 9px로 축소 */
-        padding: 1px 0px !important;     /* 좌우 여백 0px */
-        line-height: 1.0 !important;     /* 높이 축소 */
-        vertical-align: middle !important;
+    /* 데이터 셀: 아주 작게 */
+    .compact-table td {
+        font-size: 10px !important;  /* 10px 강제 적용 */
+        padding: 2px 2px !important; /* 패딩 2px로 축소 */
+        text-align: right;
+        border: 1px solid #e2e8f0;
+        line-height: 1.0; /* 줄 높이 축소 */
+        white-space: nowrap; /* 데이터 줄바꿈 방지 */
+    }
+
+    /* 스크롤 가능한 영역 설정 */
+    .table-scroll-container {
+        max-height: 800px;
+        overflow-y: auto;
+        overflow-x: auto;
+        border: 1px solid #e2e8f0;
+        border-radius: 4px;
     }
 
     /* ==========================================================================
@@ -662,7 +679,7 @@ for i, tab in enumerate(tabs):
         final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
         # ----------------------------------------------------------------------
-        # [D] 하단 표 스타일링 (Styler) - 컴팩트 사이즈(9px) 적용
+        # [D] 하단 표 스타일링 (Styler + HTML 강제 변환) - 핵심 파트
         # ----------------------------------------------------------------------
         # 숫자 포맷 정의
         fmt = {}
@@ -679,11 +696,10 @@ for i, tab in enumerate(tabs):
         pre_cols = [c for c in final_df.columns if 'Pre' in c]
         styler = styler.set_properties(subset=pre_cols, **{
             'background-color': '#f8f9fa', 
-            'color': '#9ca3af', 
-            'font-size': '9px'  # [수정] 폰트 사이즈 9px
+            'color': '#9ca3af'
         })
         
-        # 2. Today(오늘) 그룹 - 히트맵 + 폰트 9px + 볼드
+        # 2. Today(오늘) 그룹 - 히트맵
         curr_cols = [c for c in final_df.columns if 'Today' in c]
         subset_idx = final_df.index[:-1] # Total행 제외하고 히트맵
         
@@ -692,7 +708,6 @@ for i, tab in enumerate(tabs):
         
         styler = styler.set_properties(subset=curr_cols, **{
             'font-weight': '700', 
-            'font-size': '9px',  # [수정] 폰트 사이즈 9px
             'border-left': '1px solid #cbd5e1', 
             'border-right': '1px solid #cbd5e1'
         })
@@ -707,24 +722,26 @@ for i, tab in enumerate(tabs):
             
         styler = styler.map(color_variant, subset=var_cols)
         styler = styler.set_properties(subset=var_cols, **{
-            'background-color': '#fffbeb', 
-            'font-size': '9px' # [수정] 폰트 사이즈 9px
+            'background-color': '#fffbeb'
         })
 
         # 4. Total 행 강조 (오늘 데이터 부분 진하게)
         def highlight_total_curr(row):
             styles = []
             for idx, col in enumerate(row.index):
-                base_style = 'background-color: #eff6ff; font-weight: 800; border-top: 2px solid #1d4ed8; font-size: 11px;'
+                base_style = 'background-color: #eff6ff; font-weight: 800; border-top: 2px solid #1d4ed8;'
                 if 'Today' in col:
-                    base_style += 'background-color: #dbeafe; color: #1e3a8a; font-size: 11px; border-left: 2px solid #1d4ed8; border-right: 2px solid #1d4ed8;'
+                    base_style += 'background-color: #dbeafe; color: #1e3a8a; border-left: 2px solid #1d4ed8; border-right: 2px solid #1d4ed8;'
                 styles.append(base_style)
             return styles
 
         styler = styler.apply(lambda x: highlight_total_curr(x) if x.name == final_df.index[-1] else ['' for _ in x], axis=1)
 
-        # 화면 출력 (height 유지, width 최대로)
-        st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
+        # [핵심 변경] st.dataframe을 쓰지 않고, HTML로 변환하여 CSS(.compact-table)를 강제 적용합니다.
+        html = styler.to_html(classes="compact-table")
+        
+        # HTML 렌더링 (스크롤 가능한 div 안에 넣음)
+        st.markdown(f'<div class="table-scroll-container">{html}</div>', unsafe_allow_html=True)
 
         # ----------------------------------------------------------------------
         # [E] 저장 버튼 (파일이 있을 때만 활성화)
