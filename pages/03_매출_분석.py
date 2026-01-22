@@ -16,8 +16,11 @@ st.set_page_config(page_title="ARI Final Integrity", layout="wide")
 
 st.markdown("""
 <style>
-    /* 여백 조정 */
-    .block-container { padding-top: 1rem; padding-bottom: 5rem; }
+    /* 전체 여백 조정 */
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 5rem;
+    }
     
     /* 숫자(Metric) 스타일: 크고 진하게 */
     div[data-testid="stMetricValue"] { 
@@ -32,19 +35,17 @@ st.markdown("""
     }
     
     /* 탭 스타일 */
-    button[data-baseweb="tab"] { font-size: 16px !important; font-weight: 700; }
-    
-    /* 합계 행 스타일 (노란색 배경) */
-    [data-testid="stDataFrame"] table tr:last-child td {
-        font-weight: 900 !important;
-        background-color: #fff9c4 !important;
-        color: #000000 !important;
-        border-top: 2px solid #000000 !important;
+    button[data-baseweb="tab"] { 
+        font-size: 16px !important; 
+        font-weight: 700; 
     }
     
-    /* 삭제 버튼 스타일 (빨간색) */
-    .stButton > button {
-        width: 100%;
+    /* 데이터프레임 합계(Total) 행 스타일 강조 */
+    [data-testid="stDataFrame"] table tr:last-child td {
+        font-weight: 900 !important;
+        background-color: #fff9c4 !important; /* 연한 노란색 */
+        color: #000000 !important;
+        border-top: 2px solid #000000 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -57,39 +58,15 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(dict(st.secrets["firebase"]))
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"🔥 연결 실패: {e}")
+        st.error(f"🔥 파이어베이스 연결 실패: {e}")
         st.stop()
 
 db = firestore.client()
 COLLECTION_NAME = "revenue_integrity_history"
 
 # ==============================================================================
-# 2. 데이터 관리 함수 (삭제/저장/로드/정제)
+# 2. 핵심 유틸리티 함수: 데이터 정제 및 저장/로드
 # ==============================================================================
-
-def delete_otb_data_only():
-    """
-    [신규 기능] DB에서 'OTB' 데이터만 골라내어 삭제하는 함수
-    """
-    try:
-        docs = db.collection(COLLECTION_NAME).stream()
-        deleted_count = 0
-        for doc in docs:
-            doc_data = doc.to_dict()
-            # 데이터 배열이 있고, 내용이 비어있지 않은 경우 확인
-            if 'data' in doc_data and len(doc_data['data']) > 0:
-                first_row = doc_data['data'][0]
-                # Segment가 OTB이거나 Guest_Name에 OTB가 포함된 경우 삭제 대상
-                segment = str(first_row.get('Segment', ''))
-                g_name = str(first_row.get('Guest_Name', ''))
-                
-                if 'OTB' in segment or 'OTB' in g_name:
-                    doc.reference.delete()
-                    deleted_count += 1
-        return deleted_count
-    except Exception as e:
-        st.error(f"OTB 삭제 중 오류: {e}")
-        return 0
 
 def clean_numeric_columns(df):
     """
@@ -102,7 +79,7 @@ def clean_numeric_columns(df):
         if col in df.columns:
             # 1. 문자열 변환 -> 2. 콤마 제거 -> 3. 숫자 변환 -> 4. NaN은 0으로
             df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), 
+                df[col].astype(str).str.replace(',', ''), 
                 errors='coerce'
             ).fillna(0)
             
@@ -214,7 +191,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
                 df_raw = df_raw[~df_raw['일자'].astype(str).str.contains('소계|Subtotal|합계|Total', na=False)]
             
             df = pd.DataFrame()
-            df['Guest_Name'] = 'OTB_DATA'
+            df['Guest_Name'] = f'OTB_{sub_segment}_DATA'
             date_col = next((c for c in df_raw.columns if '일자' in str(c) or 'Date' in str(c)), df_raw.columns[0])
             df['CheckIn'] = pd.to_datetime(df_raw[date_col], errors='coerce')
             
@@ -222,13 +199,13 @@ def process_data(uploaded_file, status, sub_segment="General"):
                 df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
                 df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
                 df['ADR_Room'] = pd.to_numeric(df_raw.iloc[:, -3], errors='coerce').fillna(0)
-                df['Total_Revenue'] = df['Room_Revenue'] 
+                df['Total_Revenue'] = df['Room_Revenue'] # OTB는 보통 객실매출만 있음
             except:
                 df['RN'] = 0; df['Room_Revenue'] = 0; df['ADR_Room'] = 0; df['Total_Revenue'] = 0
 
             df['ADR_Total'] = df['ADR_Room']
             df['Booking_Date'] = df['CheckIn']
-            df['Segment'] = 'OTB' # OTB 데이터 식별자
+            df['Segment'] = 'OTB' # 통합 OTB
             df['Account'] = 'OTB_Summary'
             df['Room_Type'] = 'Run of House'
             df['Nat_Orig'] = 'KOR'
@@ -317,6 +294,8 @@ def process_data(uploaded_file, status, sub_segment="General"):
 def add_total_row(df, group_col_name="구분"):
     """
     데이터프레임 하단에 '합계(TOTAL)' 행을 추가합니다.
+    - 입력받은 df의 숫자가 반드시 숫자형이어야 합니다.
+    - ADR은 (매출 / RN)으로 각각 재계산합니다.
     """
     if df.empty: return df
     
@@ -352,6 +331,7 @@ def show_dataframe_with_style(df):
         st.write("No Data")
         return
 
+    # 숫자 컬럼 식별
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     
     # 1. 스타일러 생성 및 포맷 적용 (천단위 콤마, 소수점 0자리)
@@ -498,15 +478,6 @@ try:
     # 2. 사이드바
     with st.sidebar:
         st.header("📅 조회 설정")
-        
-        # [신규] OTB 데이터 초기화 (삭제) 버튼
-        if st.button("🗑️ OTB 데이터만 초기화"):
-            deleted_cnt = delete_otb_data_only()
-            st.warning(f"총 {deleted_cnt}개의 OTB 데이터가 삭제되었습니다. 다시 업로드하세요.")
-            time.sleep(2)
-            st.cache_data.clear()
-            st.rerun()
-            
         selected_date = None
         if available_dates:
             selected_date = st.selectbox("조회 기준일 (Snapshot)", available_dates, index=0)
@@ -531,15 +502,15 @@ try:
                     st.cache_data.clear()
                     st.rerun()
 
-        # [OTB 통합 업로더]
         with st.expander("OTB (Sales on the Book)", expanded=True):
-            f_otb = st.file_uploader("OTB 데이터 (12개월 통합)", type=['xlsx','csv'], key="f_otb")
-            if f_otb and st.button("OTB 저장"):
-                df = process_data(f_otb, "Booked", "Month") 
-                if not df.empty and save_to_firestore(df):
-                    st.cache_data.clear()
-                    st.rerun()
-
+            f3_list = st.file_uploader("당월 OTB (12개월 통합)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
+            if f3_list and st.button("OTB 저장"):
+                for f in f3_list:
+                    df = process_data(f, "Booked", "Month")
+                    if not df.empty: save_to_firestore(df)
+                st.cache_data.clear()
+                st.rerun()
+            
     # 3. 메인 콘텐츠
     if selected_date and not df_all.empty:
         df_filtered = df_all[df_all['Snapshot_Date'] == selected_date].copy()
@@ -562,7 +533,10 @@ try:
             df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
             df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
             
-            # 데이터 분리 (OTB는 통합되었으므로 세그먼트로 필터링)
+            # 데이터 분리
+            df_otb_m = df[df['Segment'] == 'OTB_Month']
+            df_otb_t = df[df['Segment'] == 'OTB_Total']
+            # OTB 통합처리 (Segment가 OTB이거나 OTB_Month 등인 경우)
             df_otb = df[df['Segment'].astype(str).str.contains('OTB')]
             
             df_list = df[~df['Segment'].astype(str).str.contains('OTB')]
@@ -641,7 +615,7 @@ try:
                     
                     # 원하는 순서로 컬럼 정렬
                     cols_order = ['Segment', 'RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total']
-                    # 존재하는 컬럼만 선택 (혹시 모를 에러 방지)
+                    # 존재하는 컬럼만 선택
                     cols_final = [c for c in cols_order if c in seg_gm_final.columns]
                     seg_gm_final = seg_gm_final[cols_final]
                     
