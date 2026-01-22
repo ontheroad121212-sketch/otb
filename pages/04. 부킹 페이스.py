@@ -25,6 +25,7 @@ def load_and_merge_data(base_file_path, new_files):
     if new_files:
         for file in new_files:
             try:
+                # 파일 읽기
                 if file.name.endswith('.csv'):
                     df = pd.read_csv(file, header=2)
                 else:
@@ -43,14 +44,19 @@ def load_and_merge_data(base_file_path, new_files):
     if df_base.empty and df_new.empty:
         return pd.DataFrame()
     
-    # 날짜 컬럼 통일 (병합 전 처리)
+    # [수정됨] 병합 전 날짜 처리 (에러 방지 핵심!)
+    # 날짜 변환 함수 (에러나면 NaT 처리)
+    def safe_to_datetime(series):
+        return pd.to_datetime(series, errors='coerce')
+
     if not df_base.empty:
-        df_base['입실일자'] = pd.to_datetime(df_base['입실일자'])
-        df_base['예약일자'] = pd.to_datetime(df_base['예약일자'])
+        df_base['입실일자'] = safe_to_datetime(df_base['입실일자'])
+        df_base['예약일자'] = safe_to_datetime(df_base['예약일자'])
     if not df_new.empty:
-        df_new['입실일자'] = pd.to_datetime(df_new['입실일자'])
-        df_new['예약일자'] = pd.to_datetime(df_new['예약일자'])
-        # 신규 데이터 전처리 (금액 콤마 제거 등)
+        df_new['입실일자'] = safe_to_datetime(df_new['입실일자'])
+        df_new['예약일자'] = safe_to_datetime(df_new['예약일자'])
+        
+        # 신규 데이터 금액 전처리
         if df_new['총금액'].dtype == object:
             df_new['총금액'] = df_new['총금액'].astype(str).str.replace(',', '').astype(float)
         
@@ -61,14 +67,20 @@ def load_and_merge_data(base_file_path, new_files):
     # 합치기
     df_master = pd.concat([df_base, df_new], ignore_index=True)
     
+    # [중요] 날짜가 없는 행(오류 데이터)은 과감히 삭제 (에러 원인 제거)
+    df_master = df_master.dropna(subset=['입실일자', '예약일자'])
+
     # 중복 제거 (최신 데이터 우선)
     df_master = df_master.drop_duplicates(subset=['예약번호'], keep='last')
     
-    # 리드타임 등 파생 변수 생성
+    # 파생 변수 생성
     df_master['LeadTime'] = (df_master['입실일자'] - df_master['예약일자']).dt.days
-    df_master['Year'] = df_master['입실일자'].dt.isocalendar().year
-    df_master['Week'] = df_master['입실일자'].dt.isocalendar().week
-    df_master['Month'] = df_master['입실일자'].dt.month
+    
+    # Year/Week/Month 계산 (이제 날짜가 확실하므로 에러 안 남)
+    df_master['Year'] = df_master['입실일자'].dt.isocalendar().year.astype(int)
+    df_master['Week'] = df_master['입실일자'].dt.isocalendar().week.astype(int)
+    df_master['Month'] = df_master['입실일자'].dt.month.astype(int)
+    
     df_master['거래처'] = df_master['거래처'].fillna('Direct/Unknown')
     
     return df_master
@@ -86,18 +98,28 @@ with st.sidebar:
         if new_history and st.button("과거 데이터 저장하기"):
             temp_df = pd.DataFrame()
             for f in new_history:
-                d = pd.read_csv(f, header=2) if f.name.endswith('.csv') else pd.read_excel(f, header=2)
-                temp_df = pd.concat([temp_df, d])
-            # 전처리 후 저장
-            temp_df['입실일자'] = pd.to_datetime(temp_df['입실일자'], errors='coerce')
-            temp_df['예약일자'] = pd.to_datetime(temp_df['예약일자'], errors='coerce')
-            if temp_df['총금액'].dtype == object:
-                temp_df['총금액'] = temp_df['총금액'].astype(str).str.replace(',', '').astype(float)
-            cancel_k = ['취소', 'CXL', 'CANCEL']
-            temp_df = temp_df[~temp_df['상태'].astype(str).str.upper().apply(lambda x: any(k in x for k in cancel_k))]
-            temp_df.to_csv(DATA_FILE_PATH, index=False)
-            st.success("저장 완료!")
-            st.rerun()
+                try:
+                    d = pd.read_csv(f, header=2) if f.name.endswith('.csv') else pd.read_excel(f, header=2)
+                    temp_df = pd.concat([temp_df, d])
+                except Exception as e:
+                    st.error(f"저장 중 에러: {e}")
+            
+            if not temp_df.empty:
+                # 전처리 후 저장
+                temp_df['입실일자'] = pd.to_datetime(temp_df['입실일자'], errors='coerce')
+                temp_df['예약일자'] = pd.to_datetime(temp_df['예약일자'], errors='coerce')
+                # 날짜 없는 행 제거 후 저장
+                temp_df = temp_df.dropna(subset=['입실일자'])
+                
+                if temp_df['총금액'].dtype == object:
+                    temp_df['총금액'] = temp_df['총금액'].astype(str).str.replace(',', '').astype(float)
+                
+                cancel_k = ['취소', 'CXL', 'CANCEL']
+                temp_df = temp_df[~temp_df['상태'].astype(str).str.upper().apply(lambda x: any(k in x for k in cancel_k))]
+                
+                temp_df.to_csv(DATA_FILE_PATH, index=False)
+                st.success(f"저장 완료! (총 {len(temp_df)}건)")
+                st.rerun()
 
         # 현재 데이터 업로드
         daily_files = st.file_uploader("오늘 데이터(분석용)", accept_multiple_files=True, key='daily')
@@ -106,7 +128,7 @@ with st.sidebar:
 df = load_and_merge_data(DATA_FILE_PATH, daily_files)
 
 if df.empty:
-    st.info("👈 왼쪽에서 데이터를 업로드해주세요.")
+    st.info("👈 왼쪽 사이드바에서 데이터를 업로드해주세요.")
     st.stop()
 
 # -----------------------------------------------------------------------------
@@ -125,10 +147,6 @@ with col_filter2:
     # 거래처 리스트 추출
     all_accounts = sorted(df['거래처'].unique().astype(str))
     
-    # 주요 채널 자동 추천 (편의 기능)
-    major_OTA = ['Booking', 'Agoda', 'Expedia', 'Trip', 'Yanolja', 'Naver', 'Homepage']
-    # 실제 데이터에 있는 이름과 매칭되는지 확인 (여기서는 단순히 전체 리스트 제공)
-    
     selected_acc = st.multiselect(
         "분석할 거래처 선택 (비워두면 '전체 매출'로 분석합니다)", 
         options=all_accounts,
@@ -136,9 +154,6 @@ with col_filter2:
         placeholder="여기를 클릭하여 부킹닷컴, 아고다 등을 선택하세요..."
     )
 
-# [데이터 필터링 로직]
-# 사용자가 어카운트를 선택했으면 -> 해당 어카운트 데이터만 남김
-# 선택 안 했으면 -> 전체 데이터 사용
 if selected_acc:
     df_filtered = df[df['거래처'].isin(selected_acc)]
     filter_label = ", ".join(selected_acc)
@@ -152,8 +167,14 @@ st.divider()
 # -----------------------------------------------------------------------------
 # 4. 차트 그리기 (Target vs Reference)
 # -----------------------------------------------------------------------------
-# 기간 선택 컨트롤러
+# 연도 추출 (NaN 제거하고 int로 변환)
 available_years = sorted(df_filtered['Year'].unique(), reverse=True)
+
+# 데이터가 너무 없어서 연도가 안 잡히는 경우 방지
+if not available_years:
+    st.error("유효한 날짜 데이터가 없습니다. 파일을 확인해주세요.")
+    st.stop()
+
 c1, c2 = st.columns(2)
 
 target_df = pd.DataFrame()
@@ -166,7 +187,9 @@ if view_mode == "월별 (Monthly)":
         t_year = st.selectbox("Target 연도", available_years, index=0)
         t_month = st.selectbox("Target 월", range(1, 13))
     with c2:
-        r_year = st.selectbox("Reference 연도", available_years, index=1 if len(available_years)>1 else 0)
+        # Ref 연도 자동 선택 로직 강화
+        ref_idx = available_years.index(t_year-1) if (t_year-1) in available_years else (1 if len(available_years)>1 else 0)
+        r_year = st.selectbox("Reference 연도", available_years, index=ref_idx)
         r_month = st.selectbox("Reference 월", range(1, 13), index=t_month-1)
     
     target_df = df_filtered[(df_filtered['Year'] == t_year) & (df_filtered['Month'] == t_month)]
@@ -176,12 +199,17 @@ if view_mode == "월별 (Monthly)":
 elif view_mode == "주별 (Weekly)":
     with c1:
         t_year = st.selectbox("Target 연도", available_years, index=0)
-        max_week = df_filtered[df_filtered['Year']==t_year]['Week'].max()
-        if pd.isna(max_week): max_week = 52
-        t_week = st.selectbox("Target 주차 (Week)", range(1, int(max_week)+1))
+        # 해당 연도에 데이터가 있는 주차만 표시
+        weeks_in_year = sorted(df_filtered[df_filtered['Year']==t_year]['Week'].unique())
+        if not weeks_in_year: weeks_in_year = range(1, 53)
+        
+        t_week = st.selectbox("Target 주차 (Week)", weeks_in_year)
     with c2:
-        r_year = st.selectbox("Ref 연도", available_years, index=1 if len(available_years)>1 else 0)
-        r_week = st.selectbox("Ref 주차 (Week)", range(1, 54), index=t_week-1)
+        ref_idx = available_years.index(t_year-1) if (t_year-1) in available_years else (1 if len(available_years)>1 else 0)
+        r_year = st.selectbox("Ref 연도", available_years, index=ref_idx)
+        
+        # Ref 주차도 데이터가 있는 것 위주로 하되, 없으면 Target과 같은 주차
+        r_week = st.selectbox("Ref 주차 (Week)", range(1, 54), index=min(t_week-1, 52))
 
     target_df = df_filtered[(df_filtered['Year'] == t_year) & (df_filtered['Week'] == t_week)]
     ref_df = df_filtered[(df_filtered['Year'] == r_year) & (df_filtered['Week'] == r_week)]
@@ -191,7 +219,8 @@ else: # 연간
     with c1:
         t_year = st.selectbox("Target 연도", available_years, index=0)
     with c2:
-        r_year = st.selectbox("Reference 연도", available_years, index=1 if len(available_years)>1 else 0)
+        ref_idx = available_years.index(t_year-1) if (t_year-1) in available_years else (1 if len(available_years)>1 else 0)
+        r_year = st.selectbox("Reference 연도", available_years, index=ref_idx)
     
     target_df = df_filtered[df_filtered['Year'] == t_year]
     ref_df = df_filtered[df_filtered['Year'] == r_year]
@@ -205,6 +234,7 @@ if not target_df.empty:
     # 페이스 계산 함수 (누적 합계)
     def calculate_pace(d):
         if d.empty: return pd.Series(dtype=float)
+        # 리드타임 내림차순 정렬 -> 누적합 -> 다시 원래대로
         return d.groupby('LeadTime')['총금액'].sum().sort_index(ascending=False).cumsum().sort_index()
 
     pace_t = calculate_pace(target_df)
@@ -253,12 +283,8 @@ if not target_df.empty:
     
     # [추가 정보] 수치 요약
     st.markdown("#### 🔢 Summary")
-    final_t = pace_t.iloc[-1] if not pace_t.empty else 0 # 누적의 마지막 값이 최종이 아님. 누적의 첫값(D-Day 0에 가까운)이 최종.
-    # cumsum().sort_index() 했으므로, index가 작은 것(D-Day가 0에 가까운 것)이 최종 누적액임.
-    # 하지만 sort_index()를 했으므로 index 순서대로 데이터가 정렬됨 (예: -300, -299... 0). 
-    # 즉 배열의 마지막 값이 최종 누적액임.
     
-    final_t_val = pace_t.values[-1]
+    final_t_val = pace_t.values[-1] # 누적의 끝값(실제 총합)
     final_r_val = pace_r.values[-1] if not pace_r.empty else 0
     
     gap = final_t_val - final_r_val
@@ -270,4 +296,4 @@ if not target_df.empty:
     col_sum3.metric("차이 (Gap)", f"{gap:,.0f} 원", f"{gap_pct:.1f}%")
 
 else:
-    st.warning("선택하신 조건(연도/월/거래처)에 해당하는 데이터가 없습니다.")
+    st.warning("선택하신 조건에 해당하는 예약 데이터가 없습니다.")
