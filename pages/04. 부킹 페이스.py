@@ -32,7 +32,7 @@ def init_firebase():
 db = init_firebase()
 
 # -----------------------------------------------------------------------------
-# 2. 데이터 업로드 함수 (Admin용)
+# 2. 데이터 업로드 함수 (Admin용 - 배치 쓰기)
 # -----------------------------------------------------------------------------
 def upload_to_firestore(df_new):
     if df_new.empty or db is None: return
@@ -68,30 +68,41 @@ def upload_to_firestore(df_new):
             batch.commit()
             batch = db.batch()
             status_bar.progress(count / total)
-            status_text.text(f"🚀 {count}/{total} 업로드 중...")
+            status_text.text(f"🚀 업로드 중... ({count}/{total})")
             
     batch.commit()
     status_bar.empty()
     status_text.success(f"✅ {total}건 업데이트 완료!")
 
 # -----------------------------------------------------------------------------
-# [NEW] 데이터 전체 삭제 함수 (초기화용)
+# [⚡수정됨] 데이터 고속 삭제 함수 (Batch Delete)
 # -----------------------------------------------------------------------------
 def delete_all_data():
     if db is None: return
     
     coll_ref = db.collection('hotel_bookings')
-    docs = coll_ref.limit(500).stream()
-    deleted = 0
+    batch_size = 400 # Firestore 배치 한계는 500
     
-    for doc in docs:
-        doc.reference.delete()
-        deleted += 1
+    # 반복문으로 400개씩 뭉텅이로 삭제
+    while True:
+        # 1. 400개 가져오기
+        docs = list(coll_ref.limit(batch_size).stream())
+        deleted_count = 0
         
-    if deleted >= 500:
-        return delete_all_data() # 재귀 호출로 남은 데이터 계속 삭제
+        if not docs:
+            break # 더 이상 지울 게 없으면 종료
+            
+        # 2. 배치에 담기
+        batch = db.batch()
+        for doc in docs:
+            batch.delete(doc.reference)
+            deleted_count += 1
+            
+        # 3. 한 번에 삭제 요청 (네트워크 1번만 탐)
+        batch.commit()
+        st.toast(f"🗑️ {deleted_count}건 삭제 중...")
         
-    st.toast("🗑️ 데이터가 깨끗하게 삭제되었습니다.")
+    st.toast("✨ 모든 데이터가 깨끗하게 삭제되었습니다!")
 
 # -----------------------------------------------------------------------------
 # 3. 데이터 조회 함수 (Viewer용)
@@ -144,7 +155,7 @@ with st.sidebar:
                 st.cache_data.clear()
                 st.rerun()
 
-    # [2] 초기화 섹션 (NEW)
+    # [2] 초기화 섹션
     st.divider()
     with st.expander("⚠️ 데이터 초기화 (Danger Zone)", expanded=False):
         st.warning("경고: 모든 데이터가 영구 삭제됩니다.")
@@ -152,7 +163,7 @@ with st.sidebar:
         
         if st.button("🗑️ 모든 데이터 삭제"):
             if check_text == "초기화":
-                with st.spinner("삭제 중입니다... 잠시만 기다려주세요."):
+                with st.spinner("🚀 고속 삭제 모드 가동... 잠시만 기다려주세요."):
                     delete_all_data()
                     st.cache_data.clear()
                     st.success("초기화 완료! 다시 파일을 업로드해주세요.")
