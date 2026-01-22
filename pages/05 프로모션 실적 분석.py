@@ -79,10 +79,10 @@ def get_all_promotions():
 
 # --- [2. 메인 대시보드 화면 구성] ---
 def main():
-    st.set_page_config(page_title="엠버 프로모션 분석 엔진", layout="wide")
-    st.title("📊 엠버 프로모션 성과 분석 및 비교 대시보드")
+    st.set_page_config(page_title="엠버 RM 분석 엔진", layout="wide")
+    st.title("🚀 엠버 프로모션 성과 분석 및 정밀 비교 대시보드")
 
-    tab1, tab2 = st.tabs(["📈 성과 분석 및 비교", "📤 데이터 업로드"])
+    tab1, tab2 = st.tabs(["📊 정밀 비교 분석", "📤 데이터 업로드"])
 
     # --- TAB 1: 분석 및 비교 모드 ---
     with tab1:
@@ -91,12 +91,12 @@ def main():
         if not all_data:
             st.info("데이터가 없습니다. 업로드 탭에서 엑셀 파일을 먼저 등록해주세요.")
         else:
+            # 사이드바 필터: 기준 데이터 vs 비교 데이터
             st.sidebar.header("🔍 분석 대상 설정")
-            
-            # 기준 데이터 선택
             partners = sorted(list(set([d.get('partner', '알수없음') for d in all_data])))
-            selected_partner = st.sidebar.selectbox("기준 거래처 선택", partners, key="main_partner")
             
+            # 기준 프로모션 선택
+            selected_partner = st.sidebar.selectbox("기준 거래처 선택", partners, key="main_partner")
             partner_promos = [d for d in all_data if d.get('partner') == selected_partner]
             partner_promos.sort(key=lambda x: str(x.get('start_date')), reverse=True)
             
@@ -109,7 +109,7 @@ def main():
             
             # 비교 모드 활성화
             st.sidebar.divider()
-            compare_on = st.sidebar.checkbox("🔄 비교 분석 모드 활성화 (YoY/Comp)")
+            compare_on = st.sidebar.checkbox("🔄 비교 분석 모드 활성화", value=True)
             compare_promo = None
             if compare_on:
                 c_partner = st.sidebar.selectbox("비교 거래처 선택", partners, key="comp_partner")
@@ -148,77 +148,89 @@ def main():
 
             st.divider()
 
-            # 시각화 1: 예약 곡선 비교 (Pace)
-            if compare_on and compare_promo:
-                st.subheader("📈 프로모션 예약 속도 비교 (Pace Comparison)")
+            # --- 정밀 비교 시각화 섹션 ---
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                # 1. 예약 Pace 비교
+                st.subheader("📈 예약 생산 속도 비교 (Pace)")
                 df_main_p = df_main.sort_values('예약일자')
                 df_main_p['누적_RN'] = df_main_p['박수'].cumsum()
-                df_main_p['구분'] = f"기준: {target_promo['partner']}"
+                df_main_p['구분'] = "기준"
                 
-                df_comp_p = df_comp.sort_values('예약일자')
-                df_comp_p['누적_RN'] = df_comp_p['박수'].cumsum()
-                df_comp_p['구분'] = f"비교: {compare_promo['partner']}"
-                
-                combined_pace = pd.concat([df_main_p[['예약일자', '누적_RN', '구분']], df_comp_p[['예약일자', '누적_RN', '구분']]])
-                fig_pace = px.line(combined_pace, x='예약일자', y='누적_RN', color='구분', title="누적 예약 생산 곡선 비교")
-                st.plotly_chart(fig_pace, use_container_width=True)
-            else:
-                st.subheader("📈 누적 예약 생산 곡선 (Pace)")
-                pace_df = df_main.sort_values('예약일자')
-                pace_df['누적_RN'] = pace_df['박수'].cumsum()
-                fig_pace = px.line(pace_df, x='예약일자', y='누적_RN', title="프로모션 누적 예약 추이")
-                st.plotly_chart(fig_pace, use_container_width=True)
+                if compare_on and compare_promo:
+                    df_comp_p = df_comp.sort_values('예약일자')
+                    df_comp_p['누적_RN'] = df_comp_p['박수'].cumsum()
+                    df_comp_p['구분'] = "비교"
+                    combined_p = pd.concat([df_main_p[['예약일자', '누적_RN', '구분']], df_comp_p[['예약일자', '누적_RN', '구분']]])
+                    st.plotly_chart(px.line(combined_p, x='예약일자', y='누적_RN', color='구분', title="누적 예약 생산 곡선 비교"), use_container_width=True)
+                else:
+                    st.plotly_chart(px.line(df_main_p, x='예약일자', y='누적_RN', title="누적 예약 생산 곡선 (Pace)"), use_container_width=True)
+
+            with col_b:
+                # 2. 요일별 ADR 비교
+                st.subheader("📅 요일별 ADR 성적 비교 (DOW)")
+                dow_main = df_main.groupby('요일')['ADR_객실'].mean().reset_index()
+                dow_main['구분'] = "기준"
+                if compare_on and compare_promo:
+                    dow_comp = df_comp.groupby('요일')['ADR_객실'].mean().reset_index()
+                    dow_comp['구분'] = "비교"
+                    combined_dow = pd.concat([dow_main, dow_comp])
+                    st.plotly_chart(px.bar(combined_dow, x='요일', y='ADR_객실', color='구분', barmode='group', title="요일별 평균 단가 비교"), use_container_width=True)
+                else:
+                    st.plotly_chart(px.bar(dow_main, x='요일', y='ADR_객실', title="요일별 평균 단가 (ADR)"), use_container_width=True)
 
             st.divider()
 
-            # 시각화 2: 요일 및 리드타임
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("📅 요일별 실적 (DOW)")
-                dow_df = df_main.groupby('요일').agg({'총금액':'sum', 'ADR_객실':'mean'}).reset_index()
-                fig_dow = px.bar(dow_df, x='요일', y='총금액', color='ADR_객실', title="요일별 매출 (색상: ADR)", color_continuous_scale='Portland')
-                st.plotly_chart(fig_dow, use_container_width=True)
-            with col2:
-                st.subheader("⏱️ 예약 리드타임 분포")
-                lt_order = ['당일', '1-3일전', '4-7일전', '8-14일전', '15-30일전', '30일+']
-                lt_sum = df_main['LT구간'].value_counts().reindex(lt_order).reset_index()
-                fig_lt = px.bar(lt_sum, x='LT구간', y='count', color='count', title="예약 시점 비중")
-                st.plotly_chart(fig_lt, use_container_width=True)
+            col_c, col_d = st.columns(2)
+            with col_c:
+                # 3. 리드타임 비중 비교
+                st.subheader("⏱️ 예약 시점 비중 비교 (Lead Time)")
+                lt_main = df_main['LT구간'].value_counts(normalize=True).reset_index()
+                lt_main['구분'] = "기준"
+                if compare_on and compare_promo:
+                    lt_comp = df_comp['LT구간'].value_counts(normalize=True).reset_index()
+                    lt_comp['구분'] = "비교"
+                    combined_lt = pd.concat([lt_main, lt_comp])
+                    st.plotly_chart(px.bar(combined_lt, x='LT구간', y='proportion', color='구분', barmode='group', title="예약 리드타임 비중 비교"), use_container_width=True)
+                else:
+                    st.plotly_chart(px.bar(lt_main, x='LT구간', y='proportion', title="예약 리드타임 비중"), use_container_width=True)
+
+            with col_d:
+                # 4. 객실 타입별 매출 기여도 비교
+                st.subheader("🏨 객실 타입별 매출 기여도")
+                room_main = df_main.groupby('객실타입')['총금액'].sum().reset_index()
+                room_main['구분'] = "기준"
+                if compare_on and compare_promo:
+                    room_comp = df_comp.groupby('객실타입')['총금액'].sum().reset_index()
+                    room_comp['구분'] = "비교"
+                    combined_room = pd.concat([room_main, room_comp])
+                    st.plotly_chart(px.bar(combined_room, x='객실타입', y='총금액', color='구분', barmode='group', title="객실 타입별 매출 비교"), use_container_width=True)
+                else:
+                    st.plotly_chart(px.bar(room_main, x='객실타입', y='총금액', title="객실 타입별 매출 합계"), use_container_width=True)
 
             st.divider()
-
-            # 시각화 3: 히트맵 및 객실타입
-            col3, col4 = st.columns(2)
-            with col3:
-                st.subheader("🔥 투숙 집중도 히트맵")
+            
+            # --- 상세 패턴 분석 섹션 (히트맵, 국적, 상품군, 부대수익 100% 유지) ---
+            st.subheader("📊 상세 예약 패턴 분석 (기준 데이터 중심)")
+            d1, d2, d3 = st.columns(3)
+            with d1:
                 heat_data = df_main.groupby(['입실주차', '요일']).size().unstack(fill_value=0)
                 valid_dow = [c for c in ['01.월', '02.화', '03.수', '04.목', '05.금', '06.토', '07.일'] if c in heat_data.columns]
                 heat_data = heat_data.reindex(columns=valid_dow)
-                fig_heat = px.imshow(heat_data, text_auto=True, color_continuous_scale="YlOrRd")
-                st.plotly_chart(fig_heat, use_container_width=True)
-            with col4:
-                st.subheader("🏨 객실 타입별 실적")
-                room_perf = df_main.groupby('객실타입').agg({'총금액':'sum', '박수':'sum', 'ADR_객실':'mean'}).reset_index()
-                room_perf.columns = ['타입', '매출액', 'RN', 'ADR']
-                st.dataframe(room_perf.style.format({'매출액': '{:,.0f}', 'ADR': '{:,.0f}'}))
+                st.plotly_chart(px.imshow(heat_data, text_auto=True, color_continuous_scale="YlOrRd", title="투숙 집중도 히트맵"), use_container_width=True)
+            with d2:
+                st.plotly_chart(px.pie(df_main, names='국적', hole=0.5, title="예약 국적 분포"), use_container_width=True)
+            with d3:
+                st.plotly_chart(px.pie(df_main, names='상품구분', title="조식 포함 vs 룸온리 비중"), use_container_width=True)
 
             st.divider()
-
-            # 시각화 4: 비중 및 부대수익
-            d1, d2, d3 = st.columns(3)
-            with d1:
-                st.subheader("🌍 국적 비중")
-                st.plotly_chart(px.pie(df_main, names='국적', hole=0.5), use_container_width=True)
-            with d2:
-                st.subheader("🍳 상품군 판매 비중")
-                st.plotly_chart(px.pie(df_main, names='상품구분', color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
-            with d3:
-                st.subheader("🍱 부대수익 분석")
-                all_svcs = [x.strip() for s in df_main['서비스목록'] for x in s if x.strip() != '']
-                if all_svcs:
-                    svc_df = pd.Series(all_svcs).value_counts().reset_index()
-                    svc_df.columns = ['서비스명', '건수']
-                    st.plotly_chart(px.bar(svc_df, x='서비스명', y='건수', color='건수'), use_container_width=True)
+            st.subheader("🍱 부대수익 및 서비스 분석")
+            all_svcs = [x.strip() for s in df_main['서비스목록'] for x in s if x.strip() != '']
+            if all_svcs:
+                svc_df = pd.Series(all_svcs).value_counts().reset_index()
+                svc_df.columns = ['서비스명', '건수']
+                st.plotly_chart(px.bar(svc_df, x='서비스명', y='건수', color='건수', title="추가 서비스 판매 현황"), use_container_width=True)
 
             st.divider()
             with st.expander("📄 전체 예약 목록 및 원본 데이터 (Raw Data)", expanded=False):
@@ -233,11 +245,10 @@ def main():
             df_load.columns = [str(c).strip() for c in df_load.columns]
             
             try:
-                # 1. 거래처 추출
+                # AE열(31번째 열, 인덱스 30) 강제 조준
+                df_load['예약일자'] = df_load.iloc[:, 30]
                 val_partner = str(df_load['거래처'].iloc[0]).split('[')[0].strip()
-                
-                # 2. 예약일자(AE열) 기준 기간 자동 계산 (iloc[:, 30] = 31번째 열)
-                res_series = pd.to_datetime(df_load.iloc[:, 30], errors='coerce').dropna()
+                res_series = pd.to_datetime(df_load['예약일자'], errors='coerce').dropna()
                 
                 if not res_series.empty:
                     start_date = str(res_series.min().date())
