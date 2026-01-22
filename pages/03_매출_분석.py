@@ -251,7 +251,6 @@ def process_data(uploaded_file, status, sub_segment="General"):
 
         df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d') 
         df['Status'] = status
-        
         df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['Booking_dt'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
         df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
@@ -419,7 +418,7 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
             st.info("국적 데이터 없음")
 
 # ==============================================================================
-# UI 메인
+# UI 메인 실행
 # ==============================================================================
 try:
     st.title("🏛️ 앰버 호텔 경영 리포트 (Final Integrity)")
@@ -543,14 +542,14 @@ try:
                 else: st.info("예약 데이터 없음")
                 
                 st.divider()
-                c_left, c_right = st.columns(2)
-                with c_left:
+                c1,c2 = st.columns(2)
+                with c1: 
                     st.subheader("3. 국적별 비중")
                     if 'Nat_Group' in df_paid_bk.columns and not df_paid_bk.empty:
                         nat_gm = df_paid_bk.groupby('Nat_Group')['RN'].sum().reset_index()
                         st.plotly_chart(px.pie(nat_gm, values='RN', names='Nat_Group', hole=0.4), use_container_width=True)
                     else: st.info("데이터 없음")
-                with c_right:
+                with c2:
                     st.subheader("4. 월별 예약/취소 집중도")
                     bk_m = df_paid_bk.groupby('Stay_Month')['RN'].sum().reset_index(); bk_m['Type'] = '예약'
                     cn_m = df_list_cn.groupby('Stay_Month')['RN'].sum().reset_index(); cn_m['Type'] = '취소'
@@ -602,15 +601,17 @@ try:
                     fig_otb.add_trace(go.Scatter(x=otb_monthly['Stay_Month'], y=otb_monthly['Budget_Rev'], name='Budget (목표)', line=dict(color='#E74C3C', width=3, dash='dot')))
                     st.plotly_chart(fig_otb, use_container_width=True)
                     
-                    # 6. 표 출력 (Budget, OTB, %, RN)
+                    # 6. 표 출력
                     st.subheader("📋 월별 달성률 상세")
                     cols = ['Stay_Month', 'Budget_Rev', 'OTB_Rev', 'Budget_Achiev', 'OTB_RN']
                     styler = merged_final[cols].style.format({
                         'Budget_Rev': "{:,.0f}", 'OTB_Rev': "{:,.0f}", 
                         'OTB_RN': "{:,.0f}", 'Budget_Achiev': "{:.1f}%"
                     })
+                    
                     def highlight_total(row):
                         return ['background-color: #fff9c4; font-weight: bold; color: black; border-top: 2px solid black'] * len(row) if row['Stay_Month'] == 'TOTAL' else [''] * len(row)
+                    
                     styler = styler.apply(highlight_total, axis=1)
                     st.dataframe(styler, hide_index=True, use_container_width=True)
 
