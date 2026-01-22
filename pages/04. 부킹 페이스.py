@@ -127,42 +127,95 @@ def load_from_firestore():
 # -----------------------------------------------------------------------------
 # 4. 사이드바 (Admin & Diagnosis)
 # -----------------------------------------------------------------------------
+사장님, 에러 방지 로직과 대용량 처리를 위한 안전장치를 강화한 사이드바 전체 코드입니다.
+
+특히 아까 발생했던 KeyError: '상태' 에러를 해결하기 위해, 데이터가 비어있거나 컬럼이 없어도 사이드바는 정상적으로 보이도록 설계했습니다. 또한, 4만 건 이상의 대용량 파일을 올릴 때 브라우저가 멈추지 않도록 안내 문구도 추가했습니다.
+
+🛠️ 수정된 사이드바 전체 코드
+이 부분을 with st.sidebar: 시작점부터 끝까지 통째로 덮어씌우시면 됩니다.
+
+Python
+# -----------------------------------------------------------------------------
+# 4. 사이드바 (시스템 관리 및 필터)
+# -----------------------------------------------------------------------------
 with st.sidebar:
     st.title("⚙️ 시스템 관리")
     st.write(f"**DB 상태:** {db_status}")
     
+    # DB 연결 실패 시 중단
     if db is None:
         st.error("❌ Firebase 연결 실패! Secrets 설정을 확인하세요.")
         st.stop()
 
-    # 업로드 버튼
+    # --- [A] 데이터 업로드 섹션 ---
     with st.expander("📤 데이터 업로드", expanded=True):
-        up_files = st.file_uploader("엑셀/CSV 파일", accept_multiple_files=True)
+        st.info("💡 4만 건 이상 대용량은 1만 건씩 나눠 올리기를 권장합니다.")
+        up_files = st.file_uploader("엑셀/CSV 파일 (여러 개 선택 가능)", accept_multiple_files=True)
+        
         if up_files:
             if st.button("🚀 DB 업데이트 시작", key="btn_upload"):
                 all_df = []
                 for f in up_files:
                     try:
+                        # 헤더 2번줄 스킵 로직 포함
                         tmp = pd.read_csv(f, header=2) if f.name.endswith('.csv') else pd.read_excel(f, header=2)
                         all_df.append(tmp)
-                    except: pass
+                    except Exception as e:
+                        st.error(f"파일 읽기 실패 ({f.name}): {e}")
+                
                 if all_df:
-                    upload_to_firestore(pd.concat(all_df))
-                    st.rerun()
+                    with st.spinner("데이터 분석 및 클라우드 전송 중..."):
+                        combined_upload_df = pd.concat(all_df, ignore_index=True)
+                        upload_to_firestore(combined_upload_df)
+                        # 업로드 완료 후 캐시 삭제 및 새로고침
+                        st.cache_data.clear()
+                        st.rerun()
 
-    # 초기화 버튼
+    # --- [B] 데이터 초기화 섹션 ---
     st.divider()
     with st.expander("⚠️ 데이터 초기화"):
+        st.warning("경고: 모든 데이터가 파이어베이스에서 영구 삭제됩니다.")
         pw = st.text_input("확인 메시지 ('초기화' 입력)")
+        
         if st.button("🗑️ 전체 데이터 삭제", key="btn_delete"):
             if pw == "초기화":
-                with st.spinner("삭제 중..."):
-                    num = delete_all_data()
-                    st.cache_data.clear()
-                    st.success(f"{num}건 삭제 완료!")
-                    st.rerun()
+                with st.spinner("🚀 고속 삭제 모드 가동 중..."):
+                    try:
+                        num = delete_all_data()
+                        st.cache_data.clear()
+                        st.success(f"총 {num}건 삭제 완료! 이제 다시 업로드 가능합니다.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"삭제 중 오류 발생: {e}")
             else:
                 st.error("입력값이 틀렸습니다.")
+
+    # --- [C] 필터 설정 섹션 (에러 방지 로직 포함) ---
+    st.divider()
+    st.markdown("**🚫 필터 설정**")
+    
+    # 데이터가 로드되었을 때만 필터 활성화
+    if not df.empty:
+        # '상태' 컬럼 존재 여부 체크 (KeyError 방지)
+        if '상태' in df.columns:
+            all_sts = df['상태'].unique().astype(str)
+            # 취소 관련 키워드 자동 감지
+            cancel_k = ['취소', 'CXL', 'CANCEL', 'NO', 'NOSHOW', 'RC', 'RX']
+            def_exc = [s for s in all_sts if any(x in s.upper() for x in cancel_k)]
+            
+            exc_sts = st.multiselect(
+                "제외할 상태 (취소 등)", 
+                options=all_sts, 
+                default=def_exc,
+                help="체크된 상태는 매출 분석에서 제외됩니다."
+            )
+            # 메인 화면에서 쓸 필터링된 데이터 (상위 코드에서 사용)
+            df_clean = df[~df['상태'].isin(exc_sts)]
+        else:
+            st.warning("⚠️ 데이터에 '상태' 컬럼이 없습니다.")
+            df_clean = df
+    else:
+        df_clean = df
 
 # -----------------------------------------------------------------------------
 # 5. 메인 화면
