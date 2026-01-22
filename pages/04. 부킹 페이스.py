@@ -5,6 +5,7 @@ import plotly.express as px
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
+import time # 시간 지연을 위해 추가
 
 # -----------------------------------------------------------------------------
 # 1. Firebase 접속 설정
@@ -39,59 +40,56 @@ def upload_to_firestore(df_new):
     
     df_new = df_new.copy()
     
-    # 1. 날짜 컬럼들을 먼저 안전하게 변환
+    # 1. 날짜 및 데이터 정제 (NaT/NaN 제거)
     date_columns = ['입실일자', '예약일자', '퇴실일자', '취소일자', '확인일자']
     for col in date_columns:
         if col in df_new.columns:
             df_new[col] = pd.to_datetime(df_new[col], errors='coerce')
 
-    # 2. [핵심] 파이어베이스 에러 방지 처리
-    # NaT(빈 날짜)나 NaN(빈 값)은 파이어베이스가 인식을 못하므로 None으로 변환
+    # NaT/NaN을 None으로 변환하여 Firestore 에러 방지
     df_upload = df_new.where(pd.notnull(df_new), None)
-    
-    # 3. 예약번호 문자열 고정
     df_upload['예약번호'] = df_upload['예약번호'].astype(str)
 
     total = len(df_upload)
-    batch = db.batch()
     count = 0
+    # [수정] 배치 사이즈를 100으로 줄여서 안정성 강화
+    batch_size = 100 
+    batch = db.batch()
     
     status_bar = st.progress(0)
     status_text = st.empty()
     
-    # 4. 루프 최적화
     for _, row in df_upload.iterrows():
         doc_id = row['예약번호']
-        if not doc_id or doc_id == 'None': continue # 예약번호 없는 유령 데이터 건너뜀
+        if not doc_id or doc_id == 'None': continue
         
         doc_ref = db.collection('hotel_bookings').document(doc_id)
         
-        # 행 데이터를 딕셔너리로 변환
+        # 딕셔너리 정제
         row_dict = row.to_dict()
-        
-        # [에러 방지] 딕셔너리 내부의 NaT 객체들을 다시 한번 검사하여 제거
-        final_payload = {}
-        for k, v in row_dict.items():
-            if pd.isna(v): # NaT, NaN 모두 포함
-                final_payload[k] = None
-            else:
-                final_payload[k] = v
+        final_payload = {k: (None if pd.isna(v) else v) for k, v in row_dict.items()}
         
         batch.set(doc_ref, final_payload, merge=True)
         count += 1
         
-        # 5. 전송 묶음(Batch) 최적화
-        if count % 400 == 0:
-            batch.commit()
-            batch = db.batch()
-            status_bar.progress(count / total)
-            status_text.text(f"🚀 고속 업데이트 중... ({count}/{total})")
+        # 배치 커밋 (100개마다)
+        if count % batch_size == 0:
+            try:
+                batch.commit()
+                # [수정] 서버 부하 방지를 위해 0.1초 짧은 휴식
+                time.sleep(0.1) 
+                batch = db.batch()
+                
+                status_bar.progress(count / total)
+                status_text.text(f"🐢 안전 모드로 업데이트 중... ({count}/{total})")
+            except Exception as e:
+                st.error(f"⚠️ 전송 중 일시적 오류 발생: {e}. 다시 시도합니다.")
+                time.sleep(1) # 에러 시 1초 대기 후 다음 배치 시도
             
-    # 남은 잔여 데이터 처리
+    # 남은 데이터 최종 전송
     batch.commit()
     status_bar.empty()
-    status_text.success(f"✅ {total}건 업데이트 완료! 이제 정상적으로 조회됩니다.")
-
+    status_text.success(f"✅ {total}건 업데이트 완료! 이제 안심하고 사용하세요.")
 # -----------------------------------------------------------------------------
 # [⚡수정됨] 데이터 고속 삭제 함수 (Batch Delete)
 # -----------------------------------------------------------------------------
