@@ -16,32 +16,36 @@ st.set_page_config(page_title="ARI Final Integrity", layout="wide")
 
 st.markdown("""
 <style>
-    /* 여백 조정 */
-    .block-container { padding-top: 1rem; padding-bottom: 5rem; }
+    /* 전체 여백 조정 */
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 5rem;
+    }
     
-    /* 숫자(Metric) 스타일 */
-    div[data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 900; color: #0f172a; }
-    div[data-testid="stMetricLabel"] { font-size: 15px !important; font-weight: 700; color: #64748b; }
+    /* 숫자(Metric) 스타일: 크고 진하게 */
+    div[data-testid="stMetricValue"] { 
+        font-size: 26px !important; 
+        font-weight: 900; 
+        color: #0f172a; 
+    }
+    div[data-testid="stMetricLabel"] { 
+        font-size: 15px !important; 
+        font-weight: 700; 
+        color: #64748b; 
+    }
     
     /* 탭 스타일 */
-    button[data-baseweb="tab"] { font-size: 16px !important; font-weight: 700; }
+    button[data-baseweb="tab"] { 
+        font-size: 16px !important; 
+        font-weight: 700; 
+    }
     
-    /* 합계 행 스타일 */
+    /* 데이터프레임 합계(Total) 행 스타일 강조 */
     [data-testid="stDataFrame"] table tr:last-child td {
         font-weight: 900 !important;
-        background-color: #fff9c4 !important;
+        background-color: #fff9c4 !important; /* 연한 노란색 */
         color: #000000 !important;
         border-top: 2px solid #000000 !important;
-    }
-    
-    /* 삭제 버튼 스타일 (빨간색) */
-    div.stButton > button:first-child {
-        border-color: #ff4b4b;
-        color: #ff4b4b;
-    }
-    div.stButton > button:first-child:hover {
-        background-color: #ff4b4b;
-        color: white;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -54,42 +58,32 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(dict(st.secrets["firebase"]))
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"🔥 연결 실패: {e}")
+        st.error(f"🔥 파이어베이스 연결 실패: {e}")
         st.stop()
 
 db = firestore.client()
 COLLECTION_NAME = "revenue_integrity_history"
 
 # ==============================================================================
-# 2. 데이터 관리 함수 (삭제/저장/로드/정제)
+# 2. 핵심 유틸리티 함수: 데이터 정제 및 저장/로드
 # ==============================================================================
 
-def delete_all_data():
-    """[신규] 컬렉션의 모든 데이터를 삭제하는 함수 (초기화용)"""
-    try:
-        docs = db.collection(COLLECTION_NAME).stream()
-        deleted = 0
-        for doc in docs:
-            doc.reference.delete()
-            deleted += 1
-        return deleted
-    except Exception as e:
-        st.error(f"삭제 중 오류: {e}")
-        return 0
-
 def clean_numeric_columns(df):
-    """숫자 컬럼 강제 변환 및 ADR 재계산"""
+    """
+    [핵심] 데이터프레임의 숫자 컬럼을 강제로 숫자형(Float/Int)으로 변환
+    """
     target_cols = ['RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total', 'Lead_Time', 
                    'OTB_Rev', 'Actual_Rev', 'OTB_RN', 'Actual_RN']
     
     for col in target_cols:
         if col in df.columns:
+            # 1. 문자열 변환 -> 2. 콤마 제거 -> 3. 숫자 변환 -> 4. NaN은 0으로
             df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), 
+                df[col].astype(str).str.replace(',', ''), 
                 errors='coerce'
             ).fillna(0)
             
-    # ADR 재계산
+    # [ADR 재계산 로직] 숫자가 된 상태에서 다시 계산하여 정확도 보장
     if 'RN' in df.columns:
         if 'Room_Revenue' in df.columns:
             df['ADR_Room'] = np.where(df['RN'] > 0, df['Room_Revenue'] / df['RN'], 0)
@@ -99,13 +93,14 @@ def clean_numeric_columns(df):
     return df
 
 def save_to_firestore(df):
+    """데이터 저장"""
     try:
         records = df.fillna(0).astype(str).to_dict(orient='records')
         doc_ref = db.collection(COLLECTION_NAME).document()
         doc_ref.set({
             'data': records,
             'uploaded_at': datetime.now(),
-            'snapshot_date': datetime.now().strftime('%Y-%m-%d'),
+            'snapshot_date': datetime.now().strftime('%Y-%m-%d'), 
             'count': len(records)
         })
         return True
@@ -115,6 +110,7 @@ def save_to_firestore(df):
 
 @st.cache_data(ttl=0)
 def load_data_from_firestore():
+    """데이터 로드"""
     try:
         docs = db.collection(COLLECTION_NAME).stream()
         all_data = []
@@ -129,10 +125,15 @@ def load_data_from_firestore():
                     all_data.append(row)
         return all_data
     except Exception as e:
-        st.error(f"❌ 로드 오류: {e}")
+        st.error(f"❌ 데이터 로드 오류: {e}")
         return []
 
+# ==============================================================================
+# 3. 엑셀 파일 처리 로직
+# ==============================================================================
+
 def normalize_and_map_columns(df):
+    """컬럼명 표준화"""
     col_map = {}
     rules = {
         'CheckIn': ['checkin', 'check-in', 'arrival', '입실', '일자', 'date'],
@@ -148,6 +149,7 @@ def normalize_and_map_columns(df):
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
         'Lead_Time': ['lead', '리드', 'lt', 'l/t']
     }
+
     for original_col in df.columns:
         clean_col = str(original_col).lower().replace(" ", "").replace("_", "").replace("-", "")
         mapped = False
@@ -174,6 +176,7 @@ def find_valid_header_row(df):
     return df
 
 def process_data(uploaded_file, status, sub_segment="General"):
+    """파일 업로드 처리"""
     try:
         is_otb = "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
         
@@ -188,7 +191,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
                 df_raw = df_raw[~df_raw['일자'].astype(str).str.contains('소계|Subtotal|합계|Total', na=False)]
             
             df = pd.DataFrame()
-            df['Guest_Name'] = 'OTB_DATA' # 이름 단순화
+            df['Guest_Name'] = f'OTB_{sub_segment}_DATA'
             date_col = next((c for c in df_raw.columns if '일자' in str(c) or 'Date' in str(c)), df_raw.columns[0])
             df['CheckIn'] = pd.to_datetime(df_raw[date_col], errors='coerce')
             
@@ -196,13 +199,13 @@ def process_data(uploaded_file, status, sub_segment="General"):
                 df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
                 df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
                 df['ADR_Room'] = pd.to_numeric(df_raw.iloc[:, -3], errors='coerce').fillna(0)
-                df['Total_Revenue'] = df['Room_Revenue']
+                df['Total_Revenue'] = df['Room_Revenue'] # OTB는 보통 객실매출만 있음
             except:
                 df['RN'] = 0; df['Room_Revenue'] = 0; df['ADR_Room'] = 0; df['Total_Revenue'] = 0
 
             df['ADR_Total'] = df['ADR_Room']
             df['Booking_Date'] = df['CheckIn']
-            df['Segment'] = 'OTB' # [변경] 구분 없이 그냥 OTB
+            df['Segment'] = 'OTB' # 통합 OTB
             df['Account'] = 'OTB_Summary'
             df['Room_Type'] = 'Run of House'
             df['Nat_Orig'] = 'KOR'
@@ -229,6 +232,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
             df['RN'] = df['Rooms'] * df['Nights'].replace(0, 1)
             df['Is_Zero_Rate'] = df['Room_Revenue'] <= 0
             
+            # ADR 2개 계산 (객실 / 전체)
             df['ADR_Room'] = df.apply(lambda x: x['Room_Revenue'] / x['RN'] if x['RN'] > 0 else 0, axis=1)
             df['ADR_Total'] = df.apply(lambda x: x['Total_Revenue'] / x['RN'] if x['RN'] > 0 else 0, axis=1)
 
@@ -275,19 +279,24 @@ def process_data(uploaded_file, status, sub_segment="General"):
         for c in cols:
             final_df[c] = df[c] if c in df.columns else ''
         
-        # 정제
+        # 마지막으로 숫자 정제 함수 통과
         final_df = clean_numeric_columns(final_df)
+        
         return final_df
 
     except Exception as e:
         return pd.DataFrame()
 
 # ==============================================================================
-# 3. 화면 표시 헬퍼 (합계 & 스타일)
+# 3. [핵심] 합계 행 추가 및 스타일링 헬퍼
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
-    """합계 행 추가"""
+    """
+    데이터프레임 하단에 '합계(TOTAL)' 행을 추가합니다.
+    - 입력받은 df의 숫자가 반드시 숫자형이어야 합니다.
+    - ADR은 (매출 / RN)으로 각각 재계산합니다.
+    """
     if df.empty: return df
     
     numeric_df = df.select_dtypes(include=[np.number]).fillna(0)
@@ -301,7 +310,7 @@ def add_total_row(df, group_col_name="구분"):
     else:
         total_row[df.columns[0]] = "TOTAL"
 
-    # ADR 재계산
+    # [ADR 재계산: Room ADR / Total ADR 각각 계산]
     if 'RN' in total_row and total_row['RN'] > 0:
         if 'Room_Revenue' in total_row:
             total_row['ADR_Room'] = total_row['Room_Revenue'] / total_row['RN']
@@ -315,14 +324,20 @@ def add_total_row(df, group_col_name="구분"):
     return pd.concat([df, df_total], ignore_index=True)
 
 def show_dataframe_with_style(df):
-    """Pandas Styler로 강제 포맷팅"""
+    """
+    Pandas Styler를 사용하여 무조건 콤마와 소수점 제거를 적용합니다.
+    """
     if df.empty:
         st.write("No Data")
         return
 
+    # 숫자 컬럼 식별
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    
+    # 1. 스타일러 생성 및 포맷 적용 (천단위 콤마, 소수점 0자리)
     styler = df.style.format({col: "{:,.0f}" for col in numeric_cols})
     
+    # 2. 마지막 행(Total) 배경색 강조
     def highlight_total(row):
         is_total = False
         for val in row:
@@ -336,7 +351,19 @@ def show_dataframe_with_style(df):
     styler = styler.apply(highlight_total, axis=1)
     st.dataframe(styler, hide_index=True, use_container_width=True)
 
+def get_fmt_config():
+    """스트림릿용 포맷 설정 (Styler와 병행 사용)"""
+    return {
+        "RN": st.column_config.NumberColumn("객실수", format="%d"),
+        "Room_Revenue": st.column_config.NumberColumn("객실매출", format="%d"),
+        "Total_Revenue": st.column_config.NumberColumn("총매출", format="%d"),
+        "ADR_Room": st.column_config.NumberColumn("객실 ADR", format="%d"),
+        "ADR_Total": st.column_config.NumberColumn("총 ADR", format="%d"),
+        "Lead_Time": st.column_config.NumberColumn("리드타임", format="%d")
+    }
+
 def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
+    """분석 탭 렌더링"""
     if target_df.empty:
         st.warning(f"⚠️ {title_prefix} 데이터가 없습니다.")
         return
@@ -348,7 +375,9 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
     
     with t1:
         st.subheader(f"📊 {title_prefix} 세그먼트 분석")
+        # 매출 2개 모두 집계
         seg_stats = target_df.groupby('Segment').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
+        # ADR 각각 계산
         seg_stats['ADR_Room'] = np.where(seg_stats['RN']>0, seg_stats['Room_Revenue']/seg_stats['RN'], 0)
         seg_stats['ADR_Total'] = np.where(seg_stats['RN']>0, seg_stats['Total_Revenue']/seg_stats['RN'], 0)
         
@@ -436,6 +465,7 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
 try:
     st.title("🏛️ 앰버 호텔 경영 리포트 (Final Integrity)")
 
+    # 1. 데이터 로드 (DB)
     raw_data = load_data_from_firestore()
     df_all = pd.DataFrame()
     available_dates = []
@@ -445,15 +475,9 @@ try:
         if 'Snapshot_Date' in df_all.columns:
             available_dates = sorted(df_all['Snapshot_Date'].unique(), reverse=True)
 
+    # 2. 사이드바
     with st.sidebar:
         st.header("📅 조회 설정")
-        # [삭제 버튼] 모든 데이터 초기화
-        if st.button("🔴 데이터 전체 삭제 (초기화)"):
-            deleted = delete_all_data()
-            st.warning(f"{deleted}개 문서 삭제됨. 페이지를 새로고침하세요.")
-            time.sleep(2)
-            st.rerun()
-            
         selected_date = None
         if available_dates:
             selected_date = st.selectbox("조회 기준일 (Snapshot)", available_dates, index=0)
@@ -478,49 +502,56 @@ try:
                     st.cache_data.clear()
                     st.rerun()
 
-        # [OTB 통합 업로더]
         with st.expander("OTB (Sales on the Book)", expanded=True):
-            f_otb = st.file_uploader("OTB 데이터 (12개월 통합)", type=['xlsx','csv'], key="f_otb")
-            if f_otb and st.button("OTB 저장"):
-                df = process_data(f_otb, "Booked", "Month") # 세그먼트 구분 없이 OTB로 처리
-                if not df.empty and save_to_firestore(df):
-                    st.cache_data.clear()
-                    st.rerun()
-
+            f3_list = st.file_uploader("당월 OTB (12개월 통합)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
+            if f3_list and st.button("OTB 저장"):
+                for f in f3_list:
+                    df = process_data(f, "Booked", "Month")
+                    if not df.empty: save_to_firestore(df)
+                st.cache_data.clear()
+                st.rerun()
+            
+    # 3. 메인 콘텐츠
     if selected_date and not df_all.empty:
         df_filtered = df_all[df_all['Snapshot_Date'] == selected_date].copy()
         
-        # [강제 정제]
+        # [데이터 세탁] 숫자 강제 변환 및 ADR 재계산
         df = clean_numeric_columns(df_filtered)
         
         if df.empty:
             st.warning("데이터가 없습니다.")
         else:
+            # 날짜형 변환
             if 'Booking_Date' not in df.columns: df['Booking_Date'] = df['CheckIn']
             df['Booking_dt'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
             df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
             df = df.dropna(subset=['CheckIn_dt'])
             df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
             
+            # 파생 변수
             df['Is_Zero_Rate'] = df['Total_Revenue'] <= 0
             df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
             df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
             
-            # 데이터 분리 (OTB는 통합되었으므로 세그먼트로 필터링)
-            df_otb = df[df['Segment'] == 'OTB']
+            # 데이터 분리
+            df_otb_m = df[df['Segment'] == 'OTB_Month']
+            df_otb_t = df[df['Segment'] == 'OTB_Total']
+            # OTB 통합처리 (Segment가 OTB이거나 OTB_Month 등인 경우)
+            df_otb = df[df['Segment'].astype(str).str.contains('OTB')]
             
-            df_list = df[df['Segment'] != 'OTB']
+            df_list = df[~df['Segment'].astype(str).str.contains('OTB')]
             df_paid_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Is_Zero_Rate'] == False)]
             df_zero_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Is_Zero_Rate'] == True)]
             df_list_cn = df_list[df_list['Status'] == 'Cancelled']
             df_total_paid = pd.concat([df_paid_bk, df_list_cn])
 
+            # 탭 메뉴
             main_tab0, main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs([
                 "👑 총지배인(GM) 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"
             ])
 
             # -----------------------------------------------------------
-            # 1. GM 요약 탭
+            # 1. GM 요약 탭 (총매출/객실매출/ADR 분리)
             # -----------------------------------------------------------
             with main_tab0:
                 st.header(f"👑 총지배인(GM) 요약 리포트 ({selected_date})")
@@ -532,6 +563,7 @@ try:
                 bk_rn = df_paid_bk['RN'].sum()
                 bk_room_rev = df_paid_bk['Room_Revenue'].sum()
                 bk_total_rev = df_paid_bk['Total_Revenue'].sum()
+                
                 bk_adr_room = bk_room_rev / bk_rn if bk_rn > 0 else 0
                 bk_adr_total = bk_total_rev / bk_rn if bk_rn > 0 else 0
                 
@@ -540,9 +572,11 @@ try:
                 cn_rn = df_list_cn['RN'].sum()
                 cn_room_rev = df_list_cn['Room_Revenue'].sum()
                 cn_total_rev = df_list_cn['Total_Revenue'].sum()
+                
                 cn_adr_room = cn_room_rev / cn_rn if cn_rn > 0 else 0
                 cn_adr_total = cn_total_rev / cn_rn if cn_rn > 0 else 0
                 
+                # 예약 섹션
                 st.markdown("#### ✅ 신규 예약")
                 c1, c2, c3, c4, c5, c6 = st.columns(6)
                 c1.metric("예약 건수", f"{bk_cnt:,.0f} 건")
@@ -552,6 +586,7 @@ try:
                 c5.metric("객실 ADR", f"{bk_adr_room:,.0f} 원")
                 c6.metric("총 ADR", f"{bk_adr_total:,.0f} 원")
                 
+                # 취소 섹션
                 st.markdown("#### ❌ 취소")
                 c1, c2, c3, c4, c5, c6 = st.columns(6)
                 c1.metric("취소 건수", f"{cn_cnt:,.0f} 건")
@@ -563,16 +598,26 @@ try:
                 
                 st.divider()
                 
-                # 세그먼트별 픽업
+                # 세그먼트별 픽업 (상세 분리)
                 st.subheader("2. 세그먼트별 픽업 현황 (예약)")
                 if not df_paid_bk.empty:
-                    seg_gm = df_paid_bk.groupby('Segment').agg({'RN':'sum', 'Room_Revenue':'sum', 'Total_Revenue':'sum'}).reset_index()
+                    seg_gm = df_paid_bk.groupby('Segment').agg({
+                        'RN': 'sum', 
+                        'Room_Revenue': 'sum', 
+                        'Total_Revenue': 'sum'
+                    }).reset_index()
+                    
+                    # ADR 각각 계산
                     seg_gm['ADR_Room'] = np.where(seg_gm['RN']>0, seg_gm['Room_Revenue']/seg_gm['RN'], 0)
                     seg_gm['ADR_Total'] = np.where(seg_gm['RN']>0, seg_gm['Total_Revenue']/seg_gm['RN'], 0)
                     
                     seg_gm_final = add_total_row(seg_gm, 'Segment')
+                    
+                    # 원하는 순서로 컬럼 정렬
                     cols_order = ['Segment', 'RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total']
-                    seg_gm_final = seg_gm_final[cols_order]
+                    # 존재하는 컬럼만 선택
+                    cols_final = [c for c in cols_order if c in seg_gm_final.columns]
+                    seg_gm_final = seg_gm_final[cols_final]
                     
                     show_dataframe_with_style(seg_gm_final) 
                 else:
@@ -580,7 +625,7 @@ try:
                 
                 st.divider()
 
-                # 국적 / 월별
+                # 국적 / 월별 비중
                 c_left, c_right = st.columns(2)
                 with c_left:
                     st.subheader("3. 국적별 비중 (예약)")
@@ -605,7 +650,7 @@ try:
                         st.info("데이터 없음")
 
             # -----------------------------------------------------------
-            # 나머지 탭
+            # 나머지 분석 탭
             # -----------------------------------------------------------
             with main_tab1:
                 render_analysis_tab(df_paid_bk, "유료 예약", "Blues")
