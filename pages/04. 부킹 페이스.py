@@ -11,7 +11,6 @@ import time
 # 1. Firebase 접속 (가장 안정적인 방식)
 # -----------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Hotel Strategy Dashboard", page_icon="🏨")
-df = load_from_firestore()
 
 # 캐시 없이 우선 접속 시도 (진단을 위해)
 def init_firebase_direct():
@@ -128,6 +127,9 @@ def load_from_firestore():
 # -----------------------------------------------------------------------------
 # 4. 사이드바 (시스템 관리 및 필터)
 # -----------------------------------------------------------------------------
+# [1] 데이터를 먼저 불러와서 'df'라는 변수를 만듭니다.
+df = load_from_firestore()
+
 with st.sidebar:
     st.title("⚙️ 시스템 관리")
     st.write(f"**DB 상태:** {db_status}")
@@ -213,8 +215,6 @@ with st.sidebar:
     else:
         df_clean = df
 
-        if not df.empty:
-        # ... (상태 필터 로직) ...
 
 # -----------------------------------------------------------------------------
 # 5. 메인 화면
