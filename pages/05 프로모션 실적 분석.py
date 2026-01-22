@@ -18,7 +18,7 @@ def prepare_df(raw_data):
         return pd.DataFrame()
     df = pd.DataFrame(raw_data)
     
-    # 컬럼명 공백 제거
+    # 컬럼명 공백 제거 및 문자열 변환
     df.columns = [str(c).strip() for c in df.columns]
     
     # 날짜 데이터 변환 (오류 방지용 coerce)
@@ -55,7 +55,7 @@ def prepare_df(raw_data):
     df['ADR_객실'] = df.apply(lambda x: x['객실료'] / x['박수'] if x['박수'] > 0 else 0, axis=1)
     df['입실주차'] = df['입실일자'].dt.isocalendar().week
     
-    # 5. 부대시설 서비스 분석용 리스트화 (Ancillary Revenue)
+    # 5. 부대시설 서비스 분석용 리스트화
     if '서비스코드' in df.columns:
         df['서비스목록'] = df['서비스코드'].fillna('').str.split(',')
     else:
@@ -64,13 +64,13 @@ def prepare_df(raw_data):
     return df.dropna(subset=['입실일자'])
 
 def get_all_promotions():
-    """Firestore에서 저장된 모든 데이터를 가져옵니다."""
+    """Firestore에서 저장된 모든 프로모션 데이터를 가져옵니다."""
     try:
         docs = db.collection("promotions").stream()
         promo_list = []
         for doc in docs:
             d = doc.to_dict()
-            # None 방어 코드: 문자열로 강제 변환
+            # 데이터 로드 시 None 방지 및 날짜 형식 강제
             d['start_date'] = str(d.get('start_date', '미상'))
             d['end_date'] = str(d.get('end_date', '미상'))
             promo_list.append(d)
@@ -129,7 +129,7 @@ def main():
 
             m_trev, m_rrev, m_rn, m_adr, m_los = get_metrics(df_main)
             
-            st.subheader(f"📍 [{selected_partner}] {format_period(target_promo)} 실적 요약")
+            st.subheader(f"📍 [{selected_partner}] {format_period(target_promo)} 실적")
             k1, k2, k3, k4, k5 = st.columns(5)
             
             if compare_on and compare_promo:
@@ -149,7 +149,7 @@ def main():
 
             st.divider()
 
-            # 그래프 섹션 1: 요일 및 예약 곡선
+            # 시각화 섹션 1: 요일 및 예약 곡선
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("📅 요일별 실적 (DOW)")
@@ -167,7 +167,7 @@ def main():
 
             st.divider()
 
-            # 그래프 섹션 2: 히트맵 및 리드타임
+            # 시각화 섹션 2: 히트맵 및 리드타임
             col3, col4 = st.columns(2)
             with col3:
                 st.subheader("🔥 투숙 집중도 히트맵")
@@ -187,7 +187,7 @@ def main():
 
             st.divider()
 
-            # 그래프 섹션 3: 국적 / 상품비중 / 객실타입
+            # 시각화 섹션 3: 국적 / 상품 / 객실타입
             d1, d2, d3 = st.columns(3)
             with d1:
                 st.subheader("🌍 국적 비중")
@@ -201,27 +201,28 @@ def main():
                 room_perf.columns = ['타입', '매출액', 'RN', 'ADR']
                 st.dataframe(room_perf.style.format({'매출액': '{:,.0f}', 'ADR': '{:,.0f}'}))
 
-            # 부대수익 분석
+            # 부대시설 서비스 분석
             st.divider()
             st.subheader("🍱 부대시설 서비스 분석 (Ancillary Revenue)")
             all_svcs = [x.strip() for s in df_main['서비스목록'] for x in s if x.strip() != '']
             if all_svcs:
                 svc_df = pd.Series(all_svcs).value_counts().reset_index()
                 svc_df.columns = ['서비스명', '건수']
-                st.plotly_chart(px.bar(svc_df, x='서비스명', y='건수', color='건수', title="추가 서비스 판매 현황"), use_container_width=True)
+                fig_svc = px.bar(svc_df, x='서비스명', y='건수', color='건수', title="추가 서비스 판매 현황")
+                st.plotly_chart(fig_svc, use_container_width=True)
 
-            # [하단 원본 데이터 조회 기능]
+            # 하단 원본 데이터 조회 기능
             st.divider()
             with st.expander("📄 전체 예약 목록 및 원본 데이터 (Raw Data)", expanded=False):
                 st.write(f"조회된 프로모션의 전체 예약 데이터입니다. (총 {len(df_main)}건)")
                 st.dataframe(df_main, use_container_width=True)
 
-    # --- TAB 2: 데이터 업로드 (AE열 3행 고정 조준) ---
+    # --- TAB 2: 데이터 업로드 (AE열 3행 고정 조준 로직) ---
     with tab2:
         st.header("📤 새로운 프로모션 데이터 등록")
         uploaded_file = st.file_uploader("PMS 엑셀 파일을 업로드하세요", type=['xlsx'])
         if uploaded_file:
-            # AE열(예약일자)이 있는 3행(index 2)을 헤더로 고정 읽기
+            # 3행(index 2)을 헤더로 정확히 읽기
             df_load = pd.read_excel(uploaded_file, header=2)
             df_load.columns = [str(c).strip() for c in df_load.columns]
             
@@ -229,19 +230,21 @@ def main():
                 # 1. 거래처 추출
                 val_partner = str(df_load['거래처'].iloc[0]).split('[')[0].strip()
                 
-                # 2. 예약일자(AE열) 기준 기간 자동 계산 보강
+                # 2. 날짜 추출 보강: AE열(예약일자) 컬럼을 찾아서 강제 파싱
+                # 엑셀의 AE열은 보통 31번째 컬럼(index 30)입니다.
+                # 컬럼명 매칭이 안 될 경우를 대비해 인덱스로 한 번 더 확인합니다.
                 res_col = '예약일자'
-                if res_col in df_load.columns:
-                    # 빈 데이터 제외하고 날짜로 강제 변환
-                    res_series = pd.to_datetime(df_load[res_col], errors='coerce').dropna()
-                    
-                    if not res_series.empty:
-                        start_date = res_series.min().strftime('%Y-%m-%d')
-                        end_date = res_series.max().strftime('%Y-%m-%d')
-                    else:
-                        start_date = end_date = "날짜데이터없음"
+                if res_col not in df_load.columns:
+                    # 컬럼명으로 못 찾으면 30번째 인덱스 컬럼을 예약일자로 간주
+                    res_col = df_load.columns[min(30, len(df_load.columns)-1)]
+                
+                res_series = pd.to_datetime(df_load[res_col], errors='coerce').dropna()
+                
+                if not res_series.empty:
+                    start_date = str(res_series.min().date())
+                    end_date = str(res_series.max().date())
                 else:
-                    start_date = end_date = "예약일자컬럼탐지실패"
+                    start_date = end_date = "날짜파싱불가"
                 
                 st.info(f"📁 탐지 거래처: **{val_partner}**")
                 st.success(f"🗓️ 예약 기간 자동 인식: **{start_date}** ~ **{end_date}**")
