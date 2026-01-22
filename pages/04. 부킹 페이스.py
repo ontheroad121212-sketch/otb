@@ -136,26 +136,43 @@ def delete_all_data():
 # -----------------------------------------------------------------------------
 # 3. 데이터 조회 함수 (Viewer용)
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=600)
 def load_from_firestore():
     if db is None: return pd.DataFrame()
+    
+    # DB에서 데이터 가져오기
     docs = db.collection('hotel_bookings').stream()
     data = [doc.to_dict() for doc in docs]
     
-    if not data: return pd.DataFrame()
+    # [수정] 데이터가 아예 없을 경우 에러 없이 빈 판다스 데이터프레임 반환
+    if not data: 
+        return pd.DataFrame()
     
     df = pd.DataFrame(data)
-    df['입실일자'] = pd.to_datetime(df['입실일자']).dt.tz_localize(None)
-    df['예약일자'] = pd.to_datetime(df['예약일자']).dt.tz_localize(None)
     
+    # [수정] 날짜 컬럼 형변환 시 에러 방지 처리
+    df['입실일자'] = pd.to_datetime(df['입실일자'], errors='coerce')
+    df['예약일자'] = pd.to_datetime(df['예약일자'], errors='coerce')
+    
+    # 날짜가 유효한 데이터만 남김
+    df = df.dropna(subset=['입실일자', '예약일자'])
+    
+    if df.empty:
+        return pd.DataFrame()
+
+    # 타임존 제거 (비교를 위해)
+    df['입실일자'] = df['입실일자'].dt.tz_localize(None)
+    df['예약일자'] = df['예약일자'].dt.tz_localize(None)
+    
+    # 숫자 처리
     for col in ['총금액', '객실수']:
-        if col in df.columns and df[col].dtype == object:
-            df[col] = df[col].astype(str).str.replace(',', '').astype(float)
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             
+    # [에러 발생 지점 수정] 데이터가 있을 때만 파생 변수 생성
     df['LeadTime'] = (df['입실일자'] - df['예약일자']).dt.days
-    df['Year'] = df['입실일자'].dt.isocalendar().year.astype(int)
-    df['Month'] = df['입실일자'].dt.month.astype(int)
-    df['Week'] = df['입실일자'].dt.isocalendar().week.astype(int)
+    df['Year'] = df['입실일자'].dt.isocalendar().year.fillna(0).astype(int)
+    df['Month'] = df['입실일자'].dt.month.fillna(0).astype(int)
+    df['Week'] = df['입실일자'].dt.isocalendar().week.fillna(0).astype(int)
     df['DayOfWeek'] = df['입실일자'].dt.day_name()
     
     return df
