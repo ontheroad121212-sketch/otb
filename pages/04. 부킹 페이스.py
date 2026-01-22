@@ -5,227 +5,177 @@ import plotly.express as px
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
-import time # 시간 지연을 위해 추가
+import time
 
 # -----------------------------------------------------------------------------
-# 1. Firebase 접속 설정
+# 1. Firebase 접속 (가장 안정적인 방식)
 # -----------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Hotel Strategy Dashboard", page_icon="🏨")
 
-@st.cache_resource
-def init_firebase():
+# 캐시 없이 우선 접속 시도 (진단을 위해)
+def init_firebase_direct():
     if not firebase_admin._apps:
         try:
-            # Streamlit Cloud 배포용
-            key_dict = st.secrets["firebase"]
+            # 1순위: Streamlit Secrets
+            key_dict = dict(st.secrets["firebase"])
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
-        except:
-            # 로컬 테스트용
+        except Exception as e:
             try:
+                # 2순위: 로컬 파일
                 cred = credentials.Certificate("serviceAccountKey.json")
                 firebase_admin.initialize_app(cred)
             except:
-                st.warning("⚠️ DB 연결 정보를 찾을 수 없습니다.")
-                return None
-    return firestore.client()
+                return None, str(e)
+    return firestore.client(), "연결됨 ✅"
 
-db = init_firebase()
+db, db_status = init_firebase_direct()
 
 # -----------------------------------------------------------------------------
-# 2. 데이터 업로드 함수 (Admin용 - 배치 쓰기)
+# 2. 데이터 업로드/삭제 함수
 # -----------------------------------------------------------------------------
 def upload_to_firestore(df_new):
-    if df_new.empty or db is None: return
-    
+    if db is None: return
     df_new = df_new.copy()
     
-    # 1. 날짜 및 데이터 정제 (NaT/NaN 제거)
-    date_columns = ['입실일자', '예약일자', '퇴실일자', '취소일자', '확인일자']
-    for col in date_columns:
-        if col in df_new.columns:
-            df_new[col] = pd.to_datetime(df_new[col], errors='coerce')
-
-    # NaT/NaN을 None으로 변환하여 Firestore 에러 방지
-    df_upload = df_new.where(pd.notnull(df_new), None)
-    df_upload['예약번호'] = df_upload['예약번호'].astype(str)
-
-    total = len(df_upload)
-    count = 0
-    # [수정] 배치 사이즈를 100으로 줄여서 안정성 강화
-    batch_size = 100 
-    batch = db.batch()
+    # 필수 전처리
+    df_new['입실일자'] = pd.to_datetime(df_new['입실일자'], errors='coerce')
+    df_new['예약일자'] = pd.to_datetime(df_new['예약일자'], errors='coerce')
+    df_new['예약번호'] = df_new['예약번호'].astype(str)
     
-    status_bar = st.progress(0)
-    status_text = st.empty()
+    # NaN/NaT 제거 (None으로 변환)
+    df_upload = df_new.where(pd.notnull(df_new), None)
+    
+    total = len(df_upload)
+    batch = db.batch()
+    count = 0
+    
+    bar = st.progress(0)
+    msg = st.empty()
     
     for _, row in df_upload.iterrows():
         doc_id = row['예약번호']
         if not doc_id or doc_id == 'None': continue
         
         doc_ref = db.collection('hotel_bookings').document(doc_id)
+        # 딕셔너리 내부의 모든 불필요한 객체 정제
+        payload = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
         
-        # 딕셔너리 정제
-        row_dict = row.to_dict()
-        final_payload = {k: (None if pd.isna(v) else v) for k, v in row_dict.items()}
-        
-        batch.set(doc_ref, final_payload, merge=True)
+        batch.set(doc_ref, payload, merge=True)
         count += 1
         
-        # 배치 커밋 (100개마다)
-        if count % batch_size == 0:
-            try:
-                batch.commit()
-                # [수정] 서버 부하 방지를 위해 0.1초 짧은 휴식
-                time.sleep(0.1) 
-                batch = db.batch()
-                
-                status_bar.progress(count / total)
-                status_text.text(f"🐢 안전 모드로 업데이트 중... ({count}/{total})")
-            except Exception as e:
-                st.error(f"⚠️ 전송 중 일시적 오류 발생: {e}. 다시 시도합니다.")
-                time.sleep(1) # 에러 시 1초 대기 후 다음 배치 시도
+        if count % 200 == 0:
+            batch.commit()
+            batch = db.batch()
+            bar.progress(count / total)
+            msg.text(f"⏳ 업로드 중... ({count}/{total})")
+            time.sleep(0.1)
             
-    # 남은 데이터 최종 전송
     batch.commit()
-    status_bar.empty()
-    status_text.success(f"✅ {total}건 업데이트 완료! 이제 안심하고 사용하세요.")
-# -----------------------------------------------------------------------------
-# [⚡수정됨] 데이터 고속 삭제 함수 (Batch Delete)
-# -----------------------------------------------------------------------------
+    bar.empty()
+    msg.success(f"✅ {total}건 업데이트 완료!")
+    st.cache_data.clear() # 조회 캐시 삭제
+
 def delete_all_data():
     if db is None: return
-    
     coll_ref = db.collection('hotel_bookings')
-    # [수정] 한 번에 찾는 양을 200개로 줄여서 서버 부담 최소화
-    batch_size = 200 
+    batch_size = 200
+    total_del = 0
     
-    st.info("데이터 삭제를 시작합니다. 잠시만 기다려주세요...")
-    
-    total_deleted = 0
     while True:
-        try:
-            # 1. 문서 목록 가져오기 (시간 초과 방지를 위해 아주 작은 단위로)
-            docs = list(coll_ref.limit(batch_size).stream())
-            
-            if not docs:
-                break # 더 이상 지울 게 없으면 탈출
-            
-            # 2. 배치 삭제 실행
-            batch = db.batch()
-            for doc in docs:
-                batch.delete(doc.reference)
-            
-            batch.commit()
-            
-            total_deleted += len(docs)
-            st.toast(f"현재 {total_deleted}건 삭제 완료...")
-            
-            # 3. [중요] 서버 휴식 시간
-            # 연속적인 삭제 요청으로 서버가 거부하지 않도록 0.2초 휴식
-            time.sleep(0.2)
-            
-        except Exception as e:
-            # 에러 발생 시 잠시 쉬었다가 다시 시도 (자동 복구 로직)
-            st.warning(f"일시적 통신 지연 발생. 2초 후 다시 시도합니다...")
-            time.sleep(2)
-            continue
-            
-    st.success(f"✨ 총 {total_deleted}건의 데이터를 모두 삭제했습니다!")
+        docs = list(coll_ref.limit(batch_size).stream())
+        if not docs: break
+        
+        batch = db.batch()
+        for doc in docs:
+            batch.delete(doc.reference)
+        batch.commit()
+        total_del += len(docs)
+        st.toast(f"🗑️ {total_del}건 삭제 중...")
+        time.sleep(0.2)
+    return total_del
 
 # -----------------------------------------------------------------------------
-# 3. 데이터 조회 함수 (Viewer용)
+# 3. 데이터 조회 (에러 방어막 강화)
 # -----------------------------------------------------------------------------
+@st.cache_data(ttl=300) # 5분 캐시
 def load_from_firestore():
     if db is None: return pd.DataFrame()
-    
-    # DB에서 데이터 가져오기
-    docs = db.collection('hotel_bookings').stream()
-    data = [doc.to_dict() for doc in docs]
-    
-    # [수정] 데이터가 아예 없을 경우 에러 없이 빈 판다스 데이터프레임 반환
-    if not data: 
+    try:
+        docs = db.collection('hotel_bookings').limit(50000).stream() # 일단 5만건 제한
+        data = [doc.to_dict() for doc in docs]
+        if not data: return pd.DataFrame()
+        
+        df = pd.DataFrame(data)
+        df['입실일자'] = pd.to_datetime(df['입실일자'], errors='coerce')
+        df['예약일자'] = pd.to_datetime(df['예약일자'], errors='coerce')
+        df = df.dropna(subset=['입실일자', '예약일자'])
+        
+        if df.empty: return pd.DataFrame()
+        
+        df['입실일자'] = df['입실일자'].dt.tz_localize(None)
+        df['예약일자'] = df['예약일자'].dt.tz_localize(None)
+        df['LeadTime'] = (df['입실일자'] - df['예약일자']).dt.days
+        df['Year'] = df['입실일자'].dt.isocalendar().year.fillna(0).astype(int)
+        df['Month'] = df['입실일자'].dt.month.fillna(0).astype(int)
+        df['Week'] = df['입실일자'].dt.isocalendar().week.fillna(0).astype(int)
+        df['DayOfWeek'] = df['입실일자'].dt.day_name()
+        return df
+    except:
         return pd.DataFrame()
-    
-    df = pd.DataFrame(data)
-    
-    # [수정] 날짜 컬럼 형변환 시 에러 방지 처리
-    df['입실일자'] = pd.to_datetime(df['입실일자'], errors='coerce')
-    df['예약일자'] = pd.to_datetime(df['예약일자'], errors='coerce')
-    
-    # 날짜가 유효한 데이터만 남김
-    df = df.dropna(subset=['입실일자', '예약일자'])
-    
-    if df.empty:
-        return pd.DataFrame()
-
-    # 타임존 제거 (비교를 위해)
-    df['입실일자'] = df['입실일자'].dt.tz_localize(None)
-    df['예약일자'] = df['예약일자'].dt.tz_localize(None)
-    
-    # 숫자 처리
-    for col in ['총금액', '객실수']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-            
-    # [에러 발생 지점 수정] 데이터가 있을 때만 파생 변수 생성
-    df['LeadTime'] = (df['입실일자'] - df['예약일자']).dt.days
-    df['Year'] = df['입실일자'].dt.isocalendar().year.fillna(0).astype(int)
-    df['Month'] = df['입실일자'].dt.month.fillna(0).astype(int)
-    df['Week'] = df['입실일자'].dt.isocalendar().week.fillna(0).astype(int)
-    df['DayOfWeek'] = df['입실일자'].dt.day_name()
-    
-    return df
 
 # -----------------------------------------------------------------------------
-# 4. 사이드바 (Admin)
+# 4. 사이드바 (Admin & Diagnosis)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("Admin Console")
+    st.title("⚙️ 시스템 관리")
+    st.write(f"**DB 상태:** {db_status}")
     
-    # [1] 업로드 섹션
-    with st.expander("📤 데이터 DB 업데이트", expanded=True):
-        up_files = st.file_uploader("엑셀 파일 업로드", accept_multiple_files=True)
-        if up_files and st.button("🔥 DB 업데이트 실행"):
-            all_df = []
-            for f in up_files:
-                try:
-                    tmp = pd.read_csv(f, header=2) if f.name.endswith('.csv') else pd.read_excel(f, header=2)
-                    if {'입실일자', '예약번호'}.issubset(tmp.columns):
-                        all_df.append(tmp)
-                except: pass
-            
-            if all_df:
-                final_df = pd.concat(all_df, ignore_index=True)
-                upload_to_firestore(final_df)
-                st.cache_data.clear()
-                st.rerun()
+    if db is None:
+        st.error("❌ Firebase 연결 실패! Secrets 설정을 확인하세요.")
+        st.stop()
 
-    # [2] 초기화 섹션
+    # 업로드 버튼
+    with st.expander("📤 데이터 업로드", expanded=True):
+        up_files = st.file_uploader("엑셀/CSV 파일", accept_multiple_files=True)
+        if up_files:
+            if st.button("🚀 DB 업데이트 시작", key="btn_upload"):
+                all_df = []
+                for f in up_files:
+                    try:
+                        tmp = pd.read_csv(f, header=2) if f.name.endswith('.csv') else pd.read_excel(f, header=2)
+                        all_df.append(tmp)
+                    except: pass
+                if all_df:
+                    upload_to_firestore(pd.concat(all_df))
+                    st.rerun()
+
+    # 초기화 버튼
     st.divider()
-    with st.expander("⚠️ 데이터 초기화 (Danger Zone)", expanded=False):
-        st.warning("경고: 모든 데이터가 영구 삭제됩니다.")
-        check_text = st.text_input("확인을 위해 '초기화' 라고 입력하세요.")
-        
-        if st.button("🗑️ 모든 데이터 삭제"):
-            if check_text == "초기화":
-                with st.spinner("🚀 고속 삭제 모드 가동... 잠시만 기다려주세요."):
-                    delete_all_data()
+    with st.expander("⚠️ 데이터 초기화"):
+        pw = st.text_input("확인 메시지 ('초기화' 입력)")
+        if st.button("🗑️ 전체 데이터 삭제", key="btn_delete"):
+            if pw == "초기화":
+                with st.spinner("삭제 중..."):
+                    num = delete_all_data()
                     st.cache_data.clear()
-                    st.success("초기화 완료! 다시 파일을 업로드해주세요.")
+                    st.success(f"{num}건 삭제 완료!")
                     st.rerun()
             else:
-                st.error("'초기화'라고 정확히 입력해야 합니다.")
+                st.error("입력값이 틀렸습니다.")
 
 # -----------------------------------------------------------------------------
-# 5. 메인 대시보드
+# 5. 메인 화면
 # -----------------------------------------------------------------------------
 df = load_from_firestore()
 
 if df.empty:
     st.title("🏨 Hotel Dashboard")
-    st.info("현재 데이터가 없습니다. 사이드바에서 파일을 업로드해주세요.")
-    st.stop()
+    st.info("표시할 데이터가 없습니다. 사이드바에서 데이터를 업로드해주세요.")
+else:
+    # (기존 그래프 및 분석 탭 코드... 이하 생략)
+    st.title("🏨 Hotel Strategy Dashboard")
+    st.write(f"현재 로드된 데이터: {len(df):,}건")
 
 # 상태 필터
 with st.sidebar:
