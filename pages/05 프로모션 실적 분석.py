@@ -149,7 +149,6 @@ def main():
             col_a, col_b = st.columns(2)
             with col_a:
                 st.subheader("📈 예약 생산 속도 비교 (Pace)")
-                [Image of a line graph comparing the cumulative booking production of two different hotel reservation periods]
                 df_main_p = df_main.sort_values('예약일자'); df_main_p['누적_RN'] = df_main_p['박수'].cumsum(); df_main_p['구분'] = "기준"
                 if compare_on and compare_promo:
                     df_comp_p = df_comp.sort_values('예약일자'); df_comp_p['누적_RN'] = df_comp_p['박수'].cumsum(); df_comp_p['구분'] = "비교"
@@ -173,7 +172,6 @@ def main():
             col_c, col_d = st.columns(2)
             with col_c:
                 st.subheader("🌍 국적별 점유율 비교 (Nationality Mix)")
-                [Image of a grouped bar chart comparing guest nationality distribution between two hotel promotions]
                 nat_main = df_main['국적'].value_counts(normalize=True).reset_index(); nat_main['구분'] = "기준"
                 if compare_on and compare_promo:
                     nat_comp = df_comp['국적'].value_counts(normalize=True).reset_index(); nat_comp['구분'] = "비교"
@@ -183,7 +181,6 @@ def main():
                     st.plotly_chart(px.pie(df_main, names='국적', hole=0.5), use_container_width=True)
             with col_d:
                 st.subheader("🍳 상품군 판매 비중 비교 (Meal Plan Mix)")
-                [Image of a stacked bar chart comparing room-only versus breakfast-inclusive bookings for two hotel periods]
                 prod_main = df_main['상품구분'].value_counts(normalize=True).reset_index(); prod_main['구분'] = "기준"
                 if compare_on and compare_promo:
                     prod_comp = df_comp['상품구분'].value_counts(normalize=True).reset_index(); prod_comp['구분'] = "비교"
