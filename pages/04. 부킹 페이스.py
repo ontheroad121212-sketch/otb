@@ -389,7 +389,7 @@ with tabs[4]:
 
 # [TAB 6] Guest Loyalty (Smart Logic)
 with tabs[5]:
-    st.subheader("🔁 고객 로열티 & 재방문 분석")
+    st.header("🔁 재방문 고객 심층 리포트")
     
     # 1. 컬럼명 자동 감지
     name_cols = ['고객명', '예약자', '성함', '고객성함', 'Guest Name', 'Name', '예약자명', '한글성명']
@@ -399,70 +399,103 @@ with tabs[5]:
     found_phone = next((c for c in phone_cols if c in df_clean.columns), None)
 
     if not found_name:
-        st.warning(f"⚠️ '고객명' 컬럼을 찾을 수 없어 분석할 수 없습니다. (현재 컬럼: {list(df_clean.columns)})")
+        st.warning(f"⚠️ '고객명' 컬럼을 찾을 수 없어 심층 분석이 불가능합니다.")
     else:
-        # 2. 분석 로직 실행
-        df_loyalty = target_df.copy()
+        # --- [A] 기본 데이터 준비 ---
+        df_l = df_clean.copy().sort_values([found_name, '입실일자'])
         
-        # 식별키 생성 (전화번호 있으면 조합, 없으면 이름만)
+        # 식별키 생성
         if found_phone:
-            # 전체 이력(df_clean)에서 방문 횟수 계산
-            full_history = df_clean.groupby([found_name, df_clean[found_phone].astype(str).str[-4:]]).size().reset_index(name='TotalVisits')
-            full_history['GuestKey'] = full_history[found_name].astype(str) + "_" + full_history[found_phone].astype(str)
-            
-            # 현재 타겟 데이터에 키 생성
-            df_loyalty['GuestKey'] = df_loyalty[found_name].astype(str) + "_" + df_loyalty[found_phone].astype(str).str[-4:]
+            df_l['GuestKey'] = df_l[found_name].astype(str) + "_" + df_l[found_phone].astype(str).str[-4:]
         else:
-            st.info("💡 전화번호 없이 '이름'만으로 분석합니다.")
-            full_history = df_clean.groupby(found_name).size().reset_index(name='TotalVisits')
-            full_history['GuestKey'] = full_history[found_name].astype(str)
-            df_loyalty['GuestKey'] = df_loyalty[found_name].astype(str)
+            df_l['GuestKey'] = df_l[found_name].astype(str)
 
-        # 3. 데이터 병합 (현재 방문객 + 과거 이력)
-        target_loyalty = pd.merge(df_loyalty, full_history[['GuestKey', 'TotalVisits']], on='GuestKey', how='left')
-        target_loyalty['GuestType'] = target_loyalty['TotalVisits'].apply(lambda x: '첫 방문 (New)' if x <= 1 else '재방문 (Return)')
+        # 재방문 주기(Interval) 계산: 이전 방문일과의 차이
+        df_l['PrevVisit'] = df_l.groupby('GuestKey')['입실일자'].shift(1)
+        df_l['DaysSinceLastVisit'] = (df_l['입실일자'] - df_l['PrevVisit']).dt.days
 
-        # 4. 시각화
-        col_l1, col_l2 = st.columns(2)
-        with col_l1:
-            st.markdown("**재방문 고객 비중**")
-            loyalty_pie = px.pie(target_loyalty, names='GuestType', hole=0.4, 
-                                 color='GuestType', color_discrete_map={'첫 방문 (New)':'#E5ECF6', '재방문 (Return)':'#0052cc'})
-            st.plotly_chart(loyalty_pie, use_container_width=True)
+        # 현재 선택된 타겟 기간 데이터 추출
+        target_keys = target_df[found_name].astype(str) + "_" + target_df[found_phone].astype(str).str[-4:] if found_phone else target_df[found_name].astype(str)
+        df_target_loyalty = df_l[df_l['GuestKey'].isin(target_keys)].copy()
+        
+        # 총 방문횟수 매핑
+        guest_counts = df_l.groupby('GuestKey').size().reset_index(name='TotalVisits')
+        df_target_loyalty = pd.merge(df_target_loyalty, guest_counts, on='GuestKey', how='left')
+        df_target_loyalty['GuestType'] = df_target_loyalty['TotalVisits'].apply(lambda x: '첫 방문' if x <= 1 else '재방문')
 
-        with col_l2:
-            st.markdown("**재방문객 예약 채널 TOP 10**")
-            return_guests = target_loyalty[target_loyalty['GuestType'] == '재방문 (Return)']
-            if not return_guests.empty:
-                chan_loyalty = return_guests.groupby('거래처').size().reset_index(name='Count').sort_values('Count', ascending=False)
-                fig_chan = px.bar(chan_loyalty.head(10), x='거래처', y='Count', color='Count', color_continuous_scale='Blues')
-                st.plotly_chart(fig_chan, use_container_width=True)
-            else:
-                st.info("해당 기간에 재방문 고객이 없습니다.")
+        # --- [B] 시각화 시작 ---
+        
+        # 지표 요약
+        m1, m2, m3 = st.columns(3)
+        unique_g = df_target_loyalty['GuestKey'].nunique()
+        return_g = df_target_loyalty[df_target_loyalty['GuestType'] == '재방문']['GuestKey'].nunique()
+        m1.metric("선택 기간 내 총 고객수", f"{unique_g:,}명")
+        m2.metric("재방문 고객수", f"{return_g:,}명")
+        m3.metric("재방문율", f"{(return_g/unique_g*100) if unique_g > 0 else 0:.1f}%")
 
         st.divider()
-        col_l3, col_l4 = st.columns(2)
-        with col_l3:
-            st.markdown("**고객 등급별 매출 기여도**")
-            def guest_grade(n):
-                if n <= 1: return "1. 신규"
-                elif n == 2: return "2. 리피터"
-                elif 3 <= n <= 5: return "3. 단골"
-                else: return "4. VIP"
+
+        # INSIGHT 1: 재방문 주기 분석 (얼마 만에 다시 오나?)
+        st.subheader("1️⃣ 단골들은 보통 얼마 만에 다시 올까? (방문 주기)")
+        revisit_intervals = df_l[df_l['DaysSinceLastVisit'] > 0]['DaysSinceLastVisit']
+        if not revisit_intervals.empty:
+            avg_interval = revisit_intervals.mean()
+            fig_interval = px.histogram(revisit_intervals, x='DaysSinceLastVisit', 
+                                         nbins=50, title=f"평균 재방문 주기: {avg_interval:.1f}일",
+                                         color_discrete_sequence=['#0052cc'], labels={'x':'방문 간격(일)', 'y':'건수'})
+            st.plotly_chart(fig_interval, use_container_width=True)
+            st.info(f"💡 단골 손님들은 평균적으로 **약 {avg_interval/30:.1f}개월** 마다 호텔을 다시 찾고 계십니다.")
+        else:
+            st.info("재방문 주기를 계산할 데이터가 충분하지 않습니다.")
+
+        st.divider()
+
+        # INSIGHT 2: 신규 vs 재방문 수익 기여도 비교
+        st.subheader("2️⃣ 재방문객이 돈을 더 많이 쓸까? (수익 기여도)")
+        col_rev1, col_rev2 = st.columns(2)
+        
+        with col_rev1:
+            # ADR 비교
+            adr_comp = df_target_loyalty.groupby('GuestType').apply(lambda x: x['총금액'].sum() / x['객실수'].sum()).reset_index(name='ADR')
+            fig_adr = px.bar(adr_comp, x='GuestType', y='ADR', color='GuestType', text_auto=',.0f', title="객단가(ADR) 비교")
+            st.plotly_chart(fig_adr, use_container_width=True)
+        
+        with col_rev2:
+            # 총 매출 비중
+            rev_share = df_target_loyalty.groupby('GuestType')['총금액'].sum().reset_index()
+            fig_share = px.pie(rev_share, names='GuestType', values='총금액', hole=0.4, title="매출 기여도 비중")
+            st.plotly_chart(fig_share, use_container_width=True)
+
+        st.divider()
+
+        # INSIGHT 3: 채널 전이 분석 (OTA에서 직예약으로 전환되나?)
+        st.subheader("3️⃣ OTA 손님이 '직예약'으로 전환되고 있나? (채널 전이)")
+        
+        # 첫 방문 채널 vs 마지막 방문 채널 비교 로직
+        first_visit = df_l.groupby('GuestKey').first()['거래처'].reset_index().rename(columns={'거래처':'FirstChannel'})
+        last_visit = df_l.groupby('GuestKey').last()['거래처'].reset_index().rename(columns={'거래처':'LastChannel'})
+        channel_drift = pd.merge(first_visit, last_visit, on='GuestKey')
+        
+        # 재방문자만 필터링
+        repeater_keys = guest_counts[guest_counts['TotalVisits'] > 1]['GuestKey']
+        drift_repeaters = channel_drift[channel_drift['GuestKey'].isin(repeater_keys)]
+        
+        if not drift_repeaters.empty:
+            drift_summary = drift_repeaters.groupby(['FirstChannel', 'LastChannel']).size().reset_index(name='Count')
+            # Sankey 차트 또는 Heatmap으로 표현 (여기서는 깔끔한 테이블과 설명)
+            success_direct = drift_repeaters[(drift_repeaters['FirstChannel'] != '홈페이지') & (drift_repeaters['LastChannel'] == '홈페이지')].shape[0]
             
-            target_loyalty['Grade'] = target_loyalty['TotalVisits'].apply(guest_grade)
-            grade_rev = target_loyalty.groupby('Grade')['총금액'].sum().reset_index()
-            fig_grade = px.bar(grade_rev, x='Grade', y='총금액', text_auto='.2s', color='Grade', color_discrete_sequence=px.colors.qualitative.Pastel)
-            st.plotly_chart(fig_grade, use_container_width=True)
-
-        with col_l4:
-            st.markdown("**재방문 vs 신규 객단가(ADR)**")
-            temp_adr = target_loyalty[target_loyalty['객실수'] > 0]
-            if not temp_adr.empty:
-                adr_comp = temp_adr.groupby('GuestType').apply(lambda x: x['총금액'].sum() / x['객실수'].sum()).reset_index(name='ADR')
-                fig_adr_comp = px.bar(adr_comp, x='GuestType', y='ADR', color='GuestType', text_auto=',.0f')
-                st.plotly_chart(fig_adr_comp, use_container_width=True)
-
+            c_drift1, c_drift2 = st.columns([1, 2])
+            with c_drift1:
+                st.metric("OTA → 직예약 전환 성공", f"{success_direct}건")
+                st.write("첫 방문은 타 채널이었으나 마지막은 홈페이지/직예약으로 오신 손님 수입니다.")
+            with c_drift2:
+                # 간단한 히트맵형 표
+                pivot_drift = drift_summary.pivot(index='FirstChannel', columns='LastChannel', values='Count').fillna(0)
+                st.write("**채널 전이 매트릭스 (어디서 와서 어디로 가나)**")
+                st.dataframe(pivot_drift.style.background_gradient(cmap='Blues'))
+        else:
+            st.info("채널 전이를 분석할 재방문 데이터가 없습니다.")
 # 검증기 (항상 맨 아래)
 st.divider()
 with st.expander("🕵️‍♂️ 데이터 검증 (Raw Data)"):
