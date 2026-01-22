@@ -261,10 +261,9 @@ df_view = df_clean[df_clean['거래처'].isin(sel_acc)] if sel_acc else df_clean
 st.divider()
 
 # --- 비교 기간 선택 (Target vs Reference) ---
-years = sorted(df_view['Year'].unique(), reverse=True)
-if not years:
-    st.warning("선택한 필터 조건에 맞는 데이터가 없습니다.")
-    st.stop()
+# 연도 리스트 생성 및 "전체" 옵션 삽입
+years_list = sorted(df_view['Year'].unique(), reverse=True)
+year_options = ["전체"] + [str(y) for y in years_list]
 
 col1, col2 = st.columns(2)
 target_df, ref_df = pd.DataFrame(), pd.DataFrame()
@@ -273,47 +272,103 @@ q_map = {"1분기": [1,2,3], "2분기": [4,5,6], "3분기": [7,8,9], "4분기": 
 
 if view_mode == "월별":
     with col1:
-        ty = st.selectbox("Target 연도", years); tm = st.selectbox("Target 월", range(1,13))
+        ty_sel = st.selectbox("Target 연도", year_options, index=1 if len(year_options)>1 else 0)
+        tm = st.selectbox("Target 월", range(1,13))
     with col2:
-        ry = st.selectbox("Ref 연도", years, index=(1 if len(years)>1 else 0))
+        ry_sel = st.selectbox("Ref 연도", year_options, index=1 if len(year_options)>1 else 0)
         rm = st.selectbox("Ref 월", range(1,13), index=tm-1)
-    target_df = df_view[(df_view['Year']==ty) & (df_view['Month']==tm)]
-    ref_df = df_view[(df_view['Year']==ry) & (df_view['Month']==rm)]
-    chart_sub = f"{ty}.{tm} vs {ry}.{rm}"
+    
+    # Target 필터링
+    if ty_sel == "전체":
+        target_df = df_view[df_view['Month'] == tm]
+        t_label = f"전체 연도 {tm}월"
+    else:
+        target_df = df_view[(df_view['Year'] == int(ty_sel)) & (df_view['Month'] == tm)]
+        t_label = f"{ty_sel}.{tm}"
+    
+    # Reference 필터링
+    if ry_sel == "전체":
+        ref_df = df_view[df_view['Month'] == rm]
+        r_label = f"전체 연도 {rm}월"
+    else:
+        ref_df = df_view[(df_view['Year'] == int(ry_sel)) & (df_view['Month'] == rm)]
+        r_label = f"{ry_sel}.{rm}"
+    chart_sub = f"{t_label} vs {r_label}"
 
 elif view_mode == "분기별":
     qs = list(q_map.keys())
     with col1:
-        ty = st.selectbox("Target 연도", years); tq = st.selectbox("Target 분기", qs)
+        ty_sel = st.selectbox("Target 연도", year_options, index=1 if len(year_options)>1 else 0)
+        tq = st.selectbox("Target 분기", qs)
     with col2:
-        ry = st.selectbox("Ref 연도", years, index=(1 if len(years)>1 else 0))
+        ry_sel = st.selectbox("Ref 연도", year_options, index=1 if len(year_options)>1 else 0)
         rq = st.selectbox("Ref 분기", qs, index=qs.index(tq))
-    target_df = df_view[(df_view['Year']==ty) & (df_view['Month'].isin(q_map[tq]))]
-    ref_df = df_view[(df_view['Year']==ry) & (df_view['Month'].isin(q_map[rq]))]
-    chart_sub = f"{ty} {tq} vs {ry} {rq}"
+    
+    if ty_sel == "전체":
+        target_df = df_view[df_view['Month'].isin(q_map[tq])]
+        t_label = f"전체 연도 {tq}"
+    else:
+        target_df = df_view[(df_view['Year'] == int(ty_sel)) & (df_view['Month'].isin(q_map[tq]))]
+        t_label = f"{ty_sel} {tq}"
+
+    if ry_sel == "전체":
+        ref_df = df_view[df_view['Month'].isin(q_map[rq])]
+        r_label = f"전체 연도 {rq}"
+    else:
+        ref_df = df_view[(df_view['Year'] == int(ry_sel)) & (df_view['Month'].isin(q_map[rq]))]
+        r_label = f"{ry_sel} {rq}"
+    chart_sub = f"{t_label} vs {r_label}"
 
 elif view_mode == "주별":
     with col1:
-        ty = st.selectbox("Target 연도", years)
-        tw = st.selectbox("Target 주차", sorted(df_view[df_view['Year']==ty]['Week'].unique()))
+        ty_sel = st.selectbox("Target 연도", year_options, index=1 if len(year_options)>1 else 0)
+        # 주차 리스트는 '전체'가 아닐 때만 해당 연도 주차 추출
+        avail_weeks = sorted(df_view['Week'].unique()) if ty_sel == "전체" else sorted(df_view[df_view['Year']==int(ty_sel)]['Week'].unique())
+        tw = st.selectbox("Target 주차", avail_weeks if avail_weeks else [1])
     with col2:
-        ry = st.selectbox("Ref 연도", years, index=(1 if len(years)>1 else 0))
+        ry_sel = st.selectbox("Ref 연도", year_options, index=1 if len(year_options)>1 else 0)
         rw = st.selectbox("Ref 주차", range(1,54), index=int(min(tw-1, 52)))
-    target_df = df_view[(df_view['Year']==ty) & (df_view['Week']==tw)]
-    ref_df = df_view[(df_view['Year']==ry) & (df_view['Week']==rw)]
-    chart_sub = f"{ty} {tw}주 vs {ry} {rw}주"
+    
+    if ty_sel == "전체":
+        target_df = df_view[df_view['Week'] == tw]
+        t_label = f"전체 연도 {tw}주"
+    else:
+        target_df = df_view[(df_view['Year'] == int(ty_sel)) & (df_view['Week'] == tw)]
+        t_label = f"{ty_sel} {tw}주"
+
+    if ry_sel == "전체":
+        ref_df = df_view[df_view['Week'] == rw]
+        r_label = f"전체 연도 {rw}주"
+    else:
+        ref_df = df_view[(df_view['Year'] == int(ry_sel)) & (df_view['Week'] == rw)]
+        r_label = f"{ry_sel} {rw}주"
+    chart_sub = f"{t_label} vs {r_label}"
     
 else: # 연간
-    with col1: ty = st.selectbox("Target 연도", years)
-    with col2: ry = st.selectbox("Ref 연도", years, index=(1 if len(years)>1 else 0))
-    target_df = df_view[df_view['Year']==ty]
-    ref_df = df_view[df_view['Year']==ry]
-    chart_sub = f"{ty} 전체 vs {ry} 전체"
+    with col1:
+        ty_sel = st.selectbox("Target 연도", year_options, index=0) # 연간 모드에선 '전체'가 기본
+    with col2:
+        ry_sel = st.selectbox("Ref 연도", year_options, index=1 if len(year_options)>1 else 0)
+    
+    if ty_sel == "전체":
+        target_df = df_view
+        t_label = "전체 기간"
+    else:
+        target_df = df_view[df_view['Year'] == int(ty_sel)]
+        t_label = f"{ty_sel}년"
 
+    if ry_sel == "전체":
+        ref_df = df_view
+        r_label = "전체 기간"
+    else:
+        ref_df = df_view[df_view['Year'] == int(ry_sel)]
+        r_label = f"{ry_sel}년"
+    chart_sub = f"{t_label} vs {r_label}"
+
+# 데이터 유무 최종 체크
 if target_df.empty:
-    st.warning(f"선택하신 기간({chart_sub})에 해당하는 데이터가 없습니다.")
+    st.warning(f"⚠️ 선택하신 기간({chart_sub})에 해당하는 데이터가 없습니다. 필터를 확인해주세요.")
     st.stop()
-
 # --- 시각화 탭 생성 ---
 tabs = st.tabs(["💰 매출", "💳 ADR", "⏳ 리드타임", "📅 요일", "🌏 국적/객실", "🔁 로열티(재방문)"])
 
