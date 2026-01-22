@@ -11,6 +11,7 @@ import time
 # 1. Firebase 접속 (가장 안정적인 방식)
 # -----------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="Hotel Strategy Dashboard", page_icon="🏨")
+df = load_from_firestore()
 
 # 캐시 없이 우선 접속 시도 (진단을 위해)
 def init_firebase_direct():
