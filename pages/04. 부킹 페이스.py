@@ -146,8 +146,11 @@ with st.sidebar:
                 all_df = []
                 for f in up_files:
                     try:
-                        # 헤더 2번줄 스킵 로직 포함
-                        tmp = pd.read_csv(f, header=2) if f.name.endswith('.csv') else pd.read_excel(f, header=2)
+                        # 파일 형식에 따른 읽기 (헤더 2번줄 스킵)
+                        if f.name.endswith('.csv'):
+                            tmp = pd.read_csv(f, header=2)
+                        else:
+                            tmp = pd.read_excel(f, header=2)
                         all_df.append(tmp)
                     except Exception as e:
                         st.error(f"파일 읽기 실패 ({f.name}): {e}")
@@ -179,10 +182,13 @@ with st.sidebar:
             else:
                 st.error("입력값이 틀렸습니다.")
 
-    # --- [C] 필터 설정 섹션 (에러 방지 로직 포함) ---
+    # --- [C] 필터 설정 섹션 ---
     st.divider()
     st.markdown("**🚫 필터 설정**")
     
+    # df_clean 초기값 설정 (에러 방지)
+    df_clean = df.copy()
+
     # 데이터가 로드되었을 때만 필터 활성화
     if not df.empty:
         # '상태' 컬럼 존재 여부 체크 (KeyError 방지)
@@ -198,7 +204,7 @@ with st.sidebar:
                 default=def_exc,
                 help="체크된 상태는 매출 분석에서 제외됩니다."
             )
-            # 메인 화면에서 쓸 필터링된 데이터 (상위 코드에서 사용)
+            # 메인 화면에서 쓸 필터링된 데이터
             df_clean = df[~df['상태'].isin(exc_sts)]
         else:
             st.warning("⚠️ 데이터에 '상태' 컬럼이 없습니다.")
