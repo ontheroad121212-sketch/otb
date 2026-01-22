@@ -18,7 +18,7 @@ def prepare_df(raw_data):
         return pd.DataFrame()
     df = pd.DataFrame(raw_data)
     
-    # 컬럼명 공백 제거 및 문자열 변환
+    # 컬럼명 공백 제거
     df.columns = [str(c).strip() for c in df.columns]
     
     # 날짜 데이터 변환 (오류 방지용 coerce)
@@ -55,7 +55,7 @@ def prepare_df(raw_data):
     df['ADR_객실'] = df.apply(lambda x: x['객실료'] / x['박수'] if x['박수'] > 0 else 0, axis=1)
     df['입실주차'] = df['입실일자'].dt.isocalendar().week
     
-    # 5. 부대시설 서비스 분석용 리스트화 (Ancillary Revenue)
+    # 5. 부대시설 서비스 분석용 리스트화
     if '서비스코드' in df.columns:
         df['서비스목록'] = df['서비스코드'].fillna('').str.split(',')
     else:
@@ -70,7 +70,6 @@ def get_all_promotions():
         promo_list = []
         for doc in docs:
             d = doc.to_dict()
-            # 데이터 로드 시 None 방지
             d['start_date'] = str(d.get('start_date', '미상'))
             d['end_date'] = str(d.get('end_date', '미상'))
             promo_list.append(d)
@@ -80,10 +79,10 @@ def get_all_promotions():
 
 # --- [2. 메인 대시보드 화면 구성] ---
 def main():
-    st.set_page_config(page_title="엠버 프로모션 엔진", layout="wide")
-    st.title("📊 엠버 프로모션 성과 분석 및 전략 대시보드")
+    st.set_page_config(page_title="엠버 프로모션 분석 엔진", layout="wide")
+    st.title("📊 엠버 프로모션 성과 분석 및 비교 대시보드")
 
-    tab1, tab2 = st.tabs(["📈 성과 분석 대시보드", "📤 데이터 업로드 및 저장"])
+    tab1, tab2 = st.tabs(["📈 성과 분석 및 비교", "📤 데이터 업로드"])
 
     # --- TAB 1: 분석 및 비교 모드 ---
     with tab1:
@@ -94,11 +93,10 @@ def main():
         else:
             st.sidebar.header("🔍 분석 대상 설정")
             
-            # 1. 거래처 리스트 추출
+            # 기준 데이터 선택
             partners = sorted(list(set([d.get('partner', '알수없음') for d in all_data])))
-            selected_partner = st.sidebar.selectbox("거래처 선택", partners, key="main_partner")
+            selected_partner = st.sidebar.selectbox("기준 거래처 선택", partners, key="main_partner")
             
-            # 2. 해당 거래처의 기간 리스트 필터링
             partner_promos = [d for d in all_data if d.get('partner') == selected_partner]
             partner_promos.sort(key=lambda x: str(x.get('start_date')), reverse=True)
             
@@ -107,10 +105,11 @@ def main():
                 e = d.get('end_date', '미상')
                 return f"📅 {s} ~ {e}"
 
-            target_promo = st.sidebar.selectbox("분석 기간 선택", partner_promos, format_func=format_period, key="main_period")
+            target_promo = st.sidebar.selectbox("기준 기간 선택", partner_promos, format_func=format_period, key="main_period")
             
-            # 비교 모드 (거래처와 기간을 별도로 선택)
-            compare_on = st.sidebar.checkbox("비교 프로모션 활성화 (YoY)")
+            # 비교 모드 활성화
+            st.sidebar.divider()
+            compare_on = st.sidebar.checkbox("🔄 비교 분석 모드 활성화 (YoY/Comp)")
             compare_promo = None
             if compare_on:
                 c_partner = st.sidebar.selectbox("비교 거래처 선택", partners, key="comp_partner")
@@ -118,10 +117,9 @@ def main():
                 c_partner_promos.sort(key=lambda x: str(x.get('start_date')), reverse=True)
                 compare_promo = st.sidebar.selectbox("비교 기간 선택", c_partner_promos, format_func=format_period, key="comp_period")
 
-            # 데이터 가공 실행
+            # 데이터 가공
             df_main = prepare_df(target_promo['data'])
             
-            # KPI 계산 로직
             def get_metrics(df):
                 trev = df['총금액'].sum(); rrev = df['객실료'].sum(); rn = df['박수'].sum()
                 adr = rrev / rn if rn > 0 else 0; los = df['박수'].mean() if not df.empty else 0
@@ -129,37 +127,43 @@ def main():
 
             m_trev, m_rrev, m_rn, m_adr, m_los = get_metrics(df_main)
             
-            st.subheader(f"📍 [{selected_partner}] {format_period(target_promo)} 실적 요약")
-            k1, k2, k3, k4, k5 = st.columns(5)
+            st.subheader(f"📍 분석 결과: {target_promo['partner']} ({target_promo['start_date']} ~ {target_promo['end_date']})")
             
+            # KPI 카드 (Delta 자동 계산)
+            k1, k2, k3, k4, k5 = st.columns(5)
             if compare_on and compare_promo:
                 df_comp = prepare_df(compare_promo['data'])
                 c_trev, c_rrev, c_rn, c_adr, c_los = get_metrics(df_comp)
                 k1.metric("총 매출", f"{m_trev:,.0f}원", f"{m_trev-c_trev:,.0f}원")
                 k2.metric("객실 매출", f"{m_rrev:,.0f}원", f"{m_rrev-c_rrev:,.0f}원")
-                k3.metric("룸나잇(RN)", f"{m_rn:,.0f}박", f"{m_rn-c_rn:,.0f}박")
-                k4.metric("객실 ADR", f"{m_adr:,.0f}원", f"{m_adr-c_adr:,.0f}원")
+                k3.metric("RN (박수)", f"{m_rn:,.0f}박", f"{m_rn-c_rn:,.0f}박")
+                k4.metric("평균 ADR", f"{m_adr:,.0f}원", f"{m_adr-c_adr:,.0f}원")
                 k5.metric("평균 LOS", f"{m_los:.1f}박", f"{m_los-c_los:.1f}박")
             else:
                 k1.metric("총 매출", f"{m_trev:,.0f}원")
                 k2.metric("객실 매출", f"{m_rrev:,.0f}원")
-                k3.metric("룸나잇(RN)", f"{m_rn:,.0f}박")
-                k4.metric("객실 ADR", f"{m_adr:,.0f}원")
+                k3.metric("RN (박수)", f"{m_rn:,.0f}박")
+                k4.metric("평균 ADR", f"{m_adr:,.0f}원")
                 k5.metric("평균 LOS", f"{m_los:.1f}박")
 
             st.divider()
 
-            # 그래프 섹션 1: 요일 및 예약 곡선
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("📅 요일별 실적 (DOW)")
+            # 시각화 1: 예약 곡선 비교 (Pace)
+            if compare_on and compare_promo:
+                st.subheader("📈 프로모션 예약 속도 비교 (Pace Comparison)")
+                df_main_p = df_main.sort_values('예약일자')
+                df_main_p['누적_RN'] = df_main_p['박수'].cumsum()
+                df_main_p['구분'] = f"기준: {target_promo['partner']}"
                 
-                dow_df = df_main.groupby('요일').agg({'총금액':'sum', 'ADR_객실':'mean'}).reset_index()
-                fig_dow = px.bar(dow_df, x='요일', y='총금액', color='ADR_객실', title="요일별 매출 (색상: ADR)", color_continuous_scale='Portland')
-                st.plotly_chart(fig_dow, use_container_width=True)
-            with col2:
+                df_comp_p = df_comp.sort_values('예약일자')
+                df_comp_p['누적_RN'] = df_comp_p['박수'].cumsum()
+                df_comp_p['구분'] = f"비교: {compare_promo['partner']}"
+                
+                combined_pace = pd.concat([df_main_p[['예약일자', '누적_RN', '구분']], df_comp_p[['예약일자', '누적_RN', '구분']]])
+                fig_pace = px.line(combined_pace, x='예약일자', y='누적_RN', color='구분', title="누적 예약 생산 곡선 비교")
+                st.plotly_chart(fig_pace, use_container_width=True)
+            else:
                 st.subheader("📈 누적 예약 생산 곡선 (Pace)")
-                
                 pace_df = df_main.sort_values('예약일자')
                 pace_df['누적_RN'] = pace_df['박수'].cumsum()
                 fig_pace = px.line(pace_df, x='예약일자', y='누적_RN', title="프로모션 누적 예약 추이")
@@ -167,19 +171,15 @@ def main():
 
             st.divider()
 
-            # 그래프 섹션 2: 히트맵 및 리드타임
-            col3, col4 = st.columns(2)
-            with col3:
-                st.subheader("🔥 투숙 집중도 히트맵")
-                
-                heat_data = df_main.groupby(['입실주차', '요일']).size().unstack(fill_value=0)
-                valid_dow = [c for c in ['01.월', '02.화', '03.수', '04.목', '05.금', '06.토', '07.일'] if c in heat_data.columns]
-                heat_data = heat_data.reindex(columns=valid_dow)
-                fig_heat = px.imshow(heat_data, text_auto=True, color_continuous_scale="YlOrRd")
-                st.plotly_chart(fig_heat, use_container_width=True)
-            with col4:
+            # 시각화 2: 요일 및 리드타임
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("📅 요일별 실적 (DOW)")
+                dow_df = df_main.groupby('요일').agg({'총금액':'sum', 'ADR_객실':'mean'}).reset_index()
+                fig_dow = px.bar(dow_df, x='요일', y='총금액', color='ADR_객실', title="요일별 매출 (색상: ADR)", color_continuous_scale='Portland')
+                st.plotly_chart(fig_dow, use_container_width=True)
+            with col2:
                 st.subheader("⏱️ 예약 리드타임 분포")
-                
                 lt_order = ['당일', '1-3일전', '4-7일전', '8-14일전', '15-30일전', '30일+']
                 lt_sum = df_main['LT구간'].value_counts().reindex(lt_order).reset_index()
                 fig_lt = px.bar(lt_sum, x='LT구간', y='count', color='count', title="예약 시점 비중")
@@ -187,36 +187,41 @@ def main():
 
             st.divider()
 
-            # 그래프 섹션 3: 국적 / 상품 / 객실타입
-            d1, d2, d3 = st.columns(3)
-            with d1:
-                st.subheader("🌍 국적 비중")
-                fig_nat = px.pie(df_main, names='국적', hole=0.5)
-                st.plotly_chart(fig_nat, use_container_width=True)
-            with d2:
-                st.subheader("🍳 상품군 판매 비중 (조식여부)")
-                fig_prod = px.pie(df_main, names='상품구분', color_discrete_sequence=px.colors.qualitative.Pastel)
-                st.plotly_chart(fig_prod, use_container_width=True)
-            with d3:
+            # 시각화 3: 히트맵 및 객실타입
+            col3, col4 = st.columns(2)
+            with col3:
+                st.subheader("🔥 투숙 집중도 히트맵")
+                heat_data = df_main.groupby(['입실주차', '요일']).size().unstack(fill_value=0)
+                valid_dow = [c for c in ['01.월', '02.화', '03.수', '04.목', '05.금', '06.토', '07.일'] if c in heat_data.columns]
+                heat_data = heat_data.reindex(columns=valid_dow)
+                fig_heat = px.imshow(heat_data, text_auto=True, color_continuous_scale="YlOrRd")
+                st.plotly_chart(fig_heat, use_container_width=True)
+            with col4:
                 st.subheader("🏨 객실 타입별 실적")
                 room_perf = df_main.groupby('객실타입').agg({'총금액':'sum', '박수':'sum', 'ADR_객실':'mean'}).reset_index()
                 room_perf.columns = ['타입', '매출액', 'RN', 'ADR']
                 st.dataframe(room_perf.style.format({'매출액': '{:,.0f}', 'ADR': '{:,.0f}'}))
 
-            # 부대수익 분석
             st.divider()
-            st.subheader("🍱 부대시설 서비스 분석 (Ancillary Revenue)")
-            all_svcs = [x.strip() for s in df_main['서비스목록'] for x in s if x.strip() != '']
-            if all_svcs:
-                svc_df = pd.Series(all_svcs).value_counts().reset_index()
-                svc_df.columns = ['서비스명', '건수']
-                fig_svc = px.bar(svc_df, x='서비스명', y='건수', color='건수', title="추가 서비스 판매 현황")
-                st.plotly_chart(fig_svc, use_container_width=True)
 
-            # [하단 원본 데이터 조회 기능]
+            # 시각화 4: 비중 및 부대수익
+            d1, d2, d3 = st.columns(3)
+            with d1:
+                st.subheader("🌍 국적 비중")
+                st.plotly_chart(px.pie(df_main, names='국적', hole=0.5), use_container_width=True)
+            with d2:
+                st.subheader("🍳 상품군 판매 비중")
+                st.plotly_chart(px.pie(df_main, names='상품구분', color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
+            with d3:
+                st.subheader("🍱 부대수익 분석")
+                all_svcs = [x.strip() for s in df_main['서비스목록'] for x in s if x.strip() != '']
+                if all_svcs:
+                    svc_df = pd.Series(all_svcs).value_counts().reset_index()
+                    svc_df.columns = ['서비스명', '건수']
+                    st.plotly_chart(px.bar(svc_df, x='서비스명', y='건수', color='건수'), use_container_width=True)
+
             st.divider()
             with st.expander("📄 전체 예약 목록 및 원본 데이터 (Raw Data)", expanded=False):
-                st.write(f"조회된 프로모션의 전체 예약 데이터입니다. (총 {len(df_main)}건)")
                 st.dataframe(df_main, use_container_width=True)
 
     # --- TAB 2: 데이터 업로드 (AE열 3행 고정 조준) ---
@@ -224,7 +229,6 @@ def main():
         st.header("📤 새로운 프로모션 데이터 등록")
         uploaded_file = st.file_uploader("PMS 엑셀 파일을 업로드하세요", type=['xlsx'])
         if uploaded_file:
-            # AE열(31번째 열)이 있는 3행(index 2)을 헤더로 읽기
             df_load = pd.read_excel(uploaded_file, header=2)
             df_load.columns = [str(c).strip() for c in df_load.columns]
             
@@ -232,8 +236,7 @@ def main():
                 # 1. 거래처 추출
                 val_partner = str(df_load['거래처'].iloc[0]).split('[')[0].strip()
                 
-                # 2. 예약일자(AE열) 기준 기간 자동 계산
-                # iloc[:, 30]은 엑셀의 AE열(31번째 열)을 의미함
+                # 2. 예약일자(AE열) 기준 기간 자동 계산 (iloc[:, 30] = 31번째 열)
                 res_series = pd.to_datetime(df_load.iloc[:, 30], errors='coerce').dropna()
                 
                 if not res_series.empty:
