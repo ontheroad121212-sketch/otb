@@ -18,7 +18,7 @@ def prepare_df(raw_data):
         return pd.DataFrame()
     df = pd.DataFrame(raw_data)
     
-    # 컬럼명 공백 제거 및 문자열 변환
+    # 컬럼명 공백 제거
     df.columns = [str(c).strip() for c in df.columns]
     
     # 날짜 데이터 변환 (오류 방지용 coerce)
@@ -70,7 +70,6 @@ def get_all_promotions():
         promo_list = []
         for doc in docs:
             d = doc.to_dict()
-            # 데이터 로드 시 None 방지 및 날짜 형식 강제
             d['start_date'] = str(d.get('start_date', '미상'))
             d['end_date'] = str(d.get('end_date', '미상'))
             promo_list.append(d)
@@ -80,7 +79,7 @@ def get_all_promotions():
 
 # --- [2. 메인 대시보드 화면 구성] ---
 def main():
-    st.set_page_config(page_title="엠버 프로모션 엔진", layout="wide")
+    st.set_page_config(page_title="엠버 프로모션 분석 엔진", layout="wide")
     st.title("📊 엠버 프로모션 성과 분석 및 전략 대시보드")
 
     tab1, tab2 = st.tabs(["📈 성과 분석 대시보드", "📤 데이터 업로드 및 저장"])
@@ -92,13 +91,14 @@ def main():
         if not all_data:
             st.info("데이터가 없습니다. 업로드 탭에서 엑셀 파일을 먼저 등록해주세요.")
         else:
+            # 사이드바 필터: 거래처 선택 -> 해당 거래처의 기간 선택
             st.sidebar.header("🔍 분석 대상 설정")
             
-            # 1. 거래처 리스트 추출
+            # 1. 거래처 리스트 추출 및 선택
             partners = sorted(list(set([d.get('partner', '알수없음') for d in all_data])))
             selected_partner = st.sidebar.selectbox("거래처 선택", partners, key="main_partner")
             
-            # 2. 해당 거래처의 기간 리스트 필터링
+            # 2. 해당 거래처의 기간 리스트 구성
             partner_promos = [d for d in all_data if d.get('partner') == selected_partner]
             partner_promos.sort(key=lambda x: str(x.get('start_date')), reverse=True)
             
@@ -129,7 +129,7 @@ def main():
 
             m_trev, m_rrev, m_rn, m_adr, m_los = get_metrics(df_main)
             
-            st.subheader(f"📍 [{selected_partner}] {format_period(target_promo)} 실적")
+            st.subheader(f"📍 [{selected_partner}] {format_period(target_promo)} 실적 요약")
             k1, k2, k3, k4, k5 = st.columns(5)
             
             if compare_on and compare_promo:
@@ -153,13 +153,11 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("📅 요일별 실적 (DOW)")
-                
                 dow_df = df_main.groupby('요일').agg({'총금액':'sum', 'ADR_객실':'mean'}).reset_index()
                 fig_dow = px.bar(dow_df, x='요일', y='총금액', color='ADR_객실', title="요일별 매출 (색상: ADR)", color_continuous_scale='Portland')
                 st.plotly_chart(fig_dow, use_container_width=True)
             with col2:
                 st.subheader("📈 누적 예약 생산 곡선 (Pace)")
-                
                 pace_df = df_main.sort_values('예약일자')
                 pace_df['누적_RN'] = pace_df['박수'].cumsum()
                 fig_pace = px.line(pace_df, x='예약일자', y='누적_RN', title="프로모션 누적 예약 추이")
@@ -171,7 +169,6 @@ def main():
             col3, col4 = st.columns(2)
             with col3:
                 st.subheader("🔥 투숙 집중도 히트맵")
-                
                 heat_data = df_main.groupby(['입실주차', '요일']).size().unstack(fill_value=0)
                 valid_dow = [c for c in ['01.월', '02.화', '03.수', '04.목', '05.금', '06.토', '07.일'] if c in heat_data.columns]
                 heat_data = heat_data.reindex(columns=valid_dow)
@@ -179,7 +176,6 @@ def main():
                 st.plotly_chart(fig_heat, use_container_width=True)
             with col4:
                 st.subheader("⏱️ 예약 리드타임 분포")
-                
                 lt_order = ['당일', '1-3일전', '4-7일전', '8-14일전', '15-30일전', '30일+']
                 lt_sum = df_main['LT구간'].value_counts().reindex(lt_order).reset_index()
                 fig_lt = px.bar(lt_sum, x='LT구간', y='count', color='count', title="예약 시점 비중")
@@ -191,10 +187,12 @@ def main():
             d1, d2, d3 = st.columns(3)
             with d1:
                 st.subheader("🌍 국적 비중")
-                st.plotly_chart(px.pie(df_main, names='국적', hole=0.5), use_container_width=True)
+                fig_nat = px.pie(df_main, names='국적', hole=0.5)
+                st.plotly_chart(fig_nat, use_container_width=True)
             with d2:
                 st.subheader("🍳 상품군 판매 비중 (조식여부)")
-                st.plotly_chart(px.pie(df_main, names='상품구분', color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
+                fig_prod = px.pie(df_main, names='상품구분', color_discrete_sequence=px.colors.qualitative.Pastel)
+                st.plotly_chart(fig_prod, use_container_width=True)
             with d3:
                 st.subheader("🏨 객실 타입별 실적")
                 room_perf = df_main.groupby('객실타입').agg({'총금액':'sum', '박수':'sum', 'ADR_객실':'mean'}).reset_index()
@@ -217,12 +215,12 @@ def main():
                 st.write(f"조회된 프로모션의 전체 예약 데이터입니다. (총 {len(df_main)}건)")
                 st.dataframe(df_main, use_container_width=True)
 
-    # --- TAB 2: 데이터 업로드 (AE열 3행 고정 조준 로직) ---
+    # --- TAB 2: 데이터 업로드 (AE열 3행 고정 조준) ---
     with tab2:
         st.header("📤 새로운 프로모션 데이터 등록")
         uploaded_file = st.file_uploader("PMS 엑셀 파일을 업로드하세요", type=['xlsx'])
         if uploaded_file:
-            # 3행(index 2)을 헤더로 정확히 읽기
+            # AE열(31번째 열)이 있는 3행(index 2)을 헤더로 읽기
             df_load = pd.read_excel(uploaded_file, header=2)
             df_load.columns = [str(c).strip() for c in df_load.columns]
             
@@ -230,15 +228,9 @@ def main():
                 # 1. 거래처 추출
                 val_partner = str(df_load['거래처'].iloc[0]).split('[')[0].strip()
                 
-                # 2. 날짜 추출 보강: AE열(예약일자) 컬럼을 찾아서 강제 파싱
-                # 엑셀의 AE열은 보통 31번째 컬럼(index 30)입니다.
-                # 컬럼명 매칭이 안 될 경우를 대비해 인덱스로 한 번 더 확인합니다.
-                res_col = '예약일자'
-                if res_col not in df_load.columns:
-                    # 컬럼명으로 못 찾으면 30번째 인덱스 컬럼을 예약일자로 간주
-                    res_col = df_load.columns[min(30, len(df_load.columns)-1)]
-                
-                res_series = pd.to_datetime(df_load[res_col], errors='coerce').dropna()
+                # 2. 예약일자(AE열) 기준 기간 자동 계산
+                # iloc[:, 30]은 엑셀의 AE열(31번째 열)을 의미함
+                res_series = pd.to_datetime(df_load.iloc[:, 30], errors='coerce').dropna()
                 
                 if not res_series.empty:
                     start_date = str(res_series.min().date())
