@@ -671,60 +671,99 @@ try:
                 st.header("🎯 OTB 현황 (Budget vs OTB)")
                 
                 if df_otb.empty:
-                    st.warning("업로드된 OTB 데이터가 없습니다.")
+                    st.warning("⚠️ 업로드된 OTB 데이터가 없습니다.")
                 else:
-                    # 1. 월별 OTB 집계 (매출, RN)
+                    # 1. 월별 OTB 집계 (매출)
                     otb_monthly = df_otb.groupby('CheckIn').agg({'Room_Revenue': 'sum', 'RN': 'sum'}).reset_index()
                     otb_monthly.rename(columns={'CheckIn': 'Stay_Month', 'Room_Revenue': 'OTB_Rev', 'RN': 'OTB_RN'}, inplace=True)
+                    
+                    # 날짜 처리
                     otb_monthly['Stay_Month'] = pd.to_datetime(otb_monthly['Stay_Month']).dt.strftime('%Y-%m')
                     otb_monthly['Month_Num'] = pd.to_datetime(otb_monthly['Stay_Month']).dt.month
                     
-                    # 2. Budget 매핑 (사용자 정의 버짓 데이터 사용)
+                    # 2. Budget 매핑 (상단에 정의한 BUDGET_DATA 사용)
                     otb_monthly['Budget_Rev'] = otb_monthly['Month_Num'].map(BUDGET_DATA).fillna(0)
                     
-                    # 3. 달성률 계산 (OTB / Budget)
-                    otb_monthly['Budget_Achiev'] = np.where(otb_monthly['Budget_Rev'] > 0, 
-                                                            (otb_monthly['OTB_Rev'] / otb_monthly['Budget_Rev']) * 100, 0)
+                    # 3. 달성률 계산 (OTB / Budget * 100)
+                    otb_monthly['Achiev_Rate'] = np.where(
+                        otb_monthly['Budget_Rev'] > 0, 
+                        (otb_monthly['OTB_Rev'] / otb_monthly['Budget_Rev']) * 100, 
+                        0
+                    )
                     
-                    otb_monthly = otb_monthly.sort_values('Stay_Month')
-                    
-                    # 4. 합계 행 생성
+                    # 4. 합계(Total) 행 계산
                     total_budget = otb_monthly['Budget_Rev'].sum()
                     total_otb = otb_monthly['OTB_Rev'].sum()
-                    total_otb_rn = otb_monthly['OTB_RN'].sum()
-                    total_achiev = (total_otb / total_budget * 100) if total_budget > 0 else 0
+                    total_rn = otb_monthly['OTB_RN'].sum()
+                    total_rate = (total_otb / total_budget * 100) if total_budget > 0 else 0
                     
+                    # 데이터프레임 정렬
+                    otb_monthly = otb_monthly.sort_values('Stay_Month')
+                    
+                    # 합계 행 생성 및 추가
                     total_row = pd.DataFrame([{
                         'Stay_Month': 'TOTAL',
                         'Budget_Rev': total_budget,
                         'OTB_Rev': total_otb,
-                        'Budget_Achiev': total_achiev,
-                        'OTB_RN': total_otb_rn
+                        'OTB_RN': total_rn,
+                        'Achiev_Rate': total_rate
                     }])
                     
-                    merged_final = pd.concat([otb_monthly, total_row], ignore_index=True)
+                    # 표 표시용 데이터 (월별 + 합계)
+                    final_df = pd.concat([otb_monthly, total_row], ignore_index=True)
+
+                    # -------------------------------------------------------
+                    # [시각화] Budget vs OTB (달성률 숫자 표시)
+                    # -------------------------------------------------------
+                    st.subheader("📊 월별 Budget(점선) vs OTB(막대)")
                     
-                    # 5. 시각화 (Budget vs OTB 막대/선 그래프)
-                    st.subheader("📊 월별 Budget vs OTB 비교")
                     fig_otb = go.Figure()
-                    fig_otb.add_trace(go.Bar(x=otb_monthly['Stay_Month'], y=otb_monthly['OTB_Rev'], name='OTB (현재예약)', marker_color='#2E86C1'))
-                    fig_otb.add_trace(go.Scatter(x=otb_monthly['Stay_Month'], y=otb_monthly['Budget_Rev'], name='Budget (목표)', line=dict(color='#E74C3C', width=3, dash='dot')))
+                    
+                    # (1) OTB 막대 그래프 (달성률 숫자 표시)
+                    fig_otb.add_trace(go.Bar(
+                        x=otb_monthly['Stay_Month'],
+                        y=otb_monthly['OTB_Rev'],
+                        name='OTB (현재예약)',
+                        marker_color='#2E86C1', # 파란색
+                        text=otb_monthly['Achiev_Rate'].apply(lambda x: f"{x:.1f}%"), # % 숫자 표시
+                        textposition='auto',        # 막대 안/위 자동 배치
+                        textfont=dict(size=14, color='white', weight='bold') # 글자 스타일
+                    ))
+                    
+                    # (2) Budget 선 그래프
+                    fig_otb.add_trace(go.Scatter(
+                        x=otb_monthly['Stay_Month'],
+                        y=otb_monthly['Budget_Rev'],
+                        name='Budget (목표)',
+                        line=dict(color='#E74C3C', width=3, dash='dot') # 빨간 점선
+                    ))
+                    
+                    # 레이아웃 설정
+                    fig_otb.update_layout(
+                        yaxis=dict(title="매출액 (KRW)"),
+                        xaxis=dict(title="월 (Stay Month)"),
+                        height=500,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
                     st.plotly_chart(fig_otb, use_container_width=True)
                     
-                    # 6. 달성률 꺾은선 그래프
-                    st.subheader("📈 버짓 달성률 (%)")
-                    fig_rate = px.line(otb_monthly, x='Stay_Month', y='Budget_Achiev', markers=True)
-                    fig_rate.update_traces(line_color='green', texttemplate='%{y:.1f}%', textposition='top center')
-                    fig_rate.update_yaxes(range=[0, max(otb_monthly['Budget_Achiev'].max() + 10, 110)])
-                    st.plotly_chart(fig_rate, use_container_width=True)
+                    # -------------------------------------------------------
+                    # [표] 월별 + 합계 (심플 버전)
+                    # -------------------------------------------------------
+                    st.subheader("📋 월별 버짓 달성 현황 (합계 포함)")
                     
-                    # 7. 표 출력 (Budget, OTB, %, RN) - Actual 제외
-                    cols = ['Stay_Month', 'Budget_Rev', 'OTB_Rev', 'Budget_Achiev', 'OTB_RN']
-                    styler = merged_final[cols].style.format({
-                        'Budget_Rev': "{:,.0f}", 'OTB_Rev': "{:,.0f}", 
-                        'OTB_RN': "{:,.0f}", 'Budget_Achiev': "{:.1f}%"
+                    # 보여줄 컬럼만 선택
+                    cols = ['Stay_Month', 'Budget_Rev', 'OTB_Rev', 'Achiev_Rate', 'OTB_RN']
+                    
+                    # 스타일 적용
+                    styler = final_df[cols].style.format({
+                        'Budget_Rev': "{:,.0f}", 
+                        'OTB_Rev': "{:,.0f}", 
+                        'OTB_RN': "{:,.0f}",
+                        'Achiev_Rate': "{:.1f}%"
                     })
                     
+                    # 합계 행 노란색 강조
                     def highlight_total(row):
                         return ['background-color: #fff9c4; font-weight: bold; color: black; border-top: 2px solid black'] * len(row) if row['Stay_Month'] == 'TOTAL' else [''] * len(row)
                     
