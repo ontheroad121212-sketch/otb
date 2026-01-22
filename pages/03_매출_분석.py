@@ -287,7 +287,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
                 else: return "3.그외"
             except: return "Unknown"
         df['Month_Label'] = df['CheckIn_dt'].apply(get_month_label)
-
+        
         df['CheckIn'] = df['CheckIn_dt'].dt.strftime('%Y-%m-%d')
         
         # 최종 컬럼 정리
@@ -308,6 +308,7 @@ def process_data(uploaded_file, status, sub_segment="General"):
 def add_total_row(df, group_col_name="구분"):
     """
     데이터프레임 하단에 '합계(TOTAL)' 행을 추가합니다.
+    - 숫자형 컬럼은 합계를 구함
     - ADR은 단순 합계가 아니라 (총매출 / 총객실수)로 재계산하여 정확도 보장
     """
     if df.empty:
@@ -325,6 +326,7 @@ def add_total_row(df, group_col_name="구분"):
     if group_col_name in df.columns:
         total_row[group_col_name] = "TOTAL"
     else:
+        # 그룹 컬럼이 인덱스이거나 다른 이름일 경우 첫 번째 컬럼에 표시
         total_row[df.columns[0]] = "TOTAL"
 
     # 4. ADR 재계산 (Weighted Average)
@@ -343,14 +345,14 @@ def add_total_row(df, group_col_name="구분"):
 def get_fmt_config():
     """
     모든 테이블에 적용될 공통 컬럼 설정
-    - format="%d": 소수점 제거
-    - 천 단위 콤마는 Streamlit NumberColumn이 자동으로 처리함 (설정값에 따라 다를 수 있으나 %d가 정수형)
+    - format="%d": 소수점 제거 (정수형 표시)
+    - 천 단위 콤마는 Streamlit NumberColumn이 자동으로 처리함
     """
     return {
-        "RN": st.column_config.NumberColumn("객실수 (RN)", format="%d"),
+        "RN": st.column_config.NumberColumn("객실수(RN)", format="%d"),
         "Room_Revenue": st.column_config.NumberColumn("객실매출", format="%d"),
         "Total_Revenue": st.column_config.NumberColumn("총매출", format="%d"),
-        "ADR": st.column_config.NumberColumn("객실단가 (ADR)", format="%d"),
+        "ADR": st.column_config.NumberColumn("객실단가(ADR)", format="%d"),
         "Lead_Time": st.column_config.NumberColumn("리드타임", format="%d")
     }
 
@@ -363,6 +365,7 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
     # 공통 포맷 가져오기
     fmt_config = get_fmt_config()
 
+    # 탭 구성
     t1, t2, t3, t4, t5, t6, t7 = st.tabs([
         "📊 세그먼트", "📅 예약패턴", "🏢 거래처", 
         "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일별", "🌐 국적별"
@@ -387,15 +390,14 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
         pivot_metric = st.radio(f"{title_prefix} 기준", ["RN", "Revenue", "ADR"], horizontal=True, key=f"{title_prefix}_rad")
         
         if pivot_metric == "ADR":
-            rev_piv = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='Room_Revenue', aggfunc='sum', fill_value=0)
-            rn_piv = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum', fill_value=0)
-            pacing = rev_piv.div(rn_piv).fillna(0)
+            pacing = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='Room_Revenue', aggfunc='sum') / \
+                     target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum')
             fmt = ".0f"
         elif pivot_metric == "RN":
-            pacing = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum', fill_value=0)
+            pacing = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum')
             fmt = "d"
         else:
-            pacing = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='Room_Revenue', aggfunc='sum', fill_value=0)
+            pacing = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='Room_Revenue', aggfunc='sum')
             fmt = ".0f"
             
         pacing = pacing.fillna(0)
@@ -595,7 +597,7 @@ try:
                 cn_adr = cn_rev / cn_rn if cn_rn > 0 else 0
                 
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("✅ 신규 예약", f"{bk_cnt:,.0f} 건")
+                c1.metric("✅ 신규 예약 (건)", f"{bk_cnt:,.0f} 건")
                 c2.metric("✅ 예약 RN", f"{bk_rn:,.0f} 박")
                 c3.metric("✅ 예약 매출", f"{bk_rev:,.0f} 원")
                 c4.metric("✅ 예약 ADR", f"{bk_adr:,.0f} 원")
@@ -703,7 +705,7 @@ try:
                                  })
 
     else:
-        st.info("👈 왼쪽 사이드바에서 파일을 업로드하여 데이터를 추가해주세요.")
+        st.info("👈 왼쪽에서 파일을 업로드해주세요.")
 
 except Exception as e:
-    st.error(f"🚨 시스템 오류: {e}")
+    st.error(f"🚨 오류 발생: {e}")
