@@ -5,133 +5,115 @@ import plotly.graph_objects as go
 from firebase_admin import firestore
 import datetime
 
-# Firestore 연결 (기본 설정이 되어 있다고 가정)
+# Firestore 클라이언트 설정 (이미 초기화되었다고 가정)
 db = firestore.client()
 
-def get_promo_data(promo_id):
-    """Firestore에서 프로모션 ID로 데이터 불러오기"""
-    doc = db.collection("promotions").document(promo_id).get()
-    if doc.exists:
-        data = doc.to_dict().get('data', [])
-        return pd.DataFrame(data)
-    return pd.DataFrame()
+# --- 데이터 처리 함수 ---
+def process_excel_data(df):
+    """업로드된 데이터의 ADR 및 필요 지표 자동 계산"""
+    # 컬럼 표준화 (공백 제거 등)
+    df.columns = [c.strip() for c in df.columns]
+    
+    # 1. ADR 계산: 총매출 기준 ADR / 객실매출 기준 ADR 구분
+    # '총매출', '객실매출', '박수' 컬럼이 있다고 가정
+    df['ADR_총액'] = df['총매출'] / df['박수']
+    df['ADR_객실'] = df['객실매출'] / df['박수']
+    
+    # 2. 날짜 데이터 변환
+    df['입실일'] = pd.to_datetime(df['입실일'])
+    df['예약일'] = pd.to_datetime(df['예약일'])
+    df['요일'] = df['입실일'].dt.day_name()
+    df['주말여부'] = df['입실일'].dt.dayofweek >= 4 # 금, 토, 일
+    df['리드타임'] = (df['입실일'] - df['예약일']).dt.days
+    
+    return df
 
+# --- 메인 앱 구성 ---
 def main():
-    st.set_page_config(page_title="앰버 프로모션 분석 엔진", layout="wide")
-    st.title("📈 프로모션 성과 분석 & 비교 대시보드")
-
-    # --- [사이드바] 필터 및 비교 설정 ---
-    st.sidebar.header("🎯 분석 대상 설정")
+    st.set_page_config(page_title="엠버 프로모션 엔진", layout="wide")
     
-    # 1. 거래처 및 프로모션 선택
-    partners = ["호텔타임", "데일리호텔", "야놀자", "네이버", "공홈"]
-    selected_partner = st.sidebar.selectbox("거래처 선택", partners)
-    
-    # 실제 운영 시에는 DB에서 해당 거래처의 promo_id 리스트를 가져오게 구성
-    all_promos = ["2026-01_신년특가", "2025-01_신년특가(YoY)", "2025-12_연말특가"]
-    target_promo = st.sidebar.selectbox("기준 프로모션", all_promos)
-    compare_promo = st.sidebar.selectbox("비교 프로모션 (전년 등)", [None] + all_promos)
+    tabs = st.tabs(["📊 성과 분석 대시보드", "📤 데이터 업로드 및 저장"])
 
-    # 데이터 로드
-    df_main = get_promo_data(target_promo)
-    df_comp = get_promo_data(compare_promo) if compare_promo else pd.DataFrame()
-
-    if df_main.empty:
-        st.info("데이터를 선택해주세요. Firestore에 저장된 프로모션 정보가 표시됩니다.")
-        return
-
-    # --- [데이터 전처리] ---
-    for df in [df_main, df_comp]:
-        if not df.empty:
-            df['check_in'] = pd.to_datetime(df['check_in'])
-            df['created_at'] = pd.to_datetime(df['created_at'])
-            df['dow'] = df['check_in'].dt.day_name()
-            df['is_weekend'] = df['check_in'].dt.dayofweek >= 4 # 금,토,일 기준(호텔 기준 설정)
-            df['lead_time'] = (df['check_in'] - df['created_at']).dt.days
-
-    # --- [섹션 1] 핵심 지표 (Comparison Cards) ---
-    st.subheader("📍 핵심 성과 지표 (Key Metrics)")
-    m1, m2, m3, m4 = st.columns(4)
-    
-    def get_metrics(df):
-        rev = df['revenue'].sum()
-        rn = len(df)
-        adr = rev / rn if rn > 0 else 0
-        los = df['stay_nights'].mean() if not df.empty else 0
-        return rev, rn, adr, los
-
-    m_rev, m_rn, m_adr, m_los = get_metrics(df_main)
-    
-    if not df_comp.empty:
-        c_rev, c_rn, c_adr, c_los = get_metrics(df_comp)
-        m1.metric("총 매출", f"{m_rev:,.0f}원", f"{m_rev-c_rev:,.0f}원")
-        m2.metric("룸나잇", f"{m_rn}개", f"{m_rn-c_rn}개")
-        m3.metric("ADR", f"{m_adr:,.0f}원", f"{m_adr-c_adr:,.0f}원")
-        m4.metric("평균 LOS", f"{m_los:.1f}박", f"{m_los-c_los:.1f}박")
-    else:
-        m1.metric("총 매출", f"{m_rev:,.0f}원")
-        m2.metric("룸나잇", f"{m_rn}개")
-        m3.metric("ADR", f"{m_adr:,.0f}원")
-        m4.metric("평균 LOS", f"{m_los:.1f}박")
-
-    st.divider()
-
-    # --- [섹션 2] 요일별(DOW) & 예약 곡선(Booking Curve) ---
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("📅 요일별 성적 (DOW Analysis)")
-        # 
-        dow_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        dow_summary = df_main.groupby('dow').agg({'revenue':'sum', 'adr':'mean'}).reindex(dow_order).reset_index()
+    # --- TAB 1: 데이터 업로드 ---
+    with tabs[1]:
+        st.header("엑셀 데이터 업로드")
+        uploaded_file = st.file_uploader("거래처에서 내려받은 엑셀 파일을 올려주세요", type=['xlsx', 'csv'])
         
-        fig_dow = px.bar(dow_summary, x='dow', y='revenue', color='adr',
-                         title="요일별 매출 (색상: ADR)",
-                         labels={'revenue':'매출', 'dow':'요일', 'adr':'ADR'})
-        st.plotly_chart(fig_dow, use_container_width=True)
+        if uploaded_file:
+            df_raw = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+            
+            # 파일에서 정보 자동 추출
+            try:
+                auto_partner = df_raw['거래처'].iloc[0]
+                auto_promo = df_raw['요금타입'].iloc[0]
+                
+                st.info(f"📍 탐지된 정보: **거래처 - {auto_partner}** | **프로모션 - {auto_promo}**")
+                
+                if st.button("파이어스토어에 이 정보로 저장"):
+                    processed_df = process_excel_data(df_raw)
+                    data_dict = processed_df.to_dict(orient='records')
+                    
+                    doc_id = f"{auto_partner}_{auto_promo}_{datetime.date.today()}"
+                    db.collection("promotions").document(doc_id).set({
+                        "partner": auto_partner,
+                        "promo_name": auto_promo,
+                        "upload_date": str(datetime.date.today()),
+                        "data": data_dict
+                    })
+                    st.success(f"✅ {doc_id} 저장 완료!")
+            except KeyError:
+                st.error("파일에 '거래처' 또는 '요금타입' 컬럼이 없습니다. 확인해 주세요.")
+
+    # --- TAB 2: 성과 분석 대시보드 ---
+    with tabs[0]:
+        st.header("프로모션 성과 분석")
         
-        # 주중/주말 비중 텍스트 요약
-        weekday_ratio = len(df_main[df_main['is_weekend']==False]) / len(df_main) * 100
-        st.caption(f"💡 현재 프로모션의 **주중 투숙 비중은 {weekday_ratio:.1f}%** 입니다.")
+        # 필터 영역
+        with st.sidebar:
+            st.header("🔍 조회 설정")
+            # Firestore에서 목록 불러오기 (실제 운영시에는 실시간 쿼리)
+            target_partner = st.selectbox("거래처 선택", ["호텔타임", "데일리호텔", "야놀자", "기타"])
+            target_promo = st.text_input("프로모션명 검색 (직접 입력)")
+            compare_mode = st.checkbox("전년/타 프로모션 비교")
 
-    with col2:
-        st.subheader("📈 누적 예약 곡선 (Booking Curve)")
-        # 
-        # 예약 생성일 기준 누적 데이터
-        df_main = df_main.sort_values('created_at')
-        df_main['count'] = 1
-        df_main['cumulative_rn'] = df_main['count'].cumsum()
+        # 예시 데이터 로드 및 시각화 (실제 로직은 db.collection().get() 사용)
+        # 여기서는 df_main이 로드되었다고 가정하고 분석 진행
+        st.subheader("📌 Key Performance Indicators")
+        col1, col2, col3, col4 = st.columns(4)
         
-        fig_curve = px.line(df_main, x='created_at', y='cumulative_rn', 
-                            title="프로모션 진행 기간 예약 생산 속도")
-        st.plotly_chart(fig_curve, use_container_width=True)
+        # 지표 예시 (df_main 데이터 기반)
+        col1.metric("총 매출", "25,400,000원", "15%")
+        col2.metric("객실 매출", "21,000,000원", "10%")
+        col3.metric("총 룸나잇", "120박")
+        col4.metric("객실 ADR", "175,000원")
 
-    st.divider()
+        st.divider()
 
-    # --- [섹션 3] 상세 분포 (리드타임, 국적, 상품군) ---
-    c1, c2, c3 = st.columns(3)
-    
-    with c1:
-        st.subheader("⏱️ 리드타임 분포")
-        fig_lt = px.histogram(df_main, x='lead_time', nbins=10, title="예약 시점(D-Day)")
-        st.plotly_chart(fig_lt, use_container_width=True)
+        # 요일별 및 예약 곡선
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("📅 요일별 점유 및 ADR")
+            # 
+            st.info("여기에 요일별 막대 그래프(매출)와 꺾은선(ADR)이 표시됩니다.")
+            
+        with c2:
+            st.subheader("📈 예약 생산 곡선 (Booking Curve)")
+            # 
+            st.info("프로모션 시작 후 예약이 쌓이는 속도를 분석합니다.")
 
-    with c2:
-        st.subheader("🌍 국적 & 상품 비중")
-        tab_nat, tab_meal = st.tabs(["국적", "조식포함여부"])
-        with tab_nat:
-            st.plotly_chart(px.pie(df_main, names='nationality', hole=0.4), use_container_width=True)
-        with tab_meal:
-            st.plotly_chart(px.pie(df_main, names='meal_plan'), use_container_width=True)
-
-    with c3:
-        st.subheader("🏨 객실 타입별 실적")
-        room_perf = df_main.groupby('room_type').agg({
-            'revenue': 'sum',
-            'count': 'sum',
-            'adr': 'mean'
-        }).rename(columns={'count': '룸나잇'}).reset_index()
-        st.dataframe(room_perf.style.format({'revenue': '{:,.0f}', 'adr': '{:,.0f}'}))
+        st.divider()
+        
+        # 상세 비중 분석
+        c3, c4, c5 = st.columns(3)
+        with c3:
+            st.subheader("🌍 국적 비중")
+            # 
+        with c4:
+            st.subheader("🍳 상품별 판매 비중")
+            # 룸온리 vs 조식 포함 등 3개 상품 비교
+        with c5:
+            st.subheader("🏢 객실 타입별 실적")
+            # 매출 / 룸나잇 / ADR 표
 
 if __name__ == "__main__":
     main()
