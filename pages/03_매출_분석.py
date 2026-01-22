@@ -111,7 +111,7 @@ def clean_numeric_columns(df):
                 errors='coerce'
             ).fillna(0)
             
-    # [ADR 재계산 로직] 숫자가 된 상태에서 다시 계산하여 정확도 보장
+    # [ADR 재계산 로직]
     if 'RN' in df.columns:
         if 'Room_Revenue' in df.columns:
             df['ADR_Room'] = np.where(df['RN'] > 0, df['Room_Revenue'] / df['RN'], 0)
@@ -168,7 +168,6 @@ def delete_otb_data_only():
                 segment = str(first_row.get('Segment', ''))
                 g_name = str(first_row.get('Guest_Name', ''))
                 
-                # OTB 데이터 식별 조건
                 if 'OTB' in segment or 'OTB' in g_name:
                     doc.reference.delete()
                     deleted_count += 1
@@ -380,12 +379,8 @@ def show_dataframe_with_style(df):
     def highlight_total(row):
         is_total = False
         for val in row:
-            if str(val) == "TOTAL":
-                is_total = True
-                break
-        if is_total:
-            return ['background-color: #fff9c4; font-weight: bold; color: black; border-top: 2px solid black'] * len(row)
-        return [''] * len(row)
+            if str(val) == "TOTAL": is_total = True; break
+        return ['background-color: #fff9c4; font-weight: bold; color: black; border-top: 2px solid black'] * len(row) if is_total else [''] * len(row)
     
     styler = styler.apply(highlight_total, axis=1)
     st.dataframe(styler, hide_index=True, use_container_width=True)
@@ -405,14 +400,7 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
         seg_stats = target_df.groupby('Segment').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
         seg_stats['ADR_Room'] = np.where(seg_stats['RN']>0, seg_stats['Room_Revenue']/seg_stats['RN'], 0)
         seg_stats['ADR_Total'] = np.where(seg_stats['RN']>0, seg_stats['Total_Revenue']/seg_stats['RN'], 0)
-        
-        seg_stats_final = add_total_row(seg_stats, 'Segment')
-        
-        c1, c2 = st.columns(2)
-        c1.plotly_chart(px.pie(seg_stats, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True)
-        c2.plotly_chart(px.bar(seg_stats, x='Segment', y='Room_Revenue', text_auto='.2s', title="매출액"), use_container_width=True)
-        
-        show_dataframe_with_style(seg_stats_final)
+        show_dataframe_with_style(add_total_row(seg_stats, 'Segment'))
 
     with t2:
         st.subheader(f"📅 Pacing Analysis")
@@ -424,11 +412,7 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
         acc_stats = target_df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
         acc_stats['ADR_Room'] = np.where(acc_stats['RN']>0, acc_stats['Room_Revenue']/acc_stats['RN'], 0)
         acc_stats['ADR_Total'] = np.where(acc_stats['RN']>0, acc_stats['Total_Revenue']/acc_stats['RN'], 0)
-        
-        acc_stats = acc_stats.sort_values('RN', ascending=False).head(100)
-        acc_final = add_total_row(acc_stats, 'Account')
-        
-        show_dataframe_with_style(acc_final)
+        show_dataframe_with_style(add_total_row(acc_stats.sort_values('RN', ascending=False).head(100), 'Account'))
 
     with t4:
         st.subheader("⏳ 리드타임")
@@ -439,33 +423,25 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
         lead_stats = temp_df.groupby('Lead_Group').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
         lead_stats['ADR_Room'] = np.where(lead_stats['RN']>0, lead_stats['Room_Revenue']/lead_stats['RN'], 0)
         lead_stats['ADR_Total'] = np.where(lead_stats['RN']>0, lead_stats['Total_Revenue']/lead_stats['RN'], 0)
-        
-        lead_final = add_total_row(lead_stats, 'Lead_Group')
-        
         st.plotly_chart(px.bar(lead_stats, x='Lead_Group', y='RN'), use_container_width=True)
-        show_dataframe_with_style(lead_final)
+        show_dataframe_with_style(add_total_row(lead_stats, 'Lead_Group'))
 
     with t5:
         st.subheader("🛏️ 객실타입")
         rt_stats = target_df.groupby('Room_Type').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
         rt_stats['ADR_Room'] = np.where(rt_stats['RN']>0, rt_stats['Room_Revenue']/rt_stats['RN'], 0)
         rt_stats['ADR_Total'] = np.where(rt_stats['RN']>0, rt_stats['Total_Revenue']/rt_stats['RN'], 0)
-        
-        rt_final = add_total_row(rt_stats.sort_values('RN', ascending=False), 'Room_Type')
-        show_dataframe_with_style(rt_final)
+        show_dataframe_with_style(add_total_row(rt_stats.sort_values('RN', ascending=False), 'Room_Type'))
 
     with t6:
         st.subheader("🗓️ 요일별")
         wd_stats = target_df.groupby('Day_Type').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
         wd_stats['ADR_Room'] = np.where(wd_stats['RN']>0, wd_stats['Room_Revenue']/wd_stats['RN'], 0)
         wd_stats['ADR_Total'] = np.where(wd_stats['RN']>0, wd_stats['Total_Revenue']/wd_stats['RN'], 0)
-        
-        wd_final = add_total_row(wd_stats, 'Day_Type')
-        
         c1, c2 = st.columns(2)
         c1.plotly_chart(px.bar(wd_stats, x='Day_Type', y='Room_Revenue'), use_container_width=True)
         c2.plotly_chart(px.pie(wd_stats, values='RN', names='Day_Type'), use_container_width=True)
-        show_dataframe_with_style(wd_final)
+        show_dataframe_with_style(add_total_row(wd_stats, 'Day_Type'))
 
     with t7:
         st.subheader("🌐 국적별")
@@ -473,14 +449,10 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
             nat_stats = target_df.groupby('Nat_Group').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
             nat_stats['ADR_Room'] = np.where(nat_stats['RN']>0, nat_stats['Room_Revenue']/nat_stats['RN'], 0)
             nat_stats['ADR_Total'] = np.where(nat_stats['RN']>0, nat_stats['Total_Revenue']/nat_stats['RN'], 0)
-            
-            nat_final = add_total_row(nat_stats, 'Nat_Group')
-            
             c1, c2 = st.columns(2)
             c1.plotly_chart(px.pie(nat_stats, values='RN', names='Nat_Group', title="국적 비중"), use_container_width=True)
             c2.plotly_chart(px.bar(nat_stats, x='Nat_Group', y='Room_Revenue'), use_container_width=True)
-            
-            show_dataframe_with_style(nat_final)
+            show_dataframe_with_style(add_total_row(nat_stats, 'Nat_Group'))
         else:
             st.info("국적 데이터 없음")
 
@@ -581,7 +553,7 @@ try:
             ])
 
             # -----------------------------------------------------------
-            # 1. GM 요약 탭
+            # 1. GM 요약 탭 (총매출/객실매출/ADR 분리)
             # -----------------------------------------------------------
             with main_tab0:
                 st.header(f"👑 총지배인(GM) 요약 리포트 ({selected_date})")
@@ -746,7 +718,7 @@ try:
                     fig_rate.update_yaxes(range=[0, max(otb_monthly['Budget_Achiev'].max() + 10, 110)])
                     st.plotly_chart(fig_rate, use_container_width=True)
                     
-                    # 7. 표 출력
+                    # 7. 표 출력 (Budget, OTB, %, RN) - Actual 제외
                     cols = ['Stay_Month', 'Budget_Rev', 'OTB_Rev', 'Budget_Achiev', 'OTB_RN']
                     styler = merged_final[cols].style.format({
                         'Budget_Rev': "{:,.0f}", 'OTB_Rev': "{:,.0f}", 
