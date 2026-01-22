@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from firebase_admin import firestore
 import datetime
 
-# 1. Firestore 클라이언트 초기화
+# 1. Firestore 클라이언트 초기화 (기존 설정 유지)
 try:
     db = firestore.client()
 except Exception as e:
@@ -45,17 +45,18 @@ def prepare_df(raw_data):
     lt_labels = ['당일', '1-3일전', '4-7일전', '8-14일전', '15-30일전', '30일+']
     df['LT구간'] = pd.cut(df['리드타임'], bins=lt_bins, labels=lt_labels)
     
-    # 3. 상품 구분 (조식 포함 여부)
+    # 3. 상품 구분 (조식 포함 여부) - 서비스코드 기준
     if '서비스코드' in df.columns:
         df['상품구분'] = df['서비스코드'].apply(lambda x: '🍳 조식포함' if 'BF' in str(x) else '🏨 룸온리')
     else:
         df['상품구분'] = '정보없음'
     
-    # 4. ADR 및 히트맵 주차 계산
+    # 4. ADR 및 LOS 계산
     df['ADR_객실'] = df.apply(lambda x: x['객실료'] / x['박수'] if x['박수'] > 0 else 0, axis=1)
     df['입실주차'] = df['입실일자'].dt.isocalendar().week
+    df['LOS'] = df['박수']
     
-    # 5. 부대시설 서비스 분석용
+    # 5. 부대시설 서비스 분석용 리스트화
     if '서비스코드' in df.columns:
         df['서비스목록'] = df['서비스코드'].fillna('').str.split(',')
     else:
@@ -64,13 +65,13 @@ def prepare_df(raw_data):
     return df.dropna(subset=['입실일자'])
 
 def get_all_promotions():
-    """Firestore에서 모든 데이터를 가져와 사이드바용 리스트를 만듭니다."""
+    """Firestore에서 저장된 모든 프로모션 목록을 불러옵니다."""
     try:
         docs = db.collection("promotions").stream()
         promo_list = []
         for doc in docs:
             d = doc.to_dict()
-            # 데이터 로드 시 None 방지
+            # 데이터 로드 시 None 방어
             d['start_date'] = str(d.get('start_date', '미상'))
             d['end_date'] = str(d.get('end_date', '미상'))
             promo_list.append(d)
@@ -78,9 +79,9 @@ def get_all_promotions():
     except Exception as e:
         return []
 
-# --- [2. 메인 앱 화면 구성] ---
+# --- [2. 메인 대시보드 화면 구성] ---
 def main():
-    st.set_page_config(page_title="엠버 프로모션 엔진", layout="wide")
+    st.set_page_config(page_title="엠버 프로모션 엔진 v1.2", layout="wide")
     st.title("📊 엠버 프로모션 성과 분석 및 전략 대시보드")
 
     tab1, tab2 = st.tabs(["📈 성과 분석 대시보드", "📤 데이터 업로드 및 저장"])
@@ -92,25 +93,21 @@ def main():
         if not all_data:
             st.info("데이터가 없습니다. 업로드 탭에서 엑셀 파일을 먼저 등록해주세요.")
         else:
+            # 사이드바 필터: 거래처 선택 -> 기간 선택
             st.sidebar.header("🔍 분석 대상 설정")
-            
-            # 1. 거래처 선택
             partners = sorted(list(set([d.get('partner', '알수없음') for d in all_data])))
             selected_partner = st.sidebar.selectbox("거래처 선택", partners, key="main_partner")
             
-            # 2. 해당 거래처의 기간 선택
             partner_promos = [d for d in all_data if d.get('partner') == selected_partner]
             partner_promos.sort(key=lambda x: str(x.get('start_date')), reverse=True)
             
             def format_period(d):
-                s = d.get('start_date', '미상')
-                e = d.get('end_date', '미상')
-                return f"📅 {s} ~ {e}"
+                return f"📅 {d.get('start_date')} ~ {d.get('end_date')}"
 
             target_promo = st.sidebar.selectbox("분석 기간 선택", partner_promos, format_func=format_period, key="main_period")
             
-            # 비교 프로모션 설정
-            compare_on = st.sidebar.checkbox("비교 프로모션 활성화 (YoY)")
+            # 비교 모드 활성화
+            compare_on = st.sidebar.checkbox("비교 프로모션 활성화 (YoY/채널비교)")
             compare_promo = None
             if compare_on:
                 c_partner = st.sidebar.selectbox("비교 거래처 선택", partners, key="comp_partner")
@@ -118,10 +115,10 @@ def main():
                 c_partner_promos.sort(key=lambda x: str(x.get('start_date')), reverse=True)
                 compare_promo = st.sidebar.selectbox("비교 기간 선택", c_partner_promos, format_func=format_period, key="comp_period")
 
-            # 데이터 가공
+            # 데이터 가공 실행
             df_main = prepare_df(target_promo['data'])
             
-            # KPI 계산
+            # KPI 계산 로직
             def get_metrics(df):
                 trev = df['총금액'].sum(); rrev = df['객실료'].sum(); rn = df['박수'].sum()
                 adr = rrev / rn if rn > 0 else 0; los = df['박수'].mean() if not df.empty else 0
@@ -129,7 +126,7 @@ def main():
 
             m_trev, m_rrev, m_rn, m_adr, m_los = get_metrics(df_main)
             
-            st.subheader(f"📍 [{selected_partner}] {format_period(target_promo)} 실적 요약")
+            st.subheader(f"📍 [{selected_partner}] {format_period(target_promo)} 분석 결과")
             k1, k2, k3, k4, k5 = st.columns(5)
             
             if compare_on and compare_promo:
@@ -149,108 +146,121 @@ def main():
 
             st.divider()
 
-            # [차트 섹션 1: 요일 & 예약 곡선]
+            # 그래프 섹션 1: 요일별 성적(DOW) & 예약 곡선
             col1, col2 = st.columns(2)
             with col1:
-                st.subheader("📅 요일별 실적 (DOW)")
+                st.subheader("📅 요일별 실적 (주중 vs 주말 성과)")
                 dow_df = df_main.groupby('요일').agg({'총금액':'sum', 'ADR_객실':'mean'}).reset_index()
-                st.plotly_chart(px.bar(dow_df, x='요일', y='총금액', color='ADR_객실', title="요일별 매출 (색상: ADR)", color_continuous_scale='Portland'), use_container_width=True)
+                fig_dow = px.bar(dow_df, x='요일', y='총금액', color='ADR_객실', title="요일별 매출 (색상: ADR)", color_continuous_scale='Portland')
+                st.plotly_chart(fig_dow, use_container_width=True)
+                [Image of a bar chart showing revenue and average room rate (ADR) for each day of the week, helping to identify weekend versus weekday performance]
             with col2:
-                st.subheader("📈 누적 예약 생산 곡선 (Pace)")
+                st.subheader("📈 누적 예약 생산 곡선 (Booking Curve)")
                 pace_df = df_main.sort_values('예약일자')
                 pace_df['누적_RN'] = pace_df['박수'].cumsum()
-                st.plotly_chart(px.line(pace_df, x='예약일자', y='누적_RN', title="프로모션 누적 예약 집계"), use_container_width=True)
+                fig_pace = px.line(pace_df, x='예약일자', y='누적_RN', title="프로모션 누적 예약 집계")
+                st.plotly_chart(fig_pace, use_container_width=True)
+                [Image of a line graph showing the cumulative accumulation of hotel room night reservations over the promotion's booking period]
 
             st.divider()
 
-            # [차트 섹션 2: 히트맵 & 리드타임]
+            # 그래프 섹션 2: 집중도 히트맵 & 리드타임 구간
             col3, col4 = st.columns(2)
             with col3:
-                st.subheader("🔥 투숙 집중도 히트맵")
+                st.subheader("🔥 투숙일 집중도 히트맵")
                 heat_data = df_main.groupby(['입실주차', '요일']).size().unstack(fill_value=0)
                 valid_dow = [c for c in ['01.월', '02.화', '03.수', '04.목', '05.금', '06.토', '07.일'] if c in heat_data.columns]
                 heat_data = heat_data.reindex(columns=valid_dow)
-                st.plotly_chart(px.imshow(heat_data, text_auto=True, color_continuous_scale="YlOrRd"), use_container_width=True)
+                fig_heat = px.imshow(heat_data, text_auto=True, color_continuous_scale="YlOrRd", title="투숙 분포 히트맵")
+                st.plotly_chart(fig_heat, use_container_width=True)
+                [Image of a heatmap chart visualizing hotel stay concentration by week and day of the week]
             with col4:
-                st.subheader("⏱️ 예약 리드타임 분포")
+                st.subheader("⏱️ 예약 리드타임 분포 (Booking Window)")
                 lt_order = ['당일', '1-3일전', '4-7일전', '8-14일전', '15-30일전', '30일+']
                 lt_sum = df_main['LT구간'].value_counts().reindex(lt_order).reset_index()
-                st.plotly_chart(px.bar(lt_sum, x='LT구간', y='count', color='count'), use_container_width=True)
+                fig_lt = px.bar(lt_sum, x='LT구간', y='count', color='count', title="예약 시점 비중")
+                st.plotly_chart(fig_lt, use_container_width=True)
 
             st.divider()
 
-            # [차트 섹션 3: 국적 / 상품 / 객실타입]
+            # 그래프 섹션 3: 국적 / 상품비중 / 객실타입 실적
             d1, d2, d3 = st.columns(3)
             with d1:
                 st.subheader("🌍 국적 비중")
-                st.plotly_chart(px.pie(df_main, names='국적', hole=0.5), use_container_width=True)
+                fig_nat = px.pie(df_main, names='국적', hole=0.5)
+                st.plotly_chart(fig_nat, use_container_width=True)
             with d2:
                 st.subheader("🍳 상품군 판매 비중 (조식여부)")
-                st.plotly_chart(px.pie(df_main, names='상품구분', color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
+                fig_prod = px.pie(df_main, names='상품구분', color_discrete_sequence=px.colors.qualitative.Pastel)
+                st.plotly_chart(fig_prod, use_container_width=True)
             with d3:
                 st.subheader("🏨 객실 타입별 실적")
                 room_perf = df_main.groupby('객실타입').agg({'총금액':'sum', '박수':'sum', 'ADR_객실':'mean'}).reset_index()
                 room_perf.columns = ['타입', '매출액', 'RN', 'ADR']
                 st.dataframe(room_perf.style.format({'매출액': '{:,.0f}', 'ADR': '{:,.0f}'}))
 
-            # [부대수익 분석]
+            # 그래프 섹션 4: 부대수익 분석
             st.divider()
-            st.subheader("🍱 부대시설 서비스 분석 (Ancillary)")
+            st.subheader("🍱 부대시설 서비스 분석 (Ancillary Revenue)")
             all_svcs = [x.strip() for s in df_main['서비스목록'] for x in s if x.strip() != '']
             if all_svcs:
                 svc_df = pd.Series(all_svcs).value_counts().reset_index()
                 svc_df.columns = ['서비스명', '건수']
-                st.plotly_chart(px.bar(svc_df, x='서비스명', y='건수', color='건수'), use_container_width=True)
+                fig_svc = px.bar(svc_df, x='서비스명', y='건수', color='건수', title="추가 서비스 판매 현황")
+                st.plotly_chart(fig_svc, use_container_width=True)
 
-            # [하단 원본 데이터 조회]
+            # 하단 원본 데이터 조회
             st.divider()
             with st.expander("📄 전체 예약 목록 및 원본 데이터 (Raw Data)", expanded=False):
+                st.write(f"현재 조회 중인 프로모션의 원본 데이터입니다. (총 {len(df_main)}건)")
                 st.dataframe(df_main, use_container_width=True)
 
-    # --- TAB 2: 데이터 업로드 (예약일자 기간 인식 강화) ---
+    # --- TAB 2: 데이터 업로드 (AE열 3행 헤더 정확히 조준) ---
     with tab2:
         st.header("📤 새로운 프로모션 데이터 등록")
+        st.markdown("**AE열(예약일자)** 정보를 기준으로 기간을 자동 계산하여 저장합니다.")
+        
         uploaded_file = st.file_uploader("PMS 엑셀 파일을 업로드하세요", type=['xlsx'])
         if uploaded_file:
-            # 헤더 위치 자동 찾기 (보통 3행 부근)
-            df_raw = pd.read_excel(uploaded_file, header=None, nrows=10)
-            header_row = 2 # 기본값
-            for i, row in df_raw.iterrows():
-                if '예약번호' in row.values or '예약일자' in row.values:
-                    header_row = i
-                    break
-            
-            df_load = pd.read_excel(uploaded_file, header=header_row)
+            # AE열(31번째 열)에 '예약일자'가 있는 3행(Index 2)을 제목줄로 지정
+            df_load = pd.read_excel(uploaded_file, header=2)
             df_load.columns = [str(c).strip() for c in df_load.columns]
             
             try:
                 # 1. 거래처 추출 (Q열 근처 '거래처' 컬럼)
                 val_partner = str(df_load['거래처'].iloc[0]).split('[')[0].strip()
                 
-                # 2. 예약일자 기준 기간 자동 계산 (에러 방지 강화)
+                # 2. 예약일자(AE열) 기준 기간 자동 계산
+                # 엑셀의 AE열은 보통 index 30 부근입니다. 컬럼명 '예약일자'를 직접 조준합니다.
                 if '예약일자' in df_load.columns:
                     res_dates = pd.to_datetime(df_load['예약일자'], errors='coerce').dropna()
                     if not res_dates.empty:
                         start_date = res_dates.min().strftime('%Y-%m-%d')
                         end_date = res_dates.max().strftime('%Y-%m-%d')
                     else:
-                        start_date = end_date = "날짜미상"
+                        start_date = end_date = "날짜파싱실패"
                 else:
-                    start_date = end_date = "예약일자컬럼없음"
+                    start_date = end_date = "예약일자컬럼탐지실패"
                 
                 st.info(f"📁 탐지 거래처: **{val_partner}**")
-                st.success(f"🗓️ 예약일자 기준 기간: **{start_date}** ~ **{end_date}**")
+                st.success(f"🗓️ 예약 기간 (AE열 기준): **{start_date}** ~ **{end_date}**")
                 
                 if st.button("🔥 이 데이터와 기간으로 Firestore 저장"):
+                    # 입실일자와 객실료가 있는 데이터만 필터링
                     df_final = df_load.dropna(subset=['입실일자', '객실료'])
-                    doc_id = f"{val_partner}_{start_date}_{datetime.datetime.now().strftime('%H%M%S')}"
+                    
+                    # 고유 ID 생성 (거래처_기간_업로드시점)
+                    doc_id = f"{val_partner}_{start_date}_{end_date}_{datetime.datetime.now().strftime('%H%M%S')}"
+                    
                     db.collection("promotions").document(doc_id).set({
                         "partner": val_partner,
-                        "start_date": start_date, "end_date": end_date,
+                        "start_date": start_date,
+                        "end_date": end_date,
                         "upload_date": str(datetime.date.today()),
                         "data": df_final.to_dict(orient='records')
                     })
-                    st.balloons(); st.success("저장 완료!")
+                    st.balloons()
+                    st.success(f"✅ {val_partner} ({start_date}~{end_date}) 데이터 저장 완료!")
             except Exception as e:
                 st.error(f"데이터 파싱 오류: {e}")
 
