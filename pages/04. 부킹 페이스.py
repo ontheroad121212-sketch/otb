@@ -391,7 +391,7 @@ with tabs[4]:
 with tabs[5]:
     st.header("🔁 고객 로열티 심층 리포트 (VIP & N차 분석)")
     
-    # [1] 컬럼 자동 감지 (후보군 강화)
+    # [1] 컬럼 자동 감지
     name_cols = ['고객명', '예약자', '성함', '고객성함', 'Guest Name', 'Name', '예약자명', '한글성명', '고객']
     phone_cols = ['휴대폰', '전화번호', '연락처', 'Mobile', 'Phone', '핸드폰', '휴대전화']
     
@@ -401,8 +401,13 @@ with tabs[5]:
     if not found_name:
         st.warning(f"⚠️ '고객명' 컬럼을 찾을 수 없어 분석을 시작할 수 없습니다.")
     else:
-        # --- [2] 데이터 전처리: 식별키 및 방문 통계 생성 ---
-        df_l = df_clean.copy().sort_values([found_name, '입실일자'])
+        # --- [2] 데이터 전처리 (직원 및 특정 인물 제외 로직 추가) ---
+        exclude_names = ['허성문', '이민우', 'WANG ZHANJUN']
+        df_l = df_clean.copy()
+        # 이름에 제외 명단이 포함된 경우 필터링
+        df_l = df_l[~df_l[found_name].astype(str).str.contains('|'.join(exclude_names), na=False)]
+        
+        df_l = df_l.sort_values([found_name, '입실일자'])
         
         # 식별키 생성
         if found_phone:
@@ -414,7 +419,7 @@ with tabs[5]:
         df_l['PrevVisit'] = df_l.groupby('GuestKey')['입실일자'].shift(1)
         df_l['DaysSinceLastVisit'] = (df_l['입실일자'] - df_l['PrevVisit']).dt.days
 
-        # 전체 기간 기준 고객별 통계 (N차 세분화용)
+        # 전체 기간 기준 고객별 통계 (N차 세분화)
         guest_stats = df_l.groupby('GuestKey').agg({
             '예약번호': 'count',
             '총금액': 'sum',
@@ -422,7 +427,7 @@ with tabs[5]:
         }).reset_index()
         guest_stats.columns = ['GuestKey', 'TotalVisits', 'TotalRev', 'TotalRooms']
 
-        # 방문 횟수 등급 세분화 로직
+        # 등급 세분화 로직
         def segment_visit(n):
             if n == 1: return "1회 (신규)"
             elif n == 2: return "2회 (리피터)"
@@ -431,18 +436,19 @@ with tabs[5]:
             else: return "5회 이상 (VVIP)"
         guest_stats['CustomerGrade'] = guest_stats['TotalVisits'].apply(segment_visit)
 
-        # 현재 선택된 타겟 기간 데이터와 병합
-        df_target_loyalty = df_l[df_l['예약번호'].isin(target_df['예약번호'])].copy()
+        # 현재 선택된 타겟 데이터와 병합 (직원 제외 필터 동일 적용)
+        target_filtered = target_df[~target_df[found_name].astype(str).str.contains('|'.join(exclude_names), na=False)]
+        df_target_loyalty = df_l[df_l['예약번호'].isin(target_filtered['예약번호'])].copy()
         df_target_loyalty = pd.merge(df_target_loyalty, guest_stats[['GuestKey', 'TotalVisits', 'CustomerGrade']], on='GuestKey', how='left')
         df_target_loyalty['GuestType'] = df_target_loyalty['TotalVisits'].apply(lambda x: '첫 방문 (New)' if x <= 1 else '재방문 (Return)')
 
-        # --- [3] 시각화 1단계: 기본 비중 및 등급별 분포 ---
-        st.subheader("1️⃣ 고객 구성 및 등급별 분포")
+        # --- [3] 시각화 1단계: 구성비 및 등급 ---
+        st.subheader("1️⃣ 고객 구성 및 등급별 분포 (실제 투숙객 기준)")
         
         m1, m2, m3 = st.columns(3)
         u_g = df_target_loyalty['GuestKey'].nunique()
         r_g = df_target_loyalty[df_target_loyalty['TotalVisits'] > 1]['GuestKey'].nunique()
-        m1.metric("기간 내 총 고객수", f"{u_g:,}명")
+        m1.metric("분석 대상 고객수", f"{u_g:,}명")
         m2.metric("재방문 고객수", f"{r_g:,}명")
         m3.metric("재방문율", f"{(r_g/u_g*100) if u_g > 0 else 0:.1f}%")
 
@@ -451,21 +457,16 @@ with tabs[5]:
         grade_counts = df_target_loyalty.groupby('CustomerGrade').size().reindex(grade_order).fillna(0).reset_index(name='Count')
         
         with c1:
-            fig_pie = px.pie(grade_counts, names='CustomerGrade', values='Count', hole=0.4, title="고객 등급 구성비")
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(px.pie(grade_counts, names='CustomerGrade', values='Count', hole=0.4, title="고객 등급 구성비"), use_container_width=True)
         with c2:
-            fig_bar = px.bar(grade_counts, x='CustomerGrade', y='Count', text_auto=True, title="등급별 예약 건수", color='CustomerGrade')
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(px.bar(grade_counts, x='CustomerGrade', y='Count', text_auto=True, title="등급별 예약 건수", color='CustomerGrade'), use_container_width=True)
 
         st.divider()
 
-        # --- [4] 시각화 2단계: 심층 인사이트 (주기 & 채널전이) ---
+        # --- [4] 시각화 2단계: 주기 및 전환 분석 (심층 인사이트) ---
         st.subheader("2️⃣ 심층 인사이트: 방문 주기 및 채널 전환")
-        
         col_in1, col_in2 = st.columns(2)
-        
         with col_in1:
-            # 재방문 주기 분석
             revisit_data = df_l[df_l['DaysSinceLastVisit'] > 0]['DaysSinceLastVisit']
             if not revisit_data.empty:
                 avg_days = revisit_data.mean()
@@ -473,62 +474,54 @@ with tabs[5]:
                                        title=f"평균 재방문 주기: 약 {avg_days:.1f}일", color_discrete_sequence=['#0052cc'])
                 st.plotly_chart(fig_inv, use_container_width=True)
                 st.caption(f"💡 단골들은 평균 {avg_days/30:.1f}개월 마다 다시 오십니다.")
-            else:
-                st.info("재방문 주기를 계산할 데이터가 부족합니다.")
-
         with col_in2:
-            # 채널 전이 (OTA -> 직예약)
             first_c = df_l.groupby('GuestKey').first()['거래처'].reset_index().rename(columns={'거래처':'First'})
             last_c = df_l.groupby('GuestKey').last()['거래처'].reset_index().rename(columns={'거래처':'Last'})
             drift = pd.merge(first_c, last_c, on='GuestKey')
             drift = drift[drift['GuestKey'].isin(guest_stats[guest_stats['TotalVisits'] > 1]['GuestKey'])]
-            
             if not drift.empty:
-                success = drift[(drift['First'] != '홈페이지') & (drift['Last'] == '홈페이지')].shape[0]
-                st.metric("OTA → 직예약 전환 성공", f"{success}건")
                 drift_p = drift.groupby(['First', 'Last']).size().reset_index(name='Count').pivot(index='First', columns='Last', values='Count').fillna(0)
-                st.write("**채널 전이 매트릭스**")
+                st.write("**채널 전이 매트릭스 (수수료 절감 확인)**")
                 st.dataframe(drift_p.style.background_gradient(cmap='Blues'), height=250)
 
         st.divider()
 
-        # --- [5] 시각화 3단계: 수익 기여도 상세 ---
-        st.subheader("3️⃣ 수익 기여도 분석 (누가 더 가치 있는 고객인가?)")
-        
+        # --- [5] 시각화 3단계: 수익 기여도 ---
+        st.subheader("3️⃣ 수익 기여도 분석")
         col_rev1, col_rev2 = st.columns(2)
         with col_rev1:
-            # 등급별 객단가(ADR) 추이
             grade_perf = df_target_loyalty.groupby('CustomerGrade').apply(
                 lambda x: x['총금액'].sum() / x['객실수'].sum() if x['객실수'].sum() > 0 else 0
             ).reindex(grade_order).fillna(0).reset_index(name='ADR')
-            fig_adr = px.line(grade_perf, x='CustomerGrade', y='ADR', markers=True, title="등급별 객단가(ADR) 추이")
-            st.plotly_chart(fig_adr, use_container_width=True)
-        
+            st.plotly_chart(px.line(grade_perf, x='CustomerGrade', y='ADR', markers=True, title="등급별 ADR 추이"), use_container_width=True)
         with col_rev2:
-            # 등급별 총 매출 비중
             grade_rev_total = df_target_loyalty.groupby('CustomerGrade')['총금액'].sum().reindex(grade_order).fillna(0).reset_index()
-            fig_rev_pie = px.pie(grade_rev_total, names='CustomerGrade', values='총금액', title="등급별 매출 기여도 비중")
-            st.plotly_chart(fig_rev_pie, use_container_width=True)
+            st.plotly_chart(px.pie(grade_rev_total, names='CustomerGrade', values='총금액', title="등급별 매출 기여도"), use_container_width=True)
 
         st.divider()
 
-        # --- [6] VVIP 명단 및 마케팅 추출 ---
-        st.subheader("4️⃣ VVIP(5회 이상 방문) 고객 관리 리스트")
-        vvip_list = guest_stats[guest_stats['TotalVisits'] >= 5].sort_values('TotalVisits', ascending=False)
+        # --- [6] VVIP 및 재방문 명단 추출 (사장님 요청 반영) ---
+        st.subheader("4️⃣ 마케팅 타겟 고객 리스트")
         
-        if not vvip_list.empty:
-            st.write(f"현재 시스템에 등록된 5회 이상 방문 VVIP는 총 **{len(vvip_list)}명**입니다.")
-            st.dataframe(vvip_list[['GuestKey', 'TotalVisits', 'TotalRev']].head(30), use_container_width=True)
-            
-            csv = vvip_list.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 VVIP 명단 및 연락처 다운로드",
-                data=csv,
-                file_name=f"hotel_VVIP_list_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-            )
-        else:
-            st.info("아직 5회 이상 방문한 VVIP 고객이 발견되지 않았습니다.")
+        list_tab1, list_tab2 = st.tabs(["💎 VVIP (5회 이상)", "⭐ 단골 (2회~4회)"])
+        
+        with list_tab1:
+            vvip_list = guest_stats[guest_stats['TotalVisits'] >= 5].sort_values('TotalVisits', ascending=False)
+            if not vvip_list.empty:
+                st.write(f"VVIP 멤버십 관리 대상: {len(vvip_list)}명")
+                st.dataframe(vvip_list, use_container_width=True)
+                st.download_button("📥 VVIP 리스트 다운로드", data=vvip_list.to_csv(index=False).encode('utf-8-sig'), file_name="VVIP_List.csv")
+            else:
+                st.info("조건에 맞는 VVIP 고객이 없습니다.")
+                
+        with list_tab2:
+            regular_list = guest_stats[(guest_stats['TotalVisits'] >= 2) & (guest_stats['TotalVisits'] < 5)].sort_values('TotalVisits', ascending=False)
+            if not regular_list.empty:
+                st.write(f"마케팅 집중 관리 대상: {len(regular_list)}명")
+                st.dataframe(regular_list, use_container_width=True)
+                st.download_button("📥 단골 리스트 다운로드", data=regular_list.to_csv(index=False).encode('utf-8-sig'), file_name="Regular_Guest_List.csv")
+            else:
+                st.info("조건에 맞는 단골 고객이 없습니다.")
             
 # 검증기 (항상 맨 아래)
 st.divider()
