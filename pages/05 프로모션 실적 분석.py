@@ -18,7 +18,7 @@ def prepare_df(raw_data):
         return pd.DataFrame()
     df = pd.DataFrame(raw_data)
     
-    # 컬럼명 공백 제거
+    # 컬럼명 공백 제거 및 문자열 변환
     df.columns = [str(c).strip() for c in df.columns]
     
     # 날짜 데이터 변환 (오류 방지용 coerce)
@@ -55,7 +55,7 @@ def prepare_df(raw_data):
     df['ADR_객실'] = df.apply(lambda x: x['객실료'] / x['박수'] if x['박수'] > 0 else 0, axis=1)
     df['입실주차'] = df['입실일자'].dt.isocalendar().week
     
-    # 5. 부대시설 서비스 분석용 리스트화
+    # 5. 부대시설 서비스 분석용 리스트화 (Ancillary Revenue)
     if '서비스코드' in df.columns:
         df['서비스목록'] = df['서비스코드'].fillna('').str.split(',')
     else:
@@ -70,6 +70,7 @@ def get_all_promotions():
         promo_list = []
         for doc in docs:
             d = doc.to_dict()
+            # 데이터 로드 시 None 방지
             d['start_date'] = str(d.get('start_date', '미상'))
             d['end_date'] = str(d.get('end_date', '미상'))
             promo_list.append(d)
@@ -79,7 +80,7 @@ def get_all_promotions():
 
 # --- [2. 메인 대시보드 화면 구성] ---
 def main():
-    st.set_page_config(page_title="엠버 프로모션 분석 엔진", layout="wide")
+    st.set_page_config(page_title="엠버 프로모션 엔진", layout="wide")
     st.title("📊 엠버 프로모션 성과 분석 및 전략 대시보드")
 
     tab1, tab2 = st.tabs(["📈 성과 분석 대시보드", "📤 데이터 업로드 및 저장"])
@@ -91,14 +92,13 @@ def main():
         if not all_data:
             st.info("데이터가 없습니다. 업로드 탭에서 엑셀 파일을 먼저 등록해주세요.")
         else:
-            # 사이드바 필터: 거래처 선택 -> 해당 거래처의 기간 선택
             st.sidebar.header("🔍 분석 대상 설정")
             
-            # 1. 거래처 리스트 추출 및 선택
+            # 1. 거래처 리스트 추출
             partners = sorted(list(set([d.get('partner', '알수없음') for d in all_data])))
             selected_partner = st.sidebar.selectbox("거래처 선택", partners, key="main_partner")
             
-            # 2. 해당 거래처의 기간 리스트 구성
+            # 2. 해당 거래처의 기간 리스트 필터링
             partner_promos = [d for d in all_data if d.get('partner') == selected_partner]
             partner_promos.sort(key=lambda x: str(x.get('start_date')), reverse=True)
             
@@ -149,15 +149,17 @@ def main():
 
             st.divider()
 
-            # 시각화 섹션 1: 요일 및 예약 곡선
+            # 그래프 섹션 1: 요일 및 예약 곡선
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("📅 요일별 실적 (DOW)")
+                
                 dow_df = df_main.groupby('요일').agg({'총금액':'sum', 'ADR_객실':'mean'}).reset_index()
                 fig_dow = px.bar(dow_df, x='요일', y='총금액', color='ADR_객실', title="요일별 매출 (색상: ADR)", color_continuous_scale='Portland')
                 st.plotly_chart(fig_dow, use_container_width=True)
             with col2:
                 st.subheader("📈 누적 예약 생산 곡선 (Pace)")
+                
                 pace_df = df_main.sort_values('예약일자')
                 pace_df['누적_RN'] = pace_df['박수'].cumsum()
                 fig_pace = px.line(pace_df, x='예약일자', y='누적_RN', title="프로모션 누적 예약 추이")
@@ -165,10 +167,11 @@ def main():
 
             st.divider()
 
-            # 시각화 섹션 2: 히트맵 및 리드타임
+            # 그래프 섹션 2: 히트맵 및 리드타임
             col3, col4 = st.columns(2)
             with col3:
                 st.subheader("🔥 투숙 집중도 히트맵")
+                
                 heat_data = df_main.groupby(['입실주차', '요일']).size().unstack(fill_value=0)
                 valid_dow = [c for c in ['01.월', '02.화', '03.수', '04.목', '05.금', '06.토', '07.일'] if c in heat_data.columns]
                 heat_data = heat_data.reindex(columns=valid_dow)
@@ -176,6 +179,7 @@ def main():
                 st.plotly_chart(fig_heat, use_container_width=True)
             with col4:
                 st.subheader("⏱️ 예약 리드타임 분포")
+                
                 lt_order = ['당일', '1-3일전', '4-7일전', '8-14일전', '15-30일전', '30일+']
                 lt_sum = df_main['LT구간'].value_counts().reindex(lt_order).reset_index()
                 fig_lt = px.bar(lt_sum, x='LT구간', y='count', color='count', title="예약 시점 비중")
@@ -183,7 +187,7 @@ def main():
 
             st.divider()
 
-            # 시각화 섹션 3: 국적 / 상품 / 객실타입
+            # 그래프 섹션 3: 국적 / 상품 / 객실타입
             d1, d2, d3 = st.columns(3)
             with d1:
                 st.subheader("🌍 국적 비중")
@@ -199,7 +203,7 @@ def main():
                 room_perf.columns = ['타입', '매출액', 'RN', 'ADR']
                 st.dataframe(room_perf.style.format({'매출액': '{:,.0f}', 'ADR': '{:,.0f}'}))
 
-            # 부대시설 서비스 분석
+            # 부대수익 분석
             st.divider()
             st.subheader("🍱 부대시설 서비스 분석 (Ancillary Revenue)")
             all_svcs = [x.strip() for s in df_main['서비스목록'] for x in s if x.strip() != '']
@@ -209,7 +213,7 @@ def main():
                 fig_svc = px.bar(svc_df, x='서비스명', y='건수', color='건수', title="추가 서비스 판매 현황")
                 st.plotly_chart(fig_svc, use_container_width=True)
 
-            # 하단 원본 데이터 조회 기능
+            # [하단 원본 데이터 조회 기능]
             st.divider()
             with st.expander("📄 전체 예약 목록 및 원본 데이터 (Raw Data)", expanded=False):
                 st.write(f"조회된 프로모션의 전체 예약 데이터입니다. (총 {len(df_main)}건)")
