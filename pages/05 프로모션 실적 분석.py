@@ -8,107 +8,146 @@ import datetime
 # Firestore 클라이언트 (이미 설정되어 있다고 가정)
 db = firestore.client()
 
+def get_all_promotions():
+    """Firestore에서 저장된 모든 프로모션 목록을 가져옵니다."""
+    docs = db.collection("promotions").stream()
+    promo_list = []
+    for doc in docs:
+        d = doc.to_dict()
+        # 선택창에 보여줄 이름: [거래처] 프로모션명 (업로드일)
+        display_name = f"[{d.get('partner')}] {d.get('promo_name')} ({d.get('upload_date', 'Unknown')})"
+        promo_list.append({"id": doc.id, "display": display_name, "data": d.get('data')})
+    return promo_list
+
 def main():
-    st.set_page_config(page_title="엠버 프로모션 분석 엔진", layout="wide")
-    st.title("🏨 엠버 프로모션 성과 분석 시스템")
+    st.set_page_config(page_title="엠버 프로모션 엔진", layout="wide")
+    st.title("🔥 엠버 프로모션 실적 분석 시스템")
 
     tab1, tab2 = st.tabs(["📊 성과 분석 대시보드", "📤 데이터 업로드"])
 
-    # --- TAB 2: 데이터 업로드 (Q3, R3 기준 자동 인식) ---
+    # --- TAB 2: 데이터 업로드 (파일에서 정보 자동 추출) ---
     with tab2:
         st.header("엑셀 데이터 업로드")
         uploaded_file = st.file_uploader("거래처 엑셀 파일을 올려주세요", type=['xlsx'])
         
         if uploaded_file:
-            # 1. 데이터 읽기: 3행(index 2)을 제목줄로 지정
+            # 제목줄(3행) 기준으로 읽기
             df = pd.read_excel(uploaded_file, header=2) 
-            df.columns = [str(c).strip() for c in df.columns] # 컬럼명 공백 제거
+            df.columns = [str(c).strip() for c in df.columns]
             
-            # 2. 거래처(Q열) 및 요금타입(R열) 값 가져오기 (첫 번째 데이터 행에서 추출)
             try:
-                # 사용자 지정 위치: N(객실료), P(총금액), Q(거래처), R(요금타입)
+                # 첫 행에서 거래처와 요금타입 추출
                 val_partner = str(df['거래처'].iloc[0]).split('[')[0].strip()
                 val_promo = str(df['요금타입'].iloc[0]).strip()
+                st.success(f"📍 파일 인식: **{val_partner}** | **{val_promo}**")
                 
-                st.success(f"📍 파일 인식 성공! | 거래처: **{val_partner}** | 프로모션: **{val_promo}**")
-                
-                if st.button("🔥 파이어스토어에 데이터 저장"):
-                    # [데이터 전처리]
-                    # 빈 행 제거 (날짜 오류 방지)
+                if st.button("🔥 이 데이터를 파이어스토어에 저장"):
+                    # 데이터 정제
                     df = df.dropna(subset=['입실일자', '예약일자'])
-                    
-                    # 수치형 변환 (N:객실료, P:총금액)
                     df['객실료'] = pd.to_numeric(df['객실료'], errors='coerce').fillna(0)
                     df['총금액'] = pd.to_numeric(df['총금액'], errors='coerce').fillna(0)
                     df['박수'] = pd.to_numeric(df['박수'], errors='coerce').fillna(1)
+                    df['입실일자'] = pd.to_datetime(df['입실일자'])
+                    df['예약일자'] = pd.to_datetime(df['예약일자'])
                     
-                    # 날짜 변환 (에러 발생 행은 무시)
-                    df['check_in'] = pd.to_datetime(df['입실일자'], errors='coerce')
-                    df['created_at'] = pd.to_datetime(df['예약일자'], errors='coerce')
-                    df = df.dropna(subset=['check_in', 'created_at'])
-                    
-                    # 지표 계산
-                    df['요일'] = df['check_in'].dt.day_name()
-                    df['리드타임'] = (df['check_in'] - df['created_at']).dt.days
-                    df['ADR_객실'] = df['객실료'] / df['박수']
-                    
-                    # 저장
                     doc_id = f"{val_partner}_{val_promo}_{datetime.date.today()}"
                     db.collection("promotions").document(doc_id).set({
                         "partner": val_partner,
                         "promo_name": val_promo,
-                        "data": df.to_dict(orient='records'),
-                        "uploaded_at": firestore.SERVER_TIMESTAMP
+                        "upload_date": str(datetime.date.today()),
+                        "data": df.to_dict(orient='records')
                     })
                     st.balloons()
-                    st.success(f"✅ {doc_id} 저장 완료!")
+                    st.success(f"✅ 저장 완료! '성과 분석' 탭에서 확인하세요.")
             except Exception as e:
-                st.error(f"데이터 파싱 오류: {e}. 엑셀의 3행에 '거래처', '요금타입' 제목이 있는지 확인해주세요.")
+                st.error(f"오류: {e}")
 
-    # --- TAB 1: 성과 분석 대시보드 (요청하신 모든 지표 포함) ---
+    # --- TAB 1: 성과 분석 대시보드 (사이드바 선택 기능 복구) ---
     with tab1:
-        st.sidebar.header("🔍 프로모션 조회")
-        # 실제 환경에서는 Firestore에서 목록을 가져옵니다.
-        # 예: docs = db.collection("promotions").get()
+        promo_options = get_all_promotions()
         
-        st.subheader("🚀 프로모션 종합 성과 리포트")
+        if not promo_options:
+            st.warning("데이터가 없습니다. '데이터 업로드' 탭에서 먼저 파일을 올려주세요.")
+            return
+
+        # 사이드바 선택창
+        st.sidebar.header("🔍 프로모션 선택")
+        selected_promo_dict = st.sidebar.selectbox(
+            "분석할 프로모션", 
+            promo_options, 
+            format_func=lambda x: x['display']
+        )
         
-        # [1. 핵심 지표 섹션]
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("총 매출 (Total Rev)", "25,400,000원", "▲10%")
-        c2.metric("객실 매출 (Room Rev)", "21,000,000원", "▲5%")
-        c3.metric("룸나잇 (RN)", "120박")
-        c4.metric("객실 ADR", "175,000원")
+        compare_on = st.sidebar.checkbox("비교 대상 선택 (YoY 등)")
+        compare_promo_dict = None
+        if compare_on:
+            compare_promo_dict = st.sidebar.selectbox(
+                "비교 대상 프로모션", 
+                promo_options, 
+                format_func=lambda x: x['display']
+            )
+
+        # 데이터 변환 함수
+        def prepare_df(raw_data):
+            df = pd.DataFrame(raw_data)
+            df['입실일자'] = pd.to_datetime(df['입실일자'])
+            df['예약일자'] = pd.to_datetime(df['예약일자'])
+            df['요일'] = df['입실일자'].dt.day_name()
+            df['리드타임'] = (df['입실일자'] - df['예약일자']).dt.days
+            df['조식포함'] = df['서비스코드'].str.contains('BF', na=False)
+            return df
+
+        df_main = prepare_df(selected_promo_dict['data'])
+        
+        # 1. 상단 지표 (Metrics)
+        st.subheader(f"📍 {selected_promo_dict['display']} 상세 분석")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        
+        total_rev = df_main['총금액'].sum()
+        room_rev = df_main['객실료'].sum()
+        total_rn = df_main['박수'].sum()
+        adr_room = room_rev / total_rn if total_rn > 0 else 0
+        avg_los = df_main['박수'].mean()
+
+        m1.metric("총 매출", f"{total_rev:,.0f}원")
+        m2.metric("객실 매출", f"{room_rev:,.0f}원")
+        m3.metric("룸나잇(RN)", f"{total_rn:,.0f}박")
+        m4.metric("객실 ADR", f"{adr_room:,.0f}원")
+        m5.metric("평균 LOS", f"{avg_los:.1f}박")
 
         st.divider()
 
-        # [2. 요일별(DOW) & 예약 곡선]
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("📅 요일별 매출 성적 (주중 vs 주말)")
-            # 요일별 막대 그래프 시각화 로직
-        with col2:
-            st.subheader("📈 누적 예약 곡선 (Booking Pace)")
-            # 예약일자 기준 누적 선 그래프
+        # 2. 요일별(DOW) 성적 & 예약 곡선
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("📅 요일별 성적 (DOW)")
+            dow_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            dow_df = df_main.groupby('요일').agg({'총금액':'sum', '객실료':'mean'}).reindex(dow_order).reset_index()
+            fig_dow = px.bar(dow_df, x='요일', y='총금액', color='객실료', title="요일별 매출 (색상: ADR)")
+            st.plotly_chart(fig_dow, use_container_width=True)
 
+        with c2:
+            st.subheader("📈 누적 예약 곡선 (Booking Curve)")
+            curve_df = df_main.sort_values('예약일자').copy()
+            curve_df['cumulative_rn'] = curve_df['박수'].cumsum()
+            fig_curve = px.line(curve_df, x='예약일자', y='cumulative_rn', title="프로모션 누적 예약 생산")
+            st.plotly_chart(fig_curve, use_container_width=True)
+
+        # 3. 상세 분포 (국적, 조식비중, 객실타입)
         st.divider()
-
-        # [3. 리드타임 / 국적 / 상품 / 객실타입]
         d1, d2, d3 = st.columns(3)
         with d1:
-            st.write("🌍 국적 비중 & 리드타임")
-            # 국적 파이차트
+            st.write("🌍 국적 비중")
+            fig_nat = px.pie(df_main, names='국적', hole=0.4)
+            st.plotly_chart(fig_nat, use_container_width=True)
         with d2:
-            st.write("🍳 상품군 비중 (룸온리/조식)")
-            # '패키지' 또는 '서비스코드' 컬럼 분석
+            st.write("🍳 조식 포함 비중")
+            fig_bf = px.pie(df_main, names='조식포함', title="True: 조식포함 / False: 룸온리")
+            st.plotly_chart(fig_bf, use_container_width=True)
         with d3:
-            st.write("🏨 객실 타입별 실적 (매출/RN/ADR)")
-            # 테이블 형태 출력
-
-        # [4. 비교 분석 섹션]
-        st.divider()
-        st.subheader("🆚 프로모션 간 비교 (거래처별/연도별)")
-        # 멀티 선택을 통해 여러 프로모션을 나란히 비교하는 로직
+            st.write("🏨 객실 타입별 실적")
+            room_perf = df_main.groupby('객실타입').agg({'총금액':'sum', '박수':'sum', '객실료':'mean'}).reset_index()
+            st.dataframe(room_perf.style.format({'총금액': '{:,.0f}', '객실료': '{:,.0f}'}))
 
 if __name__ == "__main__":
     main()
