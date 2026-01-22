@@ -8,166 +8,204 @@ import numpy as np
 import textwrap
 
 # ==============================================================================
-# 1. 페이지 기본 설정 및 디자인 (CSS) - 하단 표만 컴팩트하게 수정
+# 1. 페이지 기본 설정
 # ==============================================================================
-st.set_page_config(layout="wide", page_title="Daily Pace Report")
+st.set_page_config(
+    layout="wide",
+    page_title="Daily Pace Report",
+    initial_sidebar_state="expanded"
+)
 
-st.markdown(textwrap.dedent("""
+# ==============================================================================
+# 2. CSS 디자인 스타일링 (절대 생략 없음 - 상세 설정 포함)
+#    상단: 시원하고 크게 / 하단: 오밀조밀하고 작게
+# ==============================================================================
+st.markdown("""
 <style>
-    /* 전체 여백 조정 */
+    /* 1. 전체 메인 컨테이너 여백 조정 */
     .block-container {
         padding-top: 0.5rem;
-        padding-bottom: 2rem;
-        padding-left: 0.5rem;
-        padding-right: 0.5rem;
+        padding-bottom: 3rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
     
-    /* [상단] S.O.B 카드 컨테이너 (여백 넉넉하게 유지) */
+    /* ==========================================================================
+       [상단 구역] S.O.B 요약 카드 디자인 (크고 시원하게 유지)
+       ========================================================================== */
+    
+    /* 흰색 카드 박스 */
     .sob-container {
         background-color: white;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-        padding: 25px;
-        margin-bottom: 25px;
-        border: 1px solid #e0e0e0;
-    }
-    .sob-header {
-        font-size: 20px;
-        font-weight: 800;
-        color: #111827;
-        margin-bottom: 20px;
-        border-bottom: 2px solid #f3f4f6;
-        padding-bottom: 10px;
-    }
-    .sob-grid {
-        display: grid;
-        grid-template-columns: 1fr 1.3fr;
-        gap: 40px;
+        border-radius: 15px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        padding: 30px;
+        margin-bottom: 30px;
+        border: 1px solid #e5e7eb;
     }
     
-    /* [상단] 모던 테이블 스타일 (큼직하게 유지) */
+    /* 카드 헤더 제목 */
+    .sob-header {
+        font-size: 24px;
+        font-weight: 900;
+        color: #111827;
+        margin-bottom: 25px;
+        border-bottom: 3px solid #f3f4f6;
+        padding-bottom: 15px;
+        letter-spacing: -0.5px;
+    }
+    
+    /* 좌우 분할 그리드 레이아웃 */
+    .sob-grid {
+        display: grid;
+        grid-template-columns: 1fr 1.3fr; /* 비율 유지 */
+        gap: 50px;
+    }
+    
+    /* 상단 테이블 (예산, 실적 등) - 폰트 큼직하게 */
     .modern-table {
         width: 100%;
         border-collapse: collapse;
         font-family: 'Segoe UI', sans-serif;
     }
+    
     .modern-table th {
         text-align: right;
-        color: #6b7280;
-        font-size: 13px;
-        font-weight: 600;
-        padding: 10px 8px;
+        color: #4b5563;
+        font-size: 14px;
+        font-weight: 700;
+        padding: 12px 10px;
         border-bottom: 2px solid #e5e7eb;
         background-color: #f9fafb;
     }
-    .modern-table th:first-child { text-align: left; }
+    .modern-table th:first-child {
+        text-align: left;
+    }
     
     .modern-table td {
-        padding: 12px 8px;
-        font-size: 15px;
+        padding: 14px 10px;
+        font-size: 16px; /* 데이터 잘 보이게 */
         color: #1f2937;
         text-align: right;
         border-bottom: 1px solid #f3f4f6;
     }
     .modern-table td.label {
         text-align: left;
-        font-weight: 600;
+        font-weight: 700;
         color: #374151;
     }
     
-    /* [상단] 강조 행 */
-    .highlight-row td {
-        background-color: #f0fdf4;
-        font-weight: 700;
-        color: #166534;
-    }
-    .highlight-row td.negative {
-        background-color: #fef2f2;
-        color: #991b1b;
-    }
-    .total-row td {
-        background-color: #eff6ff;
-        font-weight: 800;
-        color: #1e40af;
-        border-top: 2px solid #bfdbfe;
-    }
-
-    /* [상단] KPI 카드 */
+    /* 상단 KPI 미니 카드 (OCC, Achv) - 아주 크게 */
     .kpi-wrapper {
         display: flex;
-        gap: 15px;
-        margin-top: 20px;
+        gap: 20px;
+        margin-top: 25px;
     }
     .kpi-card {
         flex: 1;
         background: #f8fafc;
         border: 1px solid #e2e8f0;
-        border-radius: 10px;
+        border-radius: 12px;
         padding: 20px;
         text-align: center;
     }
     .kpi-title {
-        font-size: 12px;
+        font-size: 14px;
         color: #64748b;
-        font-weight: 700;
-        margin-bottom: 5px;
+        font-weight: 800;
+        margin-bottom: 8px;
+        text-transform: uppercase;
     }
     .kpi-value {
-        font-size: 28px;
+        font-size: 32px; /* 숫자 강조 */
         color: #0f172a;
         font-weight: 900;
+        letter-spacing: -1px;
     }
+    
+    /* KPI 강조 카드 (파란색 그라데이션) */
     .kpi-accent {
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        box-shadow: 0 4px 10px rgba(37, 99, 235, 0.2);
     }
-    .kpi-accent .kpi-title { color: rgba(255,255,255,0.8); }
-    .kpi-accent .kpi-value { color: white; }
+    .kpi-accent .kpi-title {
+        color: rgba(255,255,255,0.9);
+    }
+    .kpi-accent .kpi-value {
+        color: #ffffff;
+    }
+
+    /* ==========================================================================
+       [하단 구역] 메인 데이터 테이블 (컴팩트 & 슬림 최적화)
+       사용자 요청: "사이즈 자체를 줄여줘! 폰트 작게!"
+       ========================================================================== */
     
-    /* [하단] DataFrame 스타일 강제 적용 (여기가 핵심: 컴팩트하게!) */
-    iframe[title="streamlit.dataframe"] { width: 100% !important; }
+    /* Streamlit DataFrame 컨테이너 강제 제어 */
+    iframe[title="streamlit.dataframe"] {
+        width: 100% !important;
+    }
     
-    /* [하단] 헤더 줄바꿈 허용 및 간격 최소화 */
-    th {
-        white-space: pre-wrap !important;
+    /* 테이블 헤더 (작고 빽빽하게) */
+    [data-testid="stDataFrame"] th {
+        font-size: 10px !important;
+        padding: 4px 2px !important;
+        line-height: 1.1 !important;
+        white-space: pre-wrap !important; /* 줄바꿈 허용 */
         text-align: center !important;
         vertical-align: bottom !important;
-        line-height: 1.1 !important; /* 줄간격 축소 */
-        font-size: 11px !important; /* 폰트 축소 */
-        padding: 4px 2px !important; /* 패딩 최소화 */
+        color: #4b5563 !important;
     }
     
-    /* [하단] 데이터 셀 간격 최소화 */
-    td {
+    /* 테이블 데이터 셀 (작고 빽빽하게) */
+    [data-testid="stDataFrame"] td {
+        font-size: 10px !important;
+        padding: 2px 2px !important;
+        line-height: 1.0 !important;
         vertical-align: middle !important;
-        font-size: 11px !important; /* 데이터 폰트 축소 */
-        padding: 2px 2px !important; /* 데이터 패딩 최소화 */
+    }
+
+    /* ==========================================================================
+       유틸리티 클래스 (색상 및 상태 표시)
+       ========================================================================== */
+    .text-red {
+        color: #dc2626;
+        font-weight: 800;
+    }
+    .text-green {
+        color: #059669;
+        font-weight: 800;
     }
     
-    /* 텍스트 색상 유틸리티 */
-    .text-red { color: #dc2626; font-weight: 700; }
-    .text-green { color: #059669; font-weight: 700; }
+    /* 합계 행 스타일 */
+    .total-row td {
+        background-color: #eff6ff;
+        font-weight: 900;
+        color: #1e40af;
+        border-top: 3px solid #bfdbfe;
+    }
 </style>
-"""), unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. Firebase 데이터베이스 연결
+# 3. Firebase 데이터베이스 연결 설정
 # ==============================================================================
 if not firebase_admin._apps:
     try:
+        # Streamlit Secrets에서 인증 정보 로드
         key_dict = dict(st.secrets["firebase"])
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"Firebase 연결 오류: {e}")
+        st.error(f"🔥 Firebase 연결 실패: {e}")
         st.stop()
 
 db = firestore.client()
 
 # ==============================================================================
-# 3. 데이터 처리 로직 (12개월 지원 + 예산)
+# 4. 데이터 처리 로직 및 함수 정의
 # ==============================================================================
 
-# 월별 예산 데이터
+# 월별 예산 데이터 (1월 ~ 12월 전체)
 BUDGET_DATA = { 
     1: 514992575, 
     2: 786570856, 
@@ -185,24 +223,27 @@ BUDGET_DATA = {
 
 def find_header_and_process(file):
     """
-    엑셀 파일을 읽어서 헤더 위치를 찾고, 
-    FIT(개인), GROUP(단체), TOTAL(합계) 데이터를 추출하는 함수입니다.
+    엑셀 파일 처리 함수
+    기능:
+    1. 엑셀의 헤더(객실수, 매출 포함 행)를 자동으로 찾습니다.
+    2. FIT, GROUP, TOTAL 데이터를 각각 추출합니다.
+    3. S.O.B 요약 데이터를 계산합니다 (int 형변환 포함).
     """
     try:
         file.seek(0)
-        # 헤더를 찾기 위해 파일의 앞부분 10줄을 먼저 읽어봅니다.
-        df_preview = pd.read_excel(file, header=None, nrows=10)
+        # 헤더를 찾기 위해 상위 15행 스캔
+        df_preview = pd.read_excel(file, header=None, nrows=15)
         
         header_row_idx = None
         rms_indices = []
         rev_indices = []
         
-        # '객실수'와 '매출' 텍스트가 모두 포함된 행을 찾습니다.
+        # 키워드로 헤더 행 찾기
         for idx, row in df_preview.iterrows():
             row_str = row.astype(str).values
             if np.any(['객실수' in s for s in row_str]) and np.any(['매출' in s for s in row_str]):
                 header_row_idx = idx
-                # 해당 행에서 각 항목의 인덱스(위치)를 찾습니다.
+                # 해당 행에서 컬럼 인덱스 찾기
                 rms_indices = [i for i, val in enumerate(row_str) if '객실수' in str(val)]
                 rev_indices = [i for i, val in enumerate(row_str) if '매출' in str(val)]
                 break
@@ -210,22 +251,21 @@ def find_header_and_process(file):
         if header_row_idx is None:
             return None, None, None
 
-        # 실제 데이터 로드 (찾은 헤더 다음 행부터)
+        # 실제 데이터 로드
         df_raw = pd.read_excel(file, header=None)
         start_row = header_row_idx + 1 
         df_data = df_raw.iloc[start_row:].copy()
         
-        # 날짜 컬럼 파싱 (보통 첫 번째 열)
+        # 날짜 컬럼 처리
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_data = df_data.dropna(subset=['Date']) 
 
-        # 안전하게 숫자로 변환하는 내부 함수
+        # 안전한 숫자 변환 헬퍼 함수
         def safe_num(col_idx):
             if col_idx >= df_data.shape[1]: return 0
             return pd.to_numeric(df_data.iloc[:, col_idx], errors='coerce').fillna(0)
 
-        # [좌표 매핑 로직]
-        # 보통 순서는 [FIT -> GROUP -> TOTAL] 순으로 배치됩니다.
+        # 컬럼 매핑 (자동 감지 실패 시 기본값 사용)
         if len(rms_indices) >= 3 and len(rev_indices) >= 3:
             fit_rms_idx = rms_indices[0]
             fit_rev_idx = rev_indices[0]
@@ -236,17 +276,17 @@ def find_header_and_process(file):
             total_rms_idx = rms_indices[-1]
             total_rev_idx = rev_indices[-1]
         else:
-            # 자동 감지에 실패할 경우, 사용자가 제공한 기본 이미지 좌표를 사용
+            # Fallback 좌표
             fit_rms_idx, grp_rms_idx, total_rms_idx = 1, 6, 13
             fit_rev_idx, grp_rev_idx, total_rev_idx = 4, 9, 17
             
-        # 1. 하단 상세 리포트용 데이터프레임 생성
+        # 1. 하단 표에 표시할 상세 데이터프레임 생성
         df_clean = pd.DataFrame()
         df_clean['Date'] = df_data['Date']
         df_clean['DateStr'] = df_clean['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_clean['Date'].dt.strftime('%a')
         
-        # Total 섹션 기준 데이터 추출
+        # Total 기준 데이터 가져오기
         base_idx = total_rms_idx 
         
         df_clean['RMS'] = safe_num(base_idx)
@@ -255,20 +295,19 @@ def find_header_and_process(file):
         df_clean['RevPAR'] = safe_num(base_idx + 3)
         df_clean['REV'] = safe_num(base_idx + 4)
         
-        # HU(하우스유즈), Comp(무료)는 Total RMS 바로 앞에 위치한다고 가정
+        # House Use, Comp 데이터
         df_clean['HU'] = safe_num(base_idx - 2)
         df_clean['Comp'] = safe_num(base_idx - 1)
 
-        # 2. 상단 S.O.B 요약용 합계 데이터 계산
-        # [중요] 저장 오류 방지를 위해 int/float로 명시적 변환
+        # 2. 상단 S.O.B 요약 데이터 계산
+        # [중요] DB 저장 시 numpy 오류 방지를 위해 int() 변환 필수
         fit_rms_sum = int(safe_num(fit_rms_idx).sum())
         fit_rev_sum = int(safe_num(fit_rev_idx).sum())
         
         grp_rms_sum = int(safe_num(grp_rms_idx).sum())
         grp_rev_sum = int(safe_num(grp_rev_idx).sum())
         
-        # Total OCC 재계산 (가중평균)
-        # 공식: RMS / (OCC/100) = 가동가능객실수(Avail)
+        # Total OCC 가중평균 재계산
         avail_daily = df_clean['RMS'] / (df_clean['OCC'].replace(0, np.nan) / 100)
         total_avail = avail_daily.fillna(0).sum()
         total_rms = int(df_clean['RMS'].sum())
@@ -278,22 +317,24 @@ def find_header_and_process(file):
             total_occ_pct = float((total_rms / total_avail * 100))
 
         sob_data = {
-            'FIT_RMS': fit_rms_sum, 'FIT_REV': fit_rev_sum,
-            'GRP_RMS': grp_rms_sum, 'GRP_REV': grp_rev_sum,
+            'FIT_RMS': fit_rms_sum, 
+            'FIT_REV': fit_rev_sum,
+            'GRP_RMS': grp_rms_sum, 
+            'GRP_REV': grp_rev_sum,
             'TOTAL_OCC': total_occ_pct
         }
         
-        # 해당 파일이 몇 월 데이터인지 리턴 (탭 분류용)
-        month_num = df_data['Date'].iloc[0].month
-        
-        return df_clean, month_num, sob_data
+        return df_clean, df_data['Date'].iloc[0].month, sob_data
 
     except Exception as e:
-        # 에러 발생 시 로그를 찍거나 None 반환
+        # 에러 처리
         return None, None, None
 
 def get_data_by_date(target_date_str, month_num):
-    """DB에서 특정 날짜의 데이터를 가져옵니다 (비교 데이터용)."""
+    """
+    Firestore에서 특정 날짜의 데이터를 가져옵니다.
+    주로 '어제' 데이터를 불러와서 비교할 때 사용합니다.
+    """
     try:
         doc_ref = db.collection('daily_snapshots').document(target_date_str)\
                     .collection('months').document(str(month_num))
@@ -306,7 +347,10 @@ def get_data_by_date(target_date_str, month_num):
     return None
 
 def get_full_data_by_date(target_date_str, month_num):
-    """DB에서 데이터프레임과 S.O.B 정보를 모두 가져옵니다 (조회 모드용)."""
+    """
+    Firestore에서 데이터프레임과 S.O.B 정보를 모두 가져옵니다.
+    파일이 없을 때 '조회 모드'로 작동할 때 사용합니다.
+    """
     try:
         doc_ref = db.collection('daily_snapshots').document(target_date_str)\
                     .collection('months').document(str(month_num))
@@ -316,25 +360,32 @@ def get_full_data_by_date(target_date_str, month_num):
             df = pd.read_json(io.StringIO(data['json_data']), orient='records')
             sob = data.get('sob_data', None)
             
-            # S.O.B 데이터가 없는 옛날 데이터 호환성 처리
+            # 구버전 데이터 호환성 (S.O.B가 없을 경우)
             if sob is None and not df.empty:
-                sob = {'FIT_RMS':0, 'FIT_REV':0, 'GRP_RMS':0, 'GRP_REV':0, 'TOTAL_OCC': df['OCC'].mean()}
+                sob = {
+                    'FIT_RMS': 0, 'FIT_REV': 0, 
+                    'GRP_RMS': 0, 'GRP_REV': 0, 
+                    'TOTAL_OCC': df['OCC'].mean()
+                }
             return df, sob
     except Exception:
         return None, None
     return None, None
 
 def save_data_with_sob(target_date_str, month_num, df, sob_data):
-    """데이터프레임과 S.O.B 정보를 Firestore에 저장합니다."""
+    """
+    데이터프레임과 S.O.B 정보를 Firestore에 저장합니다.
+    JSON 변환 후 저장하여 타입을 안전하게 유지합니다.
+    """
     try:
         json_str = df.to_json(orient='records', date_format='iso')
         
-        # 메인 문서 업데이트 (생성 시간 기록)
+        # 1. 메인 문서 업데이트 (생성 시간 기록)
         db.collection('daily_snapshots').document(target_date_str).set({
             'created_at': firestore.SERVER_TIMESTAMP
         }, merge=True)
         
-        # 월별 서브 컬렉션에 데이터 저장
+        # 2. 월별 서브 컬렉션에 데이터 저장
         db.collection('daily_snapshots').document(target_date_str)\
           .collection('months').document(str(month_num))\
           .set({
@@ -349,9 +400,10 @@ def save_data_with_sob(target_date_str, month_num, df, sob_data):
 
 def render_sob_dashboard(current_month, budget, total_rev, vs_budget, achv_rate, total_occ, fit_rms, fit_adr, fit_rev, grp_rms, grp_adr, grp_rev, total_rms, total_adr):
     """
-    상단 KPI 대시보드를 그리는 함수입니다. 
-    textwrap.dedent를 사용하여 코드 블록으로 잘못 렌더링되는 것을 방지함.
+    [상단] S.O.B 요약 대시보드를 HTML로 렌더링합니다.
+    CSS에서 설정한 대로 '큼직하고 시원하게' 보여줍니다.
     """
+    # 상태에 따른 색상 클래스 결정
     vs_class = "text-green" if vs_budget >= 0 else "text-red"
     achv_class = "text-green" if achv_rate >= 100 else "text-red"
     
@@ -389,8 +441,10 @@ def render_sob_dashboard(current_month, budget, total_rev, vs_budget, achv_rate,
     st.markdown(html, unsafe_allow_html=True)
 
 # ==============================================================================
-# 4. 메인 실행 로직 (Sidebar & Tabs)
+# 5. 메인 실행 로직 (사이드바, 탭, 데이터 처리)
 # ==============================================================================
+
+# 사이드바 설정
 st.sidebar.header("⚙️ Report Settings")
 report_date = st.sidebar.date_input("기준 일자 (오늘)", datetime.now())
 report_date_str = report_date.strftime("%Y-%m-%d")
@@ -398,25 +452,25 @@ report_date_str = report_date.strftime("%Y-%m-%d")
 compare_date = st.sidebar.date_input("비교 일자 (어제)", report_date - timedelta(days=1))
 compare_date_str = compare_date.strftime("%Y-%m-%d")
 
+# 메인 타이틀
 st.title(f"🏨 Daily Pace Report")
-st.caption("어제와 오늘 파일을 모두 업로드하면, 자동으로 날짜를 비교하여 변화량을 계산합니다.")
+st.caption("파일 8개를 모두 업로드하면, 자동으로 날짜를 분류하여 분석합니다.")
 
-# 파일 업로드 (여러 개 가능)
-uploaded_files = st.file_uploader("엑셀 파일 업로드", accept_multiple_files=True, type=['xlsx'])
+# 파일 업로드 (여러 파일 동시 업로드 가능)
+uploaded_files = st.file_uploader("엑셀 파일 업로드 (xlsx)", accept_multiple_files=True, type=['xlsx'])
 
-# [수정] 월별 탭 생성 (1~12월)
+# 탭 생성 (1월 ~ 12월)
 tabs = st.tabs([f"{i}월" for i in range(1, 13)])
 month_files_map = {i: [] for i in range(1, 13)}
 
-# 업로드된 파일 처리 및 분류
+# 업로드된 파일 전처리 및 월별 분류
 if uploaded_files:
     for file in uploaded_files:
         df, month, sob = find_header_and_process(file)
         if df is not None and month in month_files_map:
-            # 파일 이름도 함께 저장 (이름순 정렬을 위해)
             month_files_map[month].append({'name': file.name, 'data': df, 'sob': sob})
 
-# 각 탭별로 반복하며 데이터 렌더링
+# 탭별 렌더링 루프
 for i, tab in enumerate(tabs):
     current_month = i + 1
     with tab:
@@ -426,18 +480,17 @@ for i, tab in enumerate(tabs):
         df_prev = None
         sob_curr = None
         
-        # ----------------------------------------------------
-        # [데이터 로드 로직]
-        # 파일이 있으면 파일을 우선, 없으면 DB를 조회
-        # ----------------------------------------------------
+        # ----------------------------------------------------------------------
+        # 데이터 로드 전략: 파일 우선 -> 없으면 DB 조회
+        # ----------------------------------------------------------------------
         if files:
-            # 파일이 2개 이상일 경우: 파일 이름순으로 정렬하여 비교
-            # (이름이 뒤인 것이 최신 날짜라고 가정 - 2026-01-21이 2026-01-20보다 뒤)
+            # 파일이 2개 이상이면 파일 이름순으로 정렬 (어제/오늘 구분)
+            # 가정: 파일명에 날짜가 포함되어 있거나, 최신 파일이 뒤에 옴
+            files.sort(key=lambda x: x['name'])
+            
             if len(files) >= 2:
-                files.sort(key=lambda x: x['name'])
-                
-                f_prev = files[-2] # 뒤에서 두 번째 (어제)
-                f_curr = files[-1] # 맨 마지막 (오늘)
+                f_prev = files[-2] # 과거 (어제)
+                f_curr = files[-1] # 최신 (오늘)
                 
                 df_curr = f_curr['data']
                 sob_curr = f_curr['sob']
@@ -445,7 +498,7 @@ for i, tab in enumerate(tabs):
                 
                 st.caption(f"🔥 파일 비교 모드: {f_prev['name']} (Pre) vs {f_curr['name']} (Today)")
             
-            # 파일이 1개일 경우: 해당 파일 vs DB의 비교일자 데이터
+            # 파일이 1개면 DB의 비교일자 데이터와 매칭
             else:
                 df_curr = files[0]['data']
                 sob_curr = files[0]['sob']
@@ -453,7 +506,7 @@ for i, tab in enumerate(tabs):
                 st.caption(f"📂 파일 vs DB 비교 모드 ({files[0]['name']} vs {compare_date_str})")
         
         else:
-            # 파일 없음: DB에서 기준일자 vs 비교일자 데이터 조회
+            # 파일이 없으면 순수 DB 조회 모드
             df_curr, sob_curr = get_full_data_by_date(report_date_str, current_month)
             if df_curr is not None:
                 df_prev, _ = get_full_data_by_date(compare_date_str, current_month)
@@ -465,14 +518,14 @@ for i, tab in enumerate(tabs):
         # 예산 가져오기
         budget = BUDGET_DATA.get(current_month, 0)
         
-        # S.O.B 데이터가 비어있을 경우 안전장치
+        # S.O.B 데이터 안전장치
         if sob_curr is None and df_curr is not None:
              sob_curr = {'FIT_RMS': 0, 'FIT_REV': 0, 'GRP_RMS': 0, 'GRP_REV': 0, 'TOTAL_OCC': 0}
 
-        # ----------------------------------------------------
-        # [A] 상단 대시보드 렌더링
-        # ----------------------------------------------------
-        # 필요한 값들 미리 계산
+        # ----------------------------------------------------------------------
+        # [A] 상단 대시보드 렌더링 (S.O.B) - 크게
+        # ----------------------------------------------------------------------
+        # 필요한 지표 미리 계산
         total_rev_val = sob_curr['FIT_REV'] + sob_curr['GRP_REV']
         vs_budget_val = total_rev_val - budget
         achv_rate_val = (total_rev_val / budget * 100) if budget > 0 else 0
@@ -500,19 +553,19 @@ for i, tab in enumerate(tabs):
             total_adr=total_adr_val
         )
 
-        # ----------------------------------------------------
+        # ----------------------------------------------------------------------
         # [B] 하단 상세 리포트 데이터 병합 및 계산
-        # ----------------------------------------------------
-        # 1. 컬럼 정의
+        # ----------------------------------------------------------------------
+        # 기준 컬럼 정의
         cols_base = ['DateStr', 'WeekDay', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
         cols_curr = ['Date', 'Day', 'Curr_HU', 'Curr_Comp', 'Curr_RMS', 'Curr_OCC', 'Curr_ADR', 'Curr_RevPAR', 'Curr_REV']
         
         display_df = df_curr[cols_base].copy()
         display_df.columns = cols_curr
 
-        # 2. 비교 데이터(Pre) 병합
+        # 비교 데이터 병합
         if df_prev is not None:
-            # 날짜 형식 통일 (문자열로 변환하여 매핑)
+            # 날짜 포맷 통일
             if 'DateStr' not in df_prev.columns:
                 df_prev['Date'] = pd.to_datetime(df_prev['Date'])
                 df_prev['DateStr'] = df_prev['Date'].dt.strftime('%Y-%m-%d')
@@ -521,26 +574,25 @@ for i, tab in enumerate(tabs):
             prev_subset.columns = ['DateStr', 'Day_p', 'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev']
             prev_subset = prev_subset.drop(columns=['Day_p'])
             
-            # Key 타입 맞추기
+            # Merge Key 설정 (문자열)
             display_df['DateStr_Key'] = display_df['Date'].astype(str)
             prev_subset['DateStr_Key'] = prev_subset['DateStr'].astype(str)
             
             merged = pd.merge(display_df, prev_subset, left_on='DateStr_Key', right_on='DateStr_Key', how='left')
             
-            # 결측치 채우기 (비교 데이터가 없으면 0이나 현재값으로 대체)
+            # 결측치 채우기
             for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                 merged[f'{col}_prev'] = merged[f'{col}_prev'].fillna(merged[f'Curr_{col}'])
         else:
-            # 비교 데이터가 아예 없으면 현재 데이터와 동일하게 처리
             merged = display_df.copy()
             for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
                 merged[f'{col}_prev'] = merged[f'Curr_{col}']
 
-        # 3. 변화량(PickUp) 계산
+        # 변화량(PickUp) 계산
         for col in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']:
             merged[f'Pick_{col}'] = merged[f'Curr_{col}'] - merged[f'{col}_prev']
 
-        # 4. 합계(Total) 행 계산
+        # 합계(Total) 행 계산
         sum_cols = []
         for prefix in ['Curr', 'prev', 'Pick']:
             for item in ['HU', 'Comp', 'RMS', 'REV']:
@@ -548,10 +600,9 @@ for i, tab in enumerate(tabs):
                 elif prefix == 'Pick': item_col = f'Pick_{item}'
                 else: item_col = f'{prefix}_{item}'
                 sum_cols.append(item_col)
-        
         totals = merged[sum_cols].sum()
 
-        # ADR, OCC, RevPAR 가중평균 재계산 함수
+        # 비율 지표 재계산 (가중평균)
         def calc_rates(prefix):
             s_rms = totals[f'{prefix}RMS'] if prefix == 'Curr_' else totals[f'RMS{prefix}']
             s_rev = totals[f'{prefix}REV'] if prefix == 'Curr_' else totals[f'REV{prefix}']
@@ -584,22 +635,19 @@ for i, tab in enumerate(tabs):
         }
         merged = pd.concat([merged, pd.DataFrame([total_row_data])], ignore_index=True)
 
-        # ----------------------------------------------------
-        # [C] 컬럼 재배치 (요청하신 순서: 어제 | 오늘 | 변화)
-        # ----------------------------------------------------
+        # ----------------------------------------------------------------------
+        # [C] 컬럼 재배치 (어제 | 오늘 | 변화)
+        # ----------------------------------------------------------------------
         final_cols = ['Date', 'Day']
         items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
         
-        # 1. 어제 그룹
-        for item in items: final_cols.append(f'{item}_prev')
-        # 2. 오늘 그룹
-        for item in items: final_cols.append(f'Curr_{item}')
-        # 3. 변화 그룹
-        for item in items: final_cols.append(f'Pick_{item}')
+        for item in items: final_cols.append(f'{item}_prev') # 어제
+        for item in items: final_cols.append(f'Curr_{item}') # 오늘
+        for item in items: final_cols.append(f'Pick_{item}') # 변화
         
         final_df = merged[final_cols].copy()
         
-        # 헤더 이름 깔끔하게 정리 (줄바꿈 포함)
+        # 헤더 이름 설정 (줄바꿈 \n 활용)
         col_map = {'Date':'Date', 'Day':'Day'}
         for item in items:
             col_map[f'{item}_prev'] = f'Pre\n{item}'
@@ -607,10 +655,10 @@ for i, tab in enumerate(tabs):
             col_map[f'Pick_{item}'] = f'Var\n{item}'
         final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
-        # ----------------------------------------------------
-        # [D] 스타일링 적용 (Styler) - 컴팩트 사이즈
-        # ----------------------------------------------------
-        # 숫자 포맷 설정
+        # ----------------------------------------------------------------------
+        # [D] 하단 표 스타일링 (Styler) - 컴팩트 사이즈 적용
+        # ----------------------------------------------------------------------
+        # 숫자 포맷 정의
         fmt = {}
         for col in final_df.columns:
             if 'OCC' in col: fmt[col] = '{:.1f}%'
@@ -621,66 +669,60 @@ for i, tab in enumerate(tabs):
 
         styler = final_df.style.format(fmt)
         
-        # 1. Pre(어제) 그룹: 회색 배경
+        # 1. Pre(어제) 그룹 - 회색 파스텔
         pre_cols = [c for c in final_df.columns if 'Pre' in c]
         styler = styler.set_properties(subset=pre_cols, **{
             'background-color': '#f8f9fa', 
             'color': '#9ca3af', 
-            'font-size': '11px'
+            'font-size': '10px'
         })
         
-        # 2. Today(오늘) 그룹: 파스텔 블루 배경 + 히트맵 적용
+        # 2. Today(오늘) 그룹 - 히트맵 + 폰트 10px + 볼드
         curr_cols = [c for c in final_df.columns if 'Today' in c]
-        subset_idx = final_df.index[:-1] # Total행 제외하고 히트맵 적용
+        subset_idx = final_df.index[:-1] # Total행 제외하고 히트맵
         
-        # 히트맵 (값: 파랑, 비율: 오렌지)
         styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[subset_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.6)
         styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[subset_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.7)
         
-        # Today 컬럼 테두리 강조 + 폰트 설정
         styler = styler.set_properties(subset=curr_cols, **{
             'font-weight': '700', 
-            'font-size': '12px', 
+            'font-size': '10px', 
             'border-left': '1px solid #cbd5e1', 
             'border-right': '1px solid #cbd5e1'
         })
         
-        # 3. Var(변화) 그룹: 파스텔 노랑 배경 + 텍스트 색상
+        # 3. Var(변화) 그룹 - 노랑 파스텔 + 색상 텍스트
         var_cols = [c for c in final_df.columns if 'Var' in c]
         
         def color_variant(val):
-            # 마이너스면 빨강, 플러스면 초록, 0이면 기본색
+            # 음수는 빨강, 양수는 초록
             color = '#dc2626' if val < 0 else '#166534' if val > 0 else '#374151'
             return f'color: {color}; font-weight: bold;'
             
         styler = styler.map(color_variant, subset=var_cols)
         styler = styler.set_properties(subset=var_cols, **{
             'background-color': '#fffbeb', 
-            'font-size': '11px'
+            'font-size': '10px'
         })
 
-        # 4. Total 행 강조 (특히 오늘 데이터 부분 진하게)
-        def highlight_total_row(row):
+        # 4. Total 행 강조
+        def highlight_total_curr(row):
             styles = []
-            for col in row.index:
-                # 기본 스타일
-                base_style = 'background-color: #eff6ff; font-weight: 800; border-top: 2px solid #1d4ed8; font-size: 13px;'
-                
-                # 오늘 데이터 컬럼은 더 진하게
+            for idx, col in enumerate(row.index):
+                base_style = 'background-color: #eff6ff; font-weight: 800; border-top: 2px solid #1d4ed8; font-size: 11px;'
                 if 'Today' in col:
-                    base_style += 'background-color: #dbeafe; color: #1e3a8a; font-size: 14px; border-left: 2px solid #1d4ed8; border-right: 2px solid #1d4ed8;'
-                
+                    base_style += 'background-color: #dbeafe; color: #1e3a8a; font-size: 12px; border-left: 2px solid #1d4ed8; border-right: 2px solid #1d4ed8;'
                 styles.append(base_style)
             return styles
 
-        styler = styler.apply(lambda x: highlight_total_row(x) if x.name == final_df.index[-1] else ['' for _ in x], axis=1)
+        styler = styler.apply(lambda x: highlight_total_curr(x) if x.name == final_df.index[-1] else ['' for _ in x], axis=1)
 
         # 화면 출력
         st.dataframe(styler, height=800, use_container_width=True, hide_index=True)
 
-        # ----------------------------------------------------
+        # ----------------------------------------------------------------------
         # [E] 저장 버튼 (파일이 있을 때만 활성화)
-        # ----------------------------------------------------
+        # ----------------------------------------------------------------------
         if uploaded_files:
             if st.button(f"💾 {report_date.strftime('%Y-%m-%d')}일자 저장", key=f"save_{current_month}"):
                 success = save_data_with_sob(report_date.strftime("%Y-%m-%d"), current_month, df_curr, sob_curr)
