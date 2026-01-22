@@ -452,6 +452,7 @@ try:
             df_otb_m = df[df['Segment'] == 'OTB_Month']
             df_otb_t = df[df['Segment'] == 'OTB_Total']
             
+            # 일반 리스트 데이터 (OTB 제외)
             df_list = df[~df['Segment'].str.contains('OTB')]
             df_paid_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Is_Zero_Rate'] == False)]
             df_zero_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Is_Zero_Rate'] == True)]
@@ -460,8 +461,9 @@ try:
 
             curr_month = datetime.now().strftime('%Y-%m')
 
-            main_tab0, main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs([
-                "👑 총지배인(GM) 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약"
+            # [탭 추가됨!] OTB 현황 탭 추가
+            main_tab0, main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs([
+                "👑 총지배인(GM) 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"
             ])
 
             with main_tab0:
@@ -498,6 +500,61 @@ try:
             with main_tab4:
                 st.write(f"총 {len(df_zero_bk)}건")
                 st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
+
+            # [신규 추가] OTB 데이터 분석 탭 구현
+            with main_tab5:
+                st.header("🎯 Sales on the Book (OTB) vs 실제 예약")
+                
+                # 1. OTB 데이터 합치기
+                df_otb_all = pd.concat([df_otb_m, df_otb_t])
+                
+                if df_otb_all.empty:
+                    st.warning("⚠️ 업로드된 OTB 데이터가 없습니다.")
+                else:
+                    st.info("업로드된 OTB 파일 데이터를 기반으로 분석합니다.")
+                    
+                    # OTB 월별 집계
+                    otb_monthly = df_otb_all.groupby('CheckIn').agg({'Room_Revenue': 'sum', 'RN': 'sum'}).reset_index()
+                    otb_monthly.rename(columns={'CheckIn': 'Stay_Month', 'Room_Revenue': 'OTB_Rev', 'RN': 'OTB_RN'}, inplace=True)
+                    # 날짜 형식이 다를 수 있어 월별로 통일
+                    otb_monthly['Stay_Month'] = pd.to_datetime(otb_monthly['Stay_Month']).dt.strftime('%Y-%m')
+                    otb_agg = otb_monthly.groupby('Stay_Month')[['OTB_Rev', 'OTB_RN']].sum().reset_index()
+                    
+                    # 실제 예약 월별 집계 (비교용)
+                    if not df_paid_bk.empty:
+                        act_monthly = df_paid_bk.groupby('Stay_Month').agg({'Room_Revenue': 'sum', 'RN': 'sum'}).reset_index()
+                        act_monthly.rename(columns={'Room_Revenue': 'Actual_Rev', 'RN': 'Actual_RN'}, inplace=True)
+                        
+                        # 데이터 병합
+                        merged_otb = pd.merge(otb_agg, act_monthly, on='Stay_Month', how='outer').fillna(0)
+                    else:
+                        merged_otb = otb_agg
+                        merged_otb['Actual_Rev'] = 0
+                        merged_otb['Actual_RN'] = 0
+                    
+                    # 정렬
+                    merged_otb = merged_otb.sort_values('Stay_Month')
+
+                    # 그래프 시각화 (콤보 차트)
+                    st.subheader("📊 OTB vs Actual 매출 비교")
+                    fig_otb = go.Figure()
+                    fig_otb.add_trace(go.Bar(x=merged_otb['Stay_Month'], y=merged_otb['Actual_Rev'], name='실제 예약 매출', marker_color='#2E86C1'))
+                    fig_otb.add_trace(go.Scatter(x=merged_otb['Stay_Month'], y=merged_otb['OTB_Rev'], name='OTB 목표/기록', line=dict(color='#E74C3C', width=3, dash='dot')))
+                    st.plotly_chart(fig_otb, use_container_width=True)
+                    
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.subheader("📋 월별 데이터 비교")
+                        st.dataframe(merged_otb, hide_index=True, use_container_width=True,
+                                     column_config={
+                                         "OTB_Rev": st.column_config.NumberColumn("OTB 매출", format="%d원"),
+                                         "Actual_Rev": st.column_config.NumberColumn("실제 매출", format="%d원")
+                                     })
+                    with col2:
+                        st.subheader("📂 업로드된 OTB 원본 데이터")
+                        st.dataframe(df_otb_all[['Guest_Name', 'CheckIn', 'RN', 'Room_Revenue', 'Segment']], hide_index=True, use_container_width=True)
+
     else:
         # 데이터가 없을 때 안내
         st.info("👈 왼쪽 사이드바에서 파일을 업로드하여 데이터를 추가해주세요.")
