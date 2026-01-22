@@ -97,28 +97,41 @@ def delete_all_data():
     if db is None: return
     
     coll_ref = db.collection('hotel_bookings')
-    batch_size = 400 # Firestore 배치 한계는 500
+    # [수정] 한 번에 찾는 양을 200개로 줄여서 서버 부담 최소화
+    batch_size = 200 
     
-    # 반복문으로 400개씩 뭉텅이로 삭제
+    st.info("데이터 삭제를 시작합니다. 잠시만 기다려주세요...")
+    
+    total_deleted = 0
     while True:
-        # 1. 400개 가져오기
-        docs = list(coll_ref.limit(batch_size).stream())
-        deleted_count = 0
-        
-        if not docs:
-            break # 더 이상 지울 게 없으면 종료
+        try:
+            # 1. 문서 목록 가져오기 (시간 초과 방지를 위해 아주 작은 단위로)
+            docs = list(coll_ref.limit(batch_size).stream())
             
-        # 2. 배치에 담기
-        batch = db.batch()
-        for doc in docs:
-            batch.delete(doc.reference)
-            deleted_count += 1
+            if not docs:
+                break # 더 이상 지울 게 없으면 탈출
             
-        # 3. 한 번에 삭제 요청 (네트워크 1번만 탐)
-        batch.commit()
-        st.toast(f"🗑️ {deleted_count}건 삭제 중...")
-        
-    st.toast("✨ 모든 데이터가 깨끗하게 삭제되었습니다!")
+            # 2. 배치 삭제 실행
+            batch = db.batch()
+            for doc in docs:
+                batch.delete(doc.reference)
+            
+            batch.commit()
+            
+            total_deleted += len(docs)
+            st.toast(f"현재 {total_deleted}건 삭제 완료...")
+            
+            # 3. [중요] 서버 휴식 시간
+            # 연속적인 삭제 요청으로 서버가 거부하지 않도록 0.2초 휴식
+            time.sleep(0.2)
+            
+        except Exception as e:
+            # 에러 발생 시 잠시 쉬었다가 다시 시도 (자동 복구 로직)
+            st.warning(f"일시적 통신 지연 발생. 2초 후 다시 시도합니다...")
+            time.sleep(2)
+            continue
+            
+    st.success(f"✨ 총 {total_deleted}건의 데이터를 모두 삭제했습니다!")
 
 # -----------------------------------------------------------------------------
 # 3. 데이터 조회 함수 (Viewer용)
