@@ -129,14 +129,14 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 (로직 전면 분리: OTB는 합계만, 예약은 상세분석)
+# 4. 엑셀/CSV 파일 처리 (로직 전면 개편: 조식 전수조사)
 # ==============================================================================
 
 def normalize_and_map_columns(df):
     col_map = {}
     rules = {
         'CheckIn': ['checkin', 'arrival', '입실', '일자', 'date'],
-        'Guest_Name': ['guest', 'name', 'customer', '고객', '투숙객', '성명'],
+        'Guest_Name': ['guest', 'name', 'customer', '고객', '성명'],
         'Booking_Date': ['booking', 'create', 'res', '예약', '생성'],
         'Rooms': ['room', 'qty', 'rmws', '객실수', '수량'],
         'Nights': ['night', 'los', '박수', '박'],
@@ -147,20 +147,22 @@ def normalize_and_map_columns(df):
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
         'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
-        'Lead_Time': ['lead', '리드', 'lt', 'l/t']
+        'Lead_Time': ['lead', '리드', 'lt']
     }
     for col in df.columns:
         clean = str(col).lower().replace(" ", "").replace("_", "")
         for target_col, keywords in rules.items():
-            if any(kw in clean for kw in keywords):
-                if target_col not in col_map.values():
-                    col_map[col] = target_col; break
+            for kw in keywords:
+                if kw in clean:
+                    if target_col not in col_map.values():
+                        col_map[col] = target_col; break
             if col in col_map: break
     return df.rename(columns=col_map)
 
 def process_data(file, status, force_otb=False):
     try:
-        is_otb_file = "Sales on the Book" in file.name or force_otb
+        is_filename_otb = "Sales on the Book" in file.name or "영업 현황" in file.name
+        is_otb = force_otb or is_filename_otb
         
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=None)
@@ -169,10 +171,9 @@ def process_data(file, status, force_otb=False):
             df_raw = pd.read_excel(file, header=None)
 
         # ---------------------------------------------------------
-        # CASE 1. 세일즈온더북 (OTB) 처리 -> 조식 분석 안함, 합계만 가져옴
+        # [A] OTB 처리: 무조건 마지막 행의 마지막 열 값 추출
         # ---------------------------------------------------------
-        if is_otb_file:
-            # 월 파악 (상단 15줄 뒤지기)
+        if is_otb:
             found_month_date = datetime.now()
             for r in range(min(15, len(df_raw))):
                 row_str = " ".join(df_raw.iloc[r].astype(str).values)
@@ -181,12 +182,10 @@ def process_data(file, status, force_otb=False):
                     found_month_date = pd.to_datetime(f"2026-{match.group(1)}-01")
                     break
             
-            # 물리적 마지막 셀 추출
             df_clean = df_raw.dropna(how='all').dropna(axis=1, how='all')
             try:
-                # 마지막 셀 값 (매출)
+                # 엑셀의 물리적 마지막 칸
                 total_rev = float(str(df_clean.iloc[-1, -1]).replace(',', '').replace('nan', '0').split('.')[0])
-                # 마지막 행의 뒤에서 5번째 칸 (RN)
                 total_rn = float(str(df_clean.iloc[-1, -5]).replace(',', '').replace('nan', '0').split('.')[0])
             except:
                 total_rev = 0; total_rn = 0
@@ -194,13 +193,13 @@ def process_data(file, status, force_otb=False):
             return pd.DataFrame([{
                 'CheckIn': found_month_date.strftime('%Y-%m-%d'),
                 'Room_Revenue': total_rev, 'Total_Revenue': total_rev, 'RN': total_rn,
-                'Guest_Name': 'OTB_MONTHLY_TOTAL', 'Segment': 'OTB', 'Account': 'OTB_DATA',
+                'Guest_Name': 'OTB_SUMMARY', 'Segment': 'OTB', 'Account': 'OTB_DATA',
                 'Room_Type': 'ROH', 'Nat_Orig': 'KR', 'Booking_Date': found_month_date.strftime('%Y-%m-%d'),
                 'Lead_Time': 0, 'Breakfast': 'Unknown', 'Status': 'Booked', 'Snapshot_Date': datetime.now().strftime('%Y-%m-%d')
             }])
 
         # ---------------------------------------------------------
-        # CASE 2. 예약/취소 리스트 처리 -> 여기서 K열(조식) 분석
+        # [B] 일반 데이터 처리: 조식(BF) 전수조사 전략
         # ---------------------------------------------------------
         header_idx = -1
         for i, row in df_raw.head(20).iterrows():
@@ -208,27 +207,26 @@ def process_data(file, status, force_otb=False):
                 header_idx = i; break
         
         if header_idx != -1:
+            # 1. 데이터 영역 확보
             df_data = df_raw.iloc[header_idx+1:].reset_index(drop=True)
             
-            # [핵심] 조식 분류 로직: 데이터 영역의 K열(물리적 11번째 열, 인덱스 10) 직접 판독
-            def scan_breakfast_k_column(row):
-                try:
-                    # 엑셀의 K열은 인덱스 10번임
-                    k_val = str(row.iloc[10]).upper() if len(row) > 10 else ""
-                    if 'BF' in k_val:
-                        return 'Included (조식포함)'
-                except: pass
+            # 2. [조식 식별 로직] 인덱스 무시하고 그 줄에 'BF' 글자가 있는지만 검사
+            def scan_row_for_breakfast(row):
+                # 그 행의 모든 칸을 글자로 합침
+                row_string = "".join(row.astype(str).values).upper()
+                if 'BF' in row_string:
+                    return 'Included (조식포함)'
                 return 'Not Included (불포함)'
             
-            # 컬럼 매핑 전 원본 데이터 인덱스로 조식 리스트 생성
-            breakfast_col_data = df_data.apply(scan_breakfast_k_column, axis=1)
+            # 조식 정보를 리스트로 미리 계산
+            breakfast_col = df_data.apply(scan_row_for_breakfast, axis=1)
             
-            # 헤더 입히기 및 매핑
+            # 3. 헤더 매핑 진행
             df_data.columns = df_raw.iloc[header_idx].values
             df = normalize_and_map_columns(df_data).copy()
             
             # 조식 컬럼 강제 삽입
-            df['Breakfast'] = breakfast_col_data
+            df['Breakfast'] = breakfast_col
             
             # 숫자 처리
             for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time']:
@@ -253,11 +251,10 @@ def process_data(file, status, force_otb=False):
             return clean_numeric_columns(df)
             
     except Exception as e:
-        st.error(f"⚠️ 파일 처리 도중 오류: {e}")
         return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 렌더링 함수 (스타일 및 탭 분석)
+# 5. UI 렌더링 헬퍼 함수들
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
@@ -343,14 +340,15 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
             show_dataframe_with_style(add_total_row(nat_stats, 'Nat_Group'))
 
     with t8:
-        # [핵심] 조식 비중 분석 탭 (여기서 조식 결과 확인)
-        st.subheader("🍳 조식 포함 여부 분석 (예약 리스트 K열 BF 기준)")
+        # [핵심] 조식 비중 탭 렌더링
+        st.subheader("🍳 조식 포함 여부 분석 (전수조사 로직)")
         if 'Breakfast' in target_df.columns:
             bf_stats = target_df.groupby('Breakfast').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
             c1, c2 = st.columns(2)
-            c1.plotly_chart(px.pie(bf_stats, values='RN', names='Breakfast', title="조식 비중 (박수)"), use_container_width=True, key=f"{unique_key}_bf_pie")
+            c1.plotly_chart(px.pie(bf_stats, values='RN', names='Breakfast', title="조식 비중"), use_container_width=True, key=f"{unique_key}_bf_pie")
             c2.plotly_chart(px.bar(bf_stats, x='Breakfast', y='Room_Revenue', title="조식 여부별 매출"), use_container_width=True, key=f"{unique_key}_bf_bar")
             show_dataframe_with_style(add_total_row(bf_stats, 'Breakfast'))
+        else: st.info("조식 데이터 식별 불가")
 
 # ==============================================================================
 # 6. 메인 실행부
@@ -387,11 +385,14 @@ try:
         with st.expander("OTB (Sales on the Book)", expanded=True):
             f3_list = st.file_uploader("당월 OTB (12개월 통합)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
             if f3_list and st.button("OTB 저장"):
-                otb_list = [process_data(f, "Booked", force_otb=True) for f in f3_list]
-                if otb_list:
-                    combined_otb = pd.concat(otb_list, ignore_index=True)
+                all_otb_data = []
+                for f in f3_list:
+                    processed = process_data(f, "Booked", force_otb=True)
+                    if not processed.empty: all_otb_data.append(processed)
+                if all_otb_data:
+                    combined_otb = pd.concat(all_otb_data, ignore_index=True)
                     if save_to_firestore(combined_otb):
-                        st.success("12개월 OTB 통합 저장 완료!"); time.sleep(1); st.cache_data.clear(); st.rerun()
+                        st.success(f"12개월 OTB 통합 저장 완료!"); time.sleep(1); st.cache_data.clear(); st.rerun()
 
     if selected_date and not df_all.empty:
         df_filtered = df_all[df_all['Snapshot_Date'] == selected_date].copy()
@@ -420,9 +421,9 @@ try:
                 seg_gm = df_paid_bk.groupby('Segment').agg({'RN': 'sum','Room_Revenue': 'sum'}).reset_index()
                 show_dataframe_with_style(add_total_row(seg_gm, 'Segment')) 
 
-        with main_tab1: render_analysis_tab(df_paid_bk, "유료 예약", "bk_f")
-        with main_tab2: render_analysis_tab(df_list_cn, "취소 데이터", "cn_f")
-        with main_tab3: render_analysis_tab(df_total_paid, "종합 합계", "tot_f")
+        with main_tab1: render_analysis_tab(df_paid_bk, "유료 예약", "bk_u")
+        with main_tab2: render_analysis_tab(df_list_cn, "취소 데이터", "cn_u")
+        with main_tab3: render_analysis_tab(df_total_paid, "종합 합계", "tot_u")
         with main_tab4: 
             df_zero = df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] <= 0)]
             st.dataframe(df_zero[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
