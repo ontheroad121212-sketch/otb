@@ -80,21 +80,54 @@ BUDGET_DATA = {1:514992575, 2:786570856, 3:529599040, 4:695351004, 5:903705440, 
                7:1231949142, 8:1388376999, 9:952171506, 10:897171539, 11:667146771, 12:804030110}
 
 def load_all_historical_data():
-    """4만 건 히스토리 데이터 분석 (DOW Index 추출)"""
-    docs = db.collection("revenue_integrity_history").stream()
-    data = [doc.to_dict() for doc in docs]
-    if not data: return {}, 0
+    """hotel_booking 컬렉션에서 4만 건의 예약 데이터를 직접 분석"""
+    db = firestore.client()
+    st.write("📡 hotel_booking 데이터베이스 연결 중...")
+    
+    # 1. 4만 건을 한꺼번에 가져오기 위한 스트림 설정
+    # (주의: 데이터가 너무 많으면 시간이 걸리므로 덩어리로 끊어서 로드하는 것이 안전함)
+    docs = db.collection("hotel_booking").stream()
+    
+    data = []
+    count = 0
+    status_text = st.empty()
+    
+    for doc in docs:
+        data.append(doc.to_dict())
+        count += 1
+        # 2,000건마다 진행 상황 표시 (지배인님이 답답하지 않게!)
+        if count % 2000 == 0:
+            status_text.write(f"📂 {count:,}건 읽어오는 중... 조금만 기다려주세요!")
+            
+    if not data:
+        return {}, 0
+    
     df = pd.DataFrame(data)
-    bd_col = next((c for c in df.columns if c.lower() in ['booking_date', 'created_at', 'date']), None)
+    st.write(f"✅ 총 {len(df):,}건 로드 완료! 지표 가공 시작...")
+
+    # 2. 예약 생성일(booking_date 등) 필드 자동 매칭
+    # 호텔 시스템마다 필드명이 다를 수 있으니 유연하게 대처합니다.
+    bd_col = next((c for c in df.columns if c.lower() in ['booking_date', 'created_at', 'reservation_date', 'date']), None)
+    
     if bd_col:
+        # 날짜 형식으로 변환
         df['b_date'] = pd.to_datetime(df[bd_col], errors='coerce')
         df = df.dropna(subset=['b_date'])
+        
+        # 요일 추출 (0:월, 6:일)
         df['dow'] = df['b_date'].dt.dayofweek
+        
+        # [핵심] 요일별 예약 비중 지수화 (4만 건의 평균을 1.0으로 둠)
+        # 예: 일요일 예약이 평소보다 1.2배 많다면 지수는 1.2
         dow_indices = (df['dow'].value_counts(normalize=True) * 7).to_dict()
     else:
+        st.error("날짜 필드(booking_date)를 찾을 수 없습니다. 필드명을 확인해주세요.")
         dow_indices = {i: 1.0 for i in range(7)}
-    cust_col = next((c for c in df.columns if c.lower() in ['customer_id', 'phone']), None)
+
+    # 3. 추가 통계 (재방문율 등)
+    cust_col = next((c for c in df.columns if c.lower() in ['customer_id', 'phone', 'guest_name']), None)
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
+    
     return dow_indices, repeat_rate
 
 def find_header_and_process(file):
