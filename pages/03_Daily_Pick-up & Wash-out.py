@@ -121,19 +121,18 @@ def clean_numeric_columns(df):
     return df
 
 def save_to_firestore(df):
-    """데이터 저장"""
     try:
+        if df.empty: return False
         records = df.fillna(0).astype(str).to_dict(orient='records')
-        doc_ref = db.collection(COLLECTION_NAME).document()
-        doc_ref.set({
+        # 명확하게 snapshot_date를 문서 데이터에 포함하여 저장
+        db.collection(COLLECTION_NAME).add({
             'data': records,
             'uploaded_at': datetime.now(),
-            'snapshot_date': datetime.now().strftime('%Y-%m-%d'), 
-            'count': len(records)
+            'snapshot_date': datetime.now().strftime('%Y-%m-%d')
         })
         return True
     except Exception as e:
-        st.error(f"❌ 저장 오류: {e}")
+        st.error(f"저장 실패: {e}")
         return False
 
 @st.cache_data(ttl=0)
@@ -505,12 +504,17 @@ try:
         with st.expander("OTB (Sales on the Book)", expanded=True):
             f3_list = st.file_uploader("당월 OTB (12개월 통합)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
             if f3_list and st.button("OTB 저장"):
-                # [수정] force_otb=True를 넣어 파일 이름 상관없이 OTB로 인식시킴
+                success_count = 0
                 for f in f3_list:
-                    save_to_firestore(process_data(f, "Booked", force_otb=True))
-                # [수정] 반복문이 다 끝난 뒤에 리런 (그래야 12개가 다 올라감)
-                st.cache_data.clear()
-                st.rerun()
+                    # force_otb=True를 사용하여 무조건 OTB로 인식하게 함
+                    if save_to_firestore(process_data(f, "Booked", force_otb=True)):
+                        success_count += 1
+                
+                if success_count > 0:
+                    st.success(f"{success_count}개 파일 저장 완료!")
+                    time.sleep(1)
+                    st.cache_data.clear()
+                    st.rerun() # 모든 파일 저장 후 마지막에 딱 한 번만 실행
 
     # 3. 메인 콘텐츠
     if selected_date and not df_all.empty:
