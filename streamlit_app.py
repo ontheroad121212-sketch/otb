@@ -204,40 +204,40 @@ if st.session_state.get("authenticated"):
         st.sidebar.warning("⏳ 과거 패턴 분석이 필요합니다.")
         
         if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
-    with st.sidebar.status("데이터 고속 도로 개통 중...", expanded=True) as status:
-        try:
-            st.write("📡 파이어베이스 서버에 접속 중...")
-            # 1. 호출 최적화: 정렬이나 필터 없이 순수하게 '원본'만 요청 (가장 빠름)
-            db = firestore.client()
-            collection_ref = db.collection("hotel_booking")
+            with st.sidebar.status("데이터 고속 도로 개통 중...", expanded=True) as status:
+                try:
+                    st.write("📡 파이어베이스 서버에 접속 중...")
+                    # 1. 호출 최적화: 정렬이나 필터 없이 순수하게 '원본'만 요청 (가장 빠름)
+                    db = firestore.client()
+                    collection_ref = db.collection("hotel_booking")
             
-            # 2. 데이터를 덩어리째 가져오기 (전체 stream)
-            docs = collection_ref.stream()
+                    # 2. 데이터를 덩어리째 가져오기 (전체 stream)
+                    docs = collection_ref.stream()
             
-            hist_data = []
-            count = 0
+                    hist_data = []
+                    count = 0
             
-            # 3. 실시간 카운팅 (연결 여부 확인용)
-            status_placeholder = st.empty()
-            for doc in docs:
-                hist_data.append(doc.to_dict())
-                count += 1
-                if count % 1000 == 0:
-                    status_placeholder.write(f"📥 현재 {count:,}건 로드 중... (연결 유지 중)")
+                    # 3. 실시간 카운팅 (연결 여부 확인용)
+                    status_placeholder = st.empty()
+                    for doc in docs:
+                        hist_data.append(doc.to_dict())
+                        count += 1
+                        if count % 1000 == 0:
+                            status_placeholder.write(f"📥 현재 {count:,}건 로드 중... (연결 유지 중)")
             
-            if count > 0:
-                st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
-                # ... (이후 데이터프레임 가공 로직 동일) ...
+                    if count > 0:
+                        st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
+                        # ... (이후 데이터프레임 가공 로직 동일) ...
                 
-                # 성공 후 재실행
-                status.update(label="✅ 분석 완료!", state="complete")
-                st.rerun()
-            else:
-                st.error("⚠️ 연결은 되었으나 데이터가 0건입니다. 컬렉션명을 다시 확인해주세요.")
+                        # 성공 후 재실행
+                        status.update(label="✅ 분석 완료!", state="complete")
+                        st.rerun()
+                    else:
+                        st.error("⚠️ 연결은 되었으나 데이터가 0건입니다. 컬렉션명을 다시 확인해주세요.")
 
-        except Exception as e:
-            st.error(f"❌ 연결 실패 원인: {str(e)}")
-            st.info("💡 팁: 인터넷 연결이나 파이어베이스 '색인(Index)' 설정을 확인해보세요.")
+                except Exception as e:
+                    st.error(f"❌ 연결 실패 원인: {str(e)}")
+                    st.info("💡 팁: 인터넷 연결이나 파이어베이스 '색인(Index)' 설정을 확인해보세요.")
 
 if selected_page == "🎯 Forecasting":
     secret_forecasting.run_forecasting()
