@@ -13,28 +13,15 @@ import time
 # 0. 사용자 정의 버짓 데이터 (1월~12월 목표 매출)
 # ==============================================================================
 BUDGET_DATA = { 
-    1: 514992575, 
-    2: 786570856, 
-    3: 529599040, 
-    4: 695351004,
-    5: 903705440,
-    6: 808203820,
-    7: 1231949142,
-    8: 1388376999,
-    9: 952171506,
-    10: 897171539,
-    11: 667146771,
-    12: 804030110 
+    1: 514992575, 2: 786570856, 3: 529599040, 4: 695351004,
+    5: 903705440, 6: 808203820, 7: 1231949142, 8: 1388376999,
+    9: 952171506, 10: 897171539, 11: 667146771, 12: 804030110 
 }
 
 # ==============================================================================
 # 1. 페이지 설정 및 CSS 스타일링
 # ==============================================================================
-st.set_page_config(
-    page_title="ARI Final Integrity", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="ARI Final Integrity", layout="wide")
 
 st.markdown("""
 <style>
@@ -43,7 +30,7 @@ st.markdown("""
     div[data-testid="stMetricLabel"] { font-size: 15px !important; font-weight: 700; color: #64748b; }
     button[data-baseweb="tab"] { font-size: 16px !important; font-weight: 700; }
     [data-testid="stDataFrame"] table tr:last-child td {
-        font-weight: 900 !important; background-color: #fff9c4 !important; color: #000000 !important; border-top: 2px solid #000000 !important;
+        font-weight: 900 !important; background-color: #fff9c4 !important; color: black; border-top: 2px solid black;
     }
     div.stButton > button:first-child { border-color: #ff4b4b; color: #ff4b4b; }
     div.stButton > button:first-child:hover { background-color: #ff4b4b; color: white; }
@@ -58,7 +45,7 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(dict(st.secrets["firebase"]))
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"🔥 데이터베이스 연결 실패: {e}")
+        st.error(f"🔥 DB 연결 실패: {e}")
         st.stop()
 
 db = firestore.client()
@@ -72,7 +59,7 @@ def clean_numeric_columns(df):
     target_cols = [
         'RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total', 
         'Lead_Time', 'OTB_Rev', 'Budget_Rev', 'Budget_Achiev', 'OTB_RN', 
-        'OTB_ADR', 'Actual_Rev', 'Actual_RN', 'Rooms', 'Nights'
+        'Actual_Rev', 'Actual_RN', 'Rooms', 'Nights'
     ]
     for col in target_cols:
         if col in df.columns:
@@ -138,7 +125,7 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 및 매핑 로직 (OTB 마지막 열 추출, K열 조식 확인)
+# 4. 엑셀/CSV 파일 처리 로직 (OTB 마지막 열 추출, K열 조식 확인)
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -154,9 +141,9 @@ def normalize_and_map_columns(df):
         'Segment': ['segment', '세그먼트'],
         'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
-        'Rate_Plan': ['rate', 'plan', '상품', '패키지'], 
+        'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
-        'Lead_Time': ['lead', '리드', 'lt']
+        'Lead_Time': ['lead', '리드', 'lt', 'l/t']
     }
     for col in df.columns:
         clean = str(col).lower().replace(" ", "").replace("_", "")
@@ -182,6 +169,7 @@ def process_data(file, status, force_otb=False):
         # ---------------------------------------------------------
         if is_otb:
             found_month_date = datetime.now()
+            # 파일 상단 15줄 이내에서 월 정보 탐색
             for r in range(min(15, len(df_raw))):
                 row_str = " ".join(df_raw.iloc[r].astype(str).values)
                 match = re.search(r'20\d{2}-(\d{2})', row_str)
@@ -189,9 +177,12 @@ def process_data(file, status, force_otb=False):
                     found_month_date = pd.to_datetime(f"2026-{match.group(1)}-01")
                     break
             
+            # 마지막 행/열 값 추출 (매출 합계)
             df_clean = df_raw.dropna(how='all').dropna(axis=1, how='all')
             try:
+                # 엑셀 물리적 맨 우측 하단 셀
                 total_rev = float(str(df_clean.iloc[-1, -1]).replace(',', '').replace('nan', '0').split('.')[0])
+                # 엑셀 물리적 맨 우측 하단에서 왼쪽으로 4칸 (보통 객실수 합계)
                 total_rn = float(str(df_clean.iloc[-1, -5]).replace(',', '').replace('nan', '0').split('.')[0])
             except:
                 total_rev = 0; total_rn = 0
@@ -208,29 +199,42 @@ def process_data(file, status, force_otb=False):
         # [B] 일반 예약/취소 처리 (K열 BF 확인)
         # ---------------------------------------------------------
         header_idx = -1
-        keywords = ['예약번호', '고객명', '입실일자', '객실료']
+        # 헤더 키워드 탐색
         for i, row in df_raw.head(20).iterrows():
-            if sum(1 for k in keywords if k in str(row.values)) >= 2:
+            if sum(1 for k in ['예약번호', '고객명', '입실일자'] if k in str(row.values)) >= 2:
                 header_idx = i; break
         
         if header_idx != -1:
-            headers = df_raw.iloc[header_idx].values
+            # 엑셀 원본 컬럼명 확보
+            original_headers = df_raw.iloc[header_idx].values
             df = df_raw.iloc[header_idx+1:].reset_index(drop=True)
-            df.columns = headers
+            df.columns = original_headers
             
-            # K열 (10번 인덱스) 강제 지정
-            service_code_col = df.columns[10] if len(df.columns) > 10 else None
+            # [수정] 조식 식별 로직: 서비스코드는 엑셀의 K열(11번째)에 위치함
+            # 데이터프레임 인덱스로는 10 (0부터 시작)
+            svc_col_idx = 10 
             
+            # 컬럼 매핑
             df = normalize_and_map_columns(df).copy()
             
-            # 조식 분류 (K열에 BF가 포함되면 조식)
+            # 조식 분류 (K열 데이터를 서비스코드로 보고 'BF' 포함 여부 확인)
             def check_breakfast(row):
-                if service_code_col:
-                    val = str(row.get(service_code_col, '')).upper()
-                    if 'BF' in val: return 'Included (조식포함)'
+                # 인덱스로 접근하거나, '서비스코드'라는 이름으로 접근 시도
+                svc_val = ""
+                if len(row) > svc_col_idx:
+                    svc_val = str(row.iloc[svc_col_idx]).upper()
+                
+                # 만약 매핑 과정에서 이름이 바뀌었다면 이름으로도 확인
+                if not svc_val or svc_val == 'NAN':
+                    svc_val = str(row.get('서비스코드', '')).upper()
+                
+                if 'BF' in svc_val:
+                    return 'Included (조식포함)'
                 return 'Not Included (불포함)'
+            
             df['Breakfast'] = df.apply(check_breakfast, axis=1)
             
+            # 숫자 처리
             for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -242,8 +246,6 @@ def process_data(file, status, force_otb=False):
             df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
             df = df.dropna(subset=['CheckIn_dt'])
             df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
-            df['Booking_Month'] = pd.to_datetime(df.get('Booking_Date', df['CheckIn']), errors='coerce').dt.strftime('%Y-%m')
-            df['Day_Type'] = df['CheckIn_dt'].dt.weekday.apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
             
             def cls_nat(row):
                 if re.search('[가-힣]', str(row.get('Guest_Name',''))): return 'KOR'
@@ -346,7 +348,8 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
             show_dataframe_with_style(add_total_row(nat_stats, 'Nat_Group'))
 
     with t8:
-        st.subheader("🍳 조식 포함 여부")
+        # [핵심] 조식 비중 탭 렌더링
+        st.subheader("🍳 조식 포함 여부 (서비스코드 BF 기준)")
         if 'Breakfast' in target_df.columns:
             bf_stats = target_df.groupby('Breakfast').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
             c1, c2 = st.columns(2)
