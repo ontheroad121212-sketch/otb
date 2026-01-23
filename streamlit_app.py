@@ -182,9 +182,7 @@ def save_data_with_sob(date_str, month, df, sob):
         return True
     except: return False
 
-# ==============================================================================
-# [3] 메인 화면 UI 및 사이드바
-# ==============================================================================
+# --- [3] 메인 화면 UI 및 사이드바 (들여쓰기 교정본) ---
 st.sidebar.header("⚙️ Settings")
 report_date = st.sidebar.date_input("기준 일자", datetime.now())
 compare_date = st.sidebar.date_input("비교 일자", report_date - timedelta(days=1))
@@ -200,7 +198,8 @@ if st.session_state.get("authenticated"):
     
     st.sidebar.markdown("---")
     
-   if "historical_dow" not in st.session_state:
+    # [주의] 이 아래의 모든 줄은 세로 정렬이 완벽해야 합니다.
+    if "historical_dow" not in st.session_state:
         st.sidebar.warning("⏳ 과거 패턴 분석이 필요합니다.")
         
         if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
@@ -209,7 +208,7 @@ if st.session_state.get("authenticated"):
                     st.write("📡 파이어베이스 서버에 접속 중...")
                     db = firestore.client()
                     
-                    # 1. 전 구역 수색 (Collection Group)
+                    # 1. 전 구역 수색 (Collection Group) - 하위 계층까지 싹 뒤집니다.
                     st.write("🔎 전 구역에서 'hotel_booking' 데이터를 수색합니다...")
                     docs = db.collection_group("hotel_booking").stream()
                     
@@ -228,6 +227,7 @@ if st.session_state.get("authenticated"):
                         st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
                         h_df = pd.DataFrame(hist_data)
                         
+                        # 날짜 필드 자동 탐색
                         bd_col = next((c for c in h_df.columns if c.lower() in ['booking_date', 'created_at', 'date']), None)
                         if bd_col:
                             h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
@@ -236,6 +236,7 @@ if st.session_state.get("authenticated"):
                             # 요일 지수 세션 저장
                             st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
                             
+                            # 재방문율 통계
                             cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'phone', 'guest_name']), None)
                             if cust_col:
                                 st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
@@ -256,6 +257,12 @@ if st.session_state.get("authenticated"):
 
                 except Exception as e:
                     st.error(f"❌ 연결 실패 원인: {str(e)}")
+                    st.info("💡 팁: 인터넷 연결이나 파이어베이스 서비스 계정 권한을 확인해 보세요.")
+    else:
+        st.sidebar.success("✅ 과거 패턴 데이터 로드 완료")
+        if st.sidebar.button("🔄 데이터 다시 분석"):
+            del st.session_state["historical_dow"]
+            st.rerun()
 
 if selected_page == "🎯 Forecasting":
     secret_forecasting.run_forecasting()
