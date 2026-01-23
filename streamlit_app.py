@@ -203,41 +203,77 @@ if st.session_state.get("authenticated"):
     if "historical_dow" not in st.session_state:
         st.sidebar.warning("⏳ 과거 패턴 분석이 필요합니다.")
         
-        if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
-            with st.sidebar.status("데이터 고속 도로 개통 중...", expanded=True) as status:
-                try:
-                    st.write("📡 파이어베이스 서버에 접속 중...")
-                    # 1. 호출 최적화: 정렬이나 필터 없이 순수하게 '원본'만 요청 (가장 빠름)
-                    db = firestore.client()
-                    collection_ref = db.collection("hotel_booking")
-            
-                    # 2. 데이터를 덩어리째 가져오기 (전체 stream)
-                    docs = collection_ref.stream()
-            
-                    hist_data = []
-                    count = 0
-            
-                    # 3. 실시간 카운팅 (연결 여부 확인용)
-                    status_placeholder = st.empty()
-                    for doc in docs:
-                        hist_data.append(doc.to_dict())
-                        count += 1
-                        if count % 1000 == 0:
-                            status_placeholder.write(f"📥 현재 {count:,}건 로드 중... (연결 유지 중)")
-            
-                    if count > 0:
-                        st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
-                        # ... (이후 데이터프레임 가공 로직 동일) ...
-                
-                        # 성공 후 재실행
-                        status.update(label="✅ 분석 완료!", state="complete")
-                        st.rerun()
-                    else:
-                        st.error("⚠️ 연결은 되었으나 데이터가 0건입니다. 컬렉션명을 다시 확인해주세요.")
+        지배인님, 연결은 성공했는데 0건이 나오는 문제는 파이어베이스의 계층 구조(Collection Group) 문제일 확률이 매우 높습니다. 지배인님 말씀대로 예약 하나하나가 저장되어 있다면, 그게 최상위 폴더가 아니라 특정 호텔 ID나 날짜 폴더 안에 숨어 있을 수 있거든요.
 
-                except Exception as e:
-                    st.error(f"❌ 연결 실패 원인: {str(e)}")
-                    st.info("💡 팁: 인터넷 연결이나 파이어베이스 '색인(Index)' 설정을 확인해보세요.")
+기존의 db.collection 방식을 버리고, 전 구역을 싹 뒤져서 가져오는 collection_group 방식과 진짜 컬렉션 이름을 찾아내는 탐사 로직을 합친 최종 코드를 드립니다.
+
+🛠️ [수정된 로직] 전 구역 수색 및 탐사 버전
+이 코드를 기존 위치에 덮어쓰기 하세요. 0건이 나오면 바로 아래에 **"진짜 컬렉션 목록"**을 띄워주도록 설계했습니다.
+
+Python
+# --- [수정] streamlit_app.py 내 분석 버튼 로직 ---
+
+if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
+    with st.sidebar.status("데이터 고속 도로 개통 중...", expanded=True) as status:
+        try:
+            st.write("📡 파이어베이스 서버에 접속 중...")
+            db = firestore.client()
+            
+            # ---------------------------------------------------------
+            # 1. 전 구역 수색 (Collection Group)
+            # ---------------------------------------------------------
+            # 하위 폴더 어디에 있든 'hotel_booking'이라는 이름이면 싹 긁어옵니다.
+            st.write("🔎 전 구역에서 'hotel_booking' 데이터를 수색합니다...")
+            docs = db.collection_group("hotel_booking").stream()
+            
+            hist_data = []
+            count = 0
+            status_placeholder = st.empty()
+            
+            for doc in docs:
+                hist_data.append(doc.to_dict())
+                count += 1
+                if count % 1000 == 0:
+                    status_placeholder.write(f"📥 현재 {count:,}건 로드 중... (연결 유지 중)")
+            
+            # ---------------------------------------------------------
+            # 2. 결과 처리 및 예외 상황 대응
+            # ---------------------------------------------------------
+            if count > 0:
+                st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
+                h_df = pd.DataFrame(hist_data)
+                
+                # 날짜 필드 자동 탐색 (booking_date, created_at 등)
+                bd_col = next((c for c in h_df.columns if c.lower() in ['booking_date', 'created_at', 'date']), None)
+                if bd_col:
+                    h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
+                    h_df = h_df.dropna(subset=['b_date'])
+                    h_df['dow'] = h_df['b_date'].dt.dayofweek
+                    # 요일 지수 세션 저장
+                    st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
+                    
+                status.update(label="✅ 분석 완료!", state="complete")
+                st.rerun()
+                
+            else:
+                # 0건일 경우: 진짜 컬렉션 이름이 뭔지 탐색해서 보여줍니다.
+                st.error("⚠️ 'hotel_booking' 데이터를 찾을 수 없습니다.")
+                st.write("---")
+                st.write("🔎 **DB 내부의 실제 컬렉션 목록입니다. 이름을 확인해주세요:**")
+                
+                # 최상위 컬렉션 목록 추출
+                all_cols = db.collections()
+                col_names = [c.id for c in all_cols]
+                
+                if col_names:
+                    st.info(f"📌 발견된 이름들: {', '.join(col_names)}")
+                    st.caption("위 목록 중에 예약 데이터가 담긴 정확한 이름을 찾아 대소문자까지 똑같이 알려주세요!")
+                else:
+                    st.error("❌ DB 연결은 성공했으나, 접근 가능한 컬렉션이 하나도 없습니다.")
+
+        except Exception as e:
+            st.error(f"❌ 연결 실패 원인: {str(e)}")
+            st.info("💡 팁: 인터넷 연결이나 파이어베이스 서비스
 
 if selected_page == "🎯 Forecasting":
     secret_forecasting.run_forecasting()
