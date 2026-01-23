@@ -639,3 +639,11 @@ if 'sob_curr' in locals() and sob_curr is not None:
         st.session_state[f"pace_{save_month}"] = len(df_curr) - len(df_prev)
 
     st.success(f"✅ {save_month}월 데이터가 포캐스팅 시스템으로 전송되었습니다.")
+
+# --- 04_Booking_Pace.py 파일 맨 아래에 추가 ---
+
+# 4만 건 분석 결과(예: dow_counts, repeat_rate)가 변수로 선언되어 있어야 합니다.
+if 'dow_counts' in locals() and 'repeat_rate' in locals():
+    st.session_state["historical_dow"] = dow_counts
+    st.session_state["repeat_rate"] = repeat_rate
+    st.success("✅ 4만 건 기반 예약 패턴 분석 데이터가 포캐스팅 시스템에 동기화되었습니다.")
