@@ -1,4 +1,11 @@
 import streamlit as st
+# 세션 상태에 인증 정보가 없으면 화면을 비우고 경고 메시지만 출력
+if st.session_state.get("authenticated") != True:
+    st.warning("접근 권한이 없습니다. 메인 페이지에서 관리자 인증을 완료해주세요.")
+    st.stop()  # 이후의 코드는 실행되지 않음
+
+# --- 여기서부터는 암호가 맞을 때만 실행되는 포캐스팅 로직 ---
+st.title("🎯 Secret Forecasting")
 
 # [보안] 세션 스테이트에 인증 정보가 없으면 아예 접근 불가 처리
 if "authenticated" not in st.session_state or not st.session_state["authenticated"]:
