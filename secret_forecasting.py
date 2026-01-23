@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime
 
 def run_forecasting():
+    
     st.title("🎯 데이터 기반 정밀 포캐스팅 (v7.0)")
     st.caption("현재 실적(OTB)을 보존하며 과거 4만 건의 예약 패턴을 반영합니다.")
     
