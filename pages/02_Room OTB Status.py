@@ -17,15 +17,13 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # --------------------------------------------------------------------------
-# 2. 데이터 처리 엔진
+# 2. 데이터 처리 엔진 (로직 100% 유지)
 # --------------------------------------------------------------------------
 
 def sort_rows_custom(df):
     """
     사용자가 지정한 순서대로 행(Index)을 강제로 정렬합니다.
-    (GDB -> GDF ... -> 합계 -> 예약객실 ... -> 무료객실)
     """
-    # 1. 우리가 원하는 순서 리스트 (우선순위)
     target_order = [
         'GDB', 'GDF', 'FDB', 'FDE', 'FPT', 'FFD', 
         'HDP', 'HDT', 'HDF', 'PPV', 
@@ -34,21 +32,17 @@ def sort_rows_custom(df):
         '점유율', '판매가능', '고장', '내부', '무료'
     ]
     
-    # 2. 정렬을 위한 보조 컬럼 생성 function
     def get_sort_key(idx_value):
         s_idx = str(idx_value).strip()
         for rank, key in enumerate(target_order):
-            # "GDB (7)" 처럼 키워드가 포함되어 있으면 우선순위 부여
             if key in s_idx:
                 return rank
-        return 999 # 리스트에 없는 항목은 맨 뒤로
+        return 999 
 
-    # 3. 정렬 실행
     sorted_index = sorted(df.index, key=get_sort_key)
     return df.reindex(sorted_index)
 
 def extract_total_rooms(index_name):
-    """ 'GDB (7)' -> 7 추출 """
     if pd.isna(index_name): return 0
     match = re.search(r'\((\d+)\)', str(index_name))
     if match:
@@ -56,7 +50,6 @@ def extract_total_rooms(index_name):
     return 0
 
 def normalize_date_columns(df):
-    """ 날짜 형식 통일 """
     new_cols = []
     current_year = str(datetime.date.today().year)
     for col in df.columns:
@@ -75,7 +68,6 @@ def normalize_date_columns(df):
     return df
 
 def find_header_row(df_raw):
-    """ 헤더 자동 찾기 """
     for i, row in df_raw.head(20).iterrows():
         date_count = row.astype(str).apply(lambda x: '-' in x or '/' in x).sum()
         has_gdb = row.astype(str).str.contains('GDB').any()
@@ -94,15 +86,12 @@ def process_uploaded_df(file):
     
     df = normalize_date_columns(df)
     
-    # 요일 행 삭제 (월, 화, 수...)
     rows_to_drop = []
     for idx in df.index[:20]:
         s_idx = str(idx)
-        # 삭제할 특정 헤더들
         if s_idx in ['객실수', 'Room Qty', 'nan', 'NaT', 'None']:
             rows_to_drop.append(idx)
             continue
-        # 요일 텍스트 포함 여부
         row_str = "".join(df.loc[idx].astype(str).values.flatten())
         if any(day in row_str for day in ['월', '화', '수', '목', '금', '토', '일', 'Mon', 'Tue']):
              rows_to_drop.append(idx)
@@ -156,35 +145,39 @@ def merge_files(files):
 tab_upload, tab_dashboard = st.tabs(["📤 데이터 업로드 (관리자)", "📊 통합 리포트"])
 
 # ==========================================================================
-# [TAB 1] 업로드
+# [TAB 1] 업로드 (날짜 지정 기능 추가됨!)
 # ==========================================================================
 with tab_upload:
-    st.info("💡 '어제 데이터'는 자동으로 불러오므로, '오늘 데이터'만 올리시면 됩니다.")
+    st.info("💡 과거 데이터 수정이 필요하면 '저장할 날짜'를 변경해서 업로드하세요.")
     
-    # 암호 입력창
-    admin_pw = st.text_input("🔑 관리자 암호 (저장하려면 입력하세요)", type="password")
+    admin_pw = st.text_input("🔑 관리자 암호", type="password")
     
     st.divider()
     
     c1, c2 = st.columns(2)
     
-    # 1. 오늘 판매량
+    # 1. 판매량 스냅샷 (날짜 선택 가능)
     with c1:
-        st.subheader("1. 오늘 판매량 (Snapshot)")
-        files_today = st.file_uploader("오늘 판매 파일들 (드래그)", accept_multiple_files=True, key="today")
+        st.subheader("1. 판매량 스냅샷 저장")
         
-        if st.button("오늘 판매량 저장", type="primary"):
-            if admin_pw == "9999": # 암호 확인
+        # [수정] 업로드할 날짜를 직접 선택 (기본값: 오늘)
+        upload_date = st.date_input("📅 저장할 날짜 선택", datetime.date.today(), key="upload_date")
+        
+        files_today = st.file_uploader("판매 파일 업로드", accept_multiple_files=True, key="sales_files")
+        
+        if st.button("판매량 저장하기", type="primary"):
+            if admin_pw == "9999": 
                 if files_today:
                     df = merge_files(files_today)
                     if df is not None:
                         df_save = df.fillna(0)
-                        today_str = datetime.date.today().strftime("%Y-%m-%d")
-                        # DB 저장
-                        db.collection("daily_sales_snapshot").document(today_str).set({
+                        # [핵심] 선택한 날짜 문자열로 저장
+                        save_str = upload_date.strftime("%Y-%m-%d")
+                        
+                        db.collection("daily_sales_snapshot").document(save_str).set({
                             "data": df_save.to_dict(), "created_at": datetime.datetime.now()
                         })
-                        st.success(f"✅ {today_str} 저장 완료! (DB에 안전하게 보관됨)")
+                        st.success(f"✅ {save_str} 날짜로 저장 완료!")
                 else:
                     st.warning("파일을 먼저 선택해주세요.")
             else:
@@ -193,15 +186,15 @@ with tab_upload:
     # 2. 남은 객실 (Availability)
     with c2:
         st.subheader("2. 남은 객실 (Availability)")
-        files_avail = st.file_uploader("남은 객실 파일들 (드래그)", accept_multiple_files=True, key="avail")
+        st.caption("최신 현황으로 덮어씌워집니다.")
+        files_avail = st.file_uploader("남은 객실 파일들", accept_multiple_files=True, key="avail")
         
         if st.button("남은 객실 저장"):
-            if admin_pw == "9999": # 암호 확인
+            if admin_pw == "9999":
                 if files_avail:
                     df = merge_files(files_avail)
                     if df is not None:
                         df_save = df.fillna(0)
-                        # DB 저장 (최신 상태 덮어쓰기)
                         db.collection("hotel_settings").document("latest_availability_view").set({
                             "data": df_save.to_dict(), "updated_at": datetime.datetime.now()
                         })
@@ -212,16 +205,15 @@ with tab_upload:
                 st.error("⛔ 암호가 틀렸습니다!")
 
 # ==========================================================================
-# [TAB 2] 리포트
+# [TAB 2] 리포트 (조회 기능 유지)
 # ==========================================================================
 with tab_dashboard:
     st.header("📊 객실 통합 리포트")
     
     col_sel, col_btn = st.columns([1, 4])
     with col_sel:
-        # [핵심 수정] 기본값을 '오늘(Real Today)'로 설정
-        # datetime.date.today()가 들어가야 매일매일 자동으로 오늘 날짜가 뜹니다.
-        search_date = st.date_input("조회 기준일 선택", datetime.date.today())
+        # 기본값: 오늘
+        search_date = st.date_input("조회 기준일 선택", datetime.date.today(), key="search_date")
         
         search_str = search_date.strftime("%Y-%m-%d")
         yest_str = (search_date - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
@@ -231,19 +223,17 @@ with tab_dashboard:
         st.write("")
         if st.button("🚀 리포트 불러오기", type="primary"):
             
-            # DB 로드 (어제 데이터는 DB에서 자동 조회)
+            # DB 로드
             doc_sales_today = db.collection("daily_sales_snapshot").document(search_str).get()
             doc_sales_yest = db.collection("daily_sales_snapshot").document(yest_str).get()
             doc_avail = db.collection("hotel_settings").document("latest_availability_view").get()
 
             # ----------------------------------------------------------
-            # SECTION 1: 상단 - 남은 객실 (Availability)
+            # SECTION 1: 상단 - 남은 객실
             # ----------------------------------------------------------
             st.markdown("### 1️⃣ 남은 객실 수 (Available Rooms) - GM 참고용")
             if doc_avail.exists:
                 df_avail = pd.DataFrame.from_dict(doc_avail.to_dict()['data']).apply(pd.to_numeric, errors='coerce')
-                
-                # 정렬 적용
                 df_avail = sort_rows_custom(df_avail)
                 
                 date_cols = [c for c in df_avail.columns if re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', str(c))]
@@ -257,23 +247,20 @@ with tab_dashboard:
             st.divider()
 
             # ----------------------------------------------------------
-            # SECTION 2: 중단 - 실제 판매 & OCC
+            # SECTION 2: 중단 - 판매 & OCC
             # ----------------------------------------------------------
             st.markdown(f"### 2️⃣ {search_str} 판매 현황 및 점유율")
             
             if not doc_sales_today.exists:
-                st.error(f"❌ '{search_str}' 날짜의 판매 데이터가 DB에 없습니다.")
-                st.info("💡 '데이터 업로드' 탭에서 파일을 올려주시거나, 다른 날짜를 선택해주세요.")
+                st.error(f"❌ '{search_str}' 날짜의 데이터가 없습니다.")
+                st.info("💡 업로드 탭에서 날짜를 지정하여 데이터를 올려주세요.")
             else:
                 df_sales = pd.DataFrame.from_dict(doc_sales_today.to_dict()['data']).apply(pd.to_numeric, errors='coerce')
-                
-                # 정렬 적용
                 df_sales = sort_rows_custom(df_sales)
 
                 sales_dates = [c for c in df_sales.columns if re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', str(c))]
                 sales_dates.sort()
 
-                # OCC 자동 계산
                 frames = {}
                 for date in sales_dates:
                     qty_col = df_sales[date].copy()
@@ -292,7 +279,6 @@ with tab_dashboard:
                 
                 df_combined = pd.concat(frames, axis=1)
                 
-                # 색상 피로도 개선 유지
                 idx = pd.IndexSlice
                 st.dataframe(
                     df_combined.style
@@ -311,16 +297,14 @@ with tab_dashboard:
             st.divider()
 
             # ----------------------------------------------------------
-            # SECTION 3: 하단 - Pickup (어제 데이터 자동 비교)
+            # SECTION 3: 하단 - Pickup
             # ----------------------------------------------------------
             st.markdown(f"### 3️⃣ 전일({yest_str}) 대비 변동 (Pickup)")
             
-            # 오늘 데이터가 있고 어제 데이터도 있을 때만 계산
             if doc_sales_today.exists:
                 if doc_sales_yest.exists:
                     df_yest = pd.DataFrame.from_dict(doc_sales_yest.to_dict()['data']).apply(pd.to_numeric, errors='coerce')
                     
-                    # 정렬 적용
                     df_sales_sorted = sort_rows_custom(df_sales)
                     df_yest_sorted = sort_rows_custom(df_yest)
                     
@@ -339,8 +323,8 @@ with tab_dashboard:
                             use_container_width=True
                         )
                     else:
-                        st.warning("⚠️ 오늘과 어제 데이터 간에 겹치는 날짜(컬럼)가 하나도 없습니다.")
+                        st.warning("⚠️ 겹치는 날짜가 없어 비교 불가")
                 else:
-                    st.warning(f"⚠️ {yest_str} (어제) 데이터가 DB에 없습니다. 비교할 대상이 없습니다.")
+                    st.warning(f"⚠️ {yest_str} (어제) 데이터가 없어 비교할 수 없습니다.")
             else:
                 pass
