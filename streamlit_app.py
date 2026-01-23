@@ -487,6 +487,9 @@ def render_sob_dashboard(current_month, budget, total_rev, vs_budget, achv_rate,
 # [5] 메인 실행 로직 (사이드바, 탭, 데이터 처리)
 # ==============================================================================
 
+# 1. 변수 초기화 (에러 방지를 위해 최상단에 선언)
+selected_page = "Main Report"
+
 # --- 사이드바 설정 ---
 st.sidebar.header("⚙️ Report Settings")
 report_date = st.sidebar.date_input("기준 일자 (오늘)", datetime.now())
@@ -495,65 +498,70 @@ report_date_str = report_date.strftime("%Y-%m-%d")
 compare_date = st.sidebar.date_input("비교 일자 (어제)", report_date - timedelta(days=1))
 compare_date_str = compare_date.strftime("%Y-%m-%d")
 
-# --- 1. 관리자 인증 및 페이지 전환 로직 ---
+# --- 관리자 인증 로직 ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 with st.sidebar:
     st.sidebar.header("⚙️ Settings")
     admin_key = st.text_input("Admin", type="password")
+    
+    # 비밀번호 확인
     if admin_key == "master136":
         st.session_state["authenticated"] = True
     
+    # 인증 성공 시 메뉴 활성화
     if st.session_state.get("authenticated"):
         st.success("Admin Mode On")
         selected_page = st.radio("Navigation", ["Main Report", "🎯 Forecasting"])
 
-        # --- 여기에 추가하세요 ---
-        check_data_status() 
-        # -----------------------
-    
-    # ---------------------------------------------------------
-    # [수정] 4만 건 컬렉션(revenue_integrity_history) 통합 분석
-    # ---------------------------------------------------------
+        st.markdown("---") # 구분선
+        
+        # ---------------------------------------------------------
+        # [수정] 4만 건 컬렉션(revenue_integrity_history) 통합 분석
+        # ---------------------------------------------------------
         if "historical_dow" not in st.session_state:
             st.sidebar.warning("⏳ 과거 패턴 데이터 로딩 필요")
             if st.sidebar.button("📊 4만건 히스토리 전체 분석"):
-                with st.status("이미지의 revenue_integrity_history 분석 중..."):
-                    # 파이어베이스 컬렉션 직접 호출
+                with st.status("이미지의 revenue_integrity_history 분석 중...", expanded=True):
+                    st.write("1. 파이어베이스 컬렉션 연결...")
+                    # 이미지에서 확인된 정확한 컬렉션명 사용
                     hist_docs = db.collection("revenue_integrity_history").stream()
                     hist_data = [d.to_dict() for d in hist_docs]
                 
                     if hist_data:
+                        st.write("2. 데이터프레임 변환 및 전처리...")
                         h_df = pd.DataFrame(hist_data)
-                        # 필드명 자동 탐색
+                        
+                        # 필드명 자동 탐색 (created_at, booking_date 등)
                         bd_col = next((c for c in h_df.columns if c.lower() in ['created_at', 'booking_date', 'date']), None)
                     
                         if bd_col:
+                            st.write("3. 요일별 예약 강도 계산 중...")
                             h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
                             h_df = h_df.dropna(subset=['b_date'])
                             h_df['dow'] = h_df['b_date'].dt.dayofweek
-                            # 요일별 예약 강도 지수화
+                            
+                            # 요일별 예약 비중 지수화 (평균 1.0 기준)
                             st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
                     
                         # 재방문율 분석
+                        st.write("4. 고객 재방문 패턴 분석 중...")
                         cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'guest_id', 'phone']), None)
                         if cust_col:
                             st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
                     
-                        st.success("✅ 분석 완료! 포캐스팅에 반영됩니다.")
-                        st.rerun()
+                        st.success("✅ 분석 완료! 포캐스팅에 반영되었습니다.")
+                        st.rerun() # 데이터 세션 반영을 위해 재실행
         else:
-            # ❌ 여기에 있던 콜론(:)을 제거했습니다.
+            # 기존 SyntaxError 원인이었던 콜론(:) 제거 완료
             st.sidebar.success("✅ 과거 패턴 로드 완료")
-        
-
 
 # --- 2. 페이지 렌더링 로직 ---
 if selected_page == "🎯 Forecasting":
-    # 직접 함수 호출 (가장 안전한 방법)
+    # 직접 임포트된 secret_forecasting 모듈 실행
     secret_forecasting.run_forecasting()
-    st.stop()
+    st.stop() # 하단 메인 리포트 코드 실행 방지
 
 # 메인 타이틀
 st.title(f"🏨 Daily Pace Report")
