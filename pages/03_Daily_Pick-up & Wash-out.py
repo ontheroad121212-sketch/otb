@@ -232,7 +232,8 @@ def normalize_and_map_columns(df):
         'Segment': ['segment', '세그먼트'],
         'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
-        'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], # 조식 확인용
+        'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
+        'Service_Code': ['service', '서비스', 'code'], # 조식 식별용
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
         'Lead_Time': ['lead', '리드', 'lt', 'l/t']
     }
@@ -322,21 +323,23 @@ def process_data(uploaded_file, status, force_otb=False):
             
             df['CheckIn'] = pd.to_datetime(df_raw[date_col], errors='coerce')
             
-            # 매출 및 객실수 컬럼 찾기
+            # 매출 및 객실수 컬럼 찾기 (수정됨: 가장 마지막 열이 합계일 확률 높음)
             try:
-                # 1. 명확한 이름으로 찾기
-                rev_col = next((c for c in df_raw.columns if '매출' in str(c) or 'Rev' in str(c) or 'Amount' in str(c)), None)
-                rn_col = next((c for c in df_raw.columns if '객실수' in str(c) or 'RN' in str(c) or 'Qty' in str(c) or 'Rm' in str(c)), None)
-                
-                # 2. 없으면 위치(인덱스)로 추정 (보통 우측 끝)
-                if rev_col:
-                    df['Room_Revenue'] = pd.to_numeric(df_raw[rev_col], errors='coerce').fillna(0)
+                # '매출'이 포함된 컬럼들 중 가장 뒤에 있는 것 선택 (개인/단체/합계 중 합계)
+                rev_cols = [c for c in df_raw.columns if any(k in str(c) for k in ['매출', 'Rev', 'Amount'])]
+                if rev_cols:
+                    # 마지막 '매출' 컬럼 선택 (Total Revenue)
+                    df['Room_Revenue'] = pd.to_numeric(df_raw[rev_cols[-1]], errors='coerce').fillna(0)
                 else:
+                    # '매출' 컬럼 없으면 무조건 맨 마지막 컬럼
                     df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
                 
-                if rn_col:
-                    df['RN'] = pd.to_numeric(df_raw[rn_col], errors='coerce').fillna(0)
+                # '객실수'가 포함된 컬럼들 중 가장 뒤에 있는 것 선택
+                rn_cols = [c for c in df_raw.columns if any(k in str(c) for k in ['객실수', 'RN', 'Qty', 'Rm'])]
+                if rn_cols:
+                    df['RN'] = pd.to_numeric(df_raw[rn_cols[-1]], errors='coerce').fillna(0)
                 else:
+                    # 대략 뒤에서 5번째가 객실수인 경우가 많음
                     df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
                 
                 df['Total_Revenue'] = df['Room_Revenue']
@@ -366,7 +369,7 @@ def process_data(uploaded_file, status, force_otb=False):
             df = normalize_and_map_columns(df_raw).copy()
             
             # 필수 컬럼 확인 및 기본값 채우기
-            req_cols = ['Rooms', 'Nights', 'Room_Revenue', 'Total_Revenue', 'Guest_Name', 'Segment', 'Account', 'Room_Type', 'Nat_Orig', 'Lead_Time', 'Rate_Plan']
+            req_cols = ['Rooms', 'Nights', 'Room_Revenue', 'Total_Revenue', 'Guest_Name', 'Segment', 'Account', 'Room_Type', 'Nat_Orig', 'Lead_Time', 'Rate_Plan', 'Service_Code']
             for c in req_cols:
                 if c not in df.columns: 
                     if c in ['Rooms', 'Nights', 'Room_Revenue', 'Total_Revenue', 'Lead_Time']: 
@@ -381,14 +384,14 @@ def process_data(uploaded_file, status, force_otb=False):
             df['Total_Revenue'] = np.where(df['Total_Revenue'] == 0, df['Room_Revenue'], df['Total_Revenue'])
             df['RN'] = df['Rooms'] * df['Nights'].replace(0, 1)
             
-            # [조식 포함 여부 식별 로직]
+            # [조식 포함 여부 식별 로직 강화] BF 포함 확인
             def check_breakfast(row):
-                # Rate Plan, Room Type, Segment 등에서 힌트를 찾음
-                text_source = str(row.get('Rate_Plan', '')) + " " + str(row.get('Room_Type', '')) + " " + str(row.get('Segment', ''))
+                # 서비스코드, 요금제, 객실타입, 세그먼트 모두 검사
+                text_source = str(row.get('Service_Code', '')) + " " + str(row.get('Rate_Plan', '')) + " " + str(row.get('Room_Type', '')) + " " + str(row.get('Segment', ''))
                 text_upper = text_source.upper()
                 
                 # 조식 관련 키워드
-                keywords = ['조식', 'BREAKFAST', 'BKFST', 'PKG', '패키지', 'INCL', '조포', 'BF']
+                keywords = ['BF', '조식', 'BREAKFAST', 'BKFST', 'PKG', '패키지', 'INCL', '조포']
                 
                 if any(k in text_upper for k in keywords):
                     return 'Included (조식포함)'
