@@ -4,8 +4,8 @@ import numpy as np
 from datetime import datetime, timedelta
 
 def run_forecasting():
-    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v16.0")
-    st.caption("최종 무삭제판: 3개년 비교 + 예약 곡선 + ADR 수요 민감도 시뮬레이션")
+    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v16.1")
+    st.caption("에러 수정 완료: 3개년 비교 + 예약 곡선 + ADR 수요 민감도 시뮬레이션")
 
     # 1. 데이터 호출 및 인벤토리 설정
     selected_month = st.sidebar.selectbox("🎯 분석 대상 월", range(1, 13), index=datetime.now().month-1)
@@ -41,13 +41,16 @@ def run_forecasting():
     with st.container(border=True):
         col_tgt, col_ly, col_py = st.columns(3)
         with col_tgt:
-            budget_rev = st.number_input("2026 목표 (만원)", value=cur_budget_man, step=500, key="b_rev")
+            st.write("**🎯 2026 목표 (Budget)**")
+            budget_rev = st.number_input("목표 매출 (만원)", value=cur_budget_man, step=500, key="b_rev")
             budget_occ = st.slider("목표 점유율 (%)", 0, 100, 85, key="b_occ")
         with col_ly:
-            ly_rev = st.number_input("2025 실적 (만원)", value=cur_ly_man, step=500, key="ly_rev")
-            ly_occ = st.slider("2025 점유율 (%)", 0, 100, 80, key="ly_occ")
+            st.write("**📅 2025 실적 (LY)**")
+            ly_rev = st.number_input("전년 매출 (만원)", value=cur_ly_man, step=500, key="ly_rev")
+            ly_occ = st.slider("전년 점유율 (%)", 0, 100, 80, key="ly_occ")
         with col_py:
-            py_rev = st.number_input("2024 실적 (만원)", value=cur_py_man, step=500, key="py_rev")
+            st.write("**📜 2024 실적 (PY)**")
+            py_rev = st.number_input("전전년 매출 (만원)", value=cur_py_man, step=500, key="py_rev")
 
     st.write("---")
     
@@ -56,12 +59,15 @@ def run_forecasting():
     with st.container(border=True):
         c1, c2, c3 = st.columns(3)
         with c1:
+            st.write("**📦 재고 최적화**")
             ooo_rooms = st.number_input("일평균 고장 객실(OOO)", 0, 10, 2)
             net_total_cap = (TOTAL_ROOMS - ooo_rooms) * days_in_month
         with c2:
+            st.write("**🔥 시장 모멘텀**")
             accel = st.slider("예약 가속도(Accel)", 0.5, 2.5, 1.1)
             rem_days = st.number_input("남은 기간(Days)", 1, 31, 7)
         with c3:
+            st.write("**💰 수익 극대화**")
             current_adr = int(target_sob.get('FIT_REV', 0)/max(1, fit_otb)) if fit_otb > 0 else 240000
             target_adr = st.number_input("설정 ADR (기준가)", 100000, 1000000, current_adr, step=5000)
 
@@ -75,12 +81,12 @@ def run_forecasting():
     occ_pct = (final_rms / net_total_cap) * 100
     revpar = (final_rev_man * 10000) / net_total_cap
 
-    # 5. [신규] ADR 민감도 분석 탭 추가 (지배인님 요청)
+    # 5. 시각화 대시보드 (3개 탭 구성 - 무삭제)
     st.divider()
     tab1, tab2, tab3 = st.tabs(["📊 성과 비교 (3개년)", "🔮 예약 곡선 (누적)", "💰 ADR 민감도 분석"])
     
     with tab1:
-        st.subheader("🏁 전년 실적 및 사업 계획 대비 예측")
+        st.subheader("🏁 3개년 매출 및 예측 비교")
         chart_df = pd.DataFrame({
             "구분": ["2024 실적", "2025 실적", "2026 목표", "2026 예측"],
             "매출액(만원)": [py_rev, ly_rev, budget_rev, final_rev_man]
@@ -88,47 +94,36 @@ def run_forecasting():
         st.bar_chart(chart_df.set_index("구분"))
 
     with tab2:
-        st.subheader("🔮 예약 누적 시뮬레이션 흐름")
+        st.subheader("🔮 예약 누적 시뮬레이션")
         daily_pickup_avg = future_pickup / rem_days
         curve_data = [{"Day": i, "예상 누적 예약(Rms)": min(net_total_cap, (current_otb * (1 - washout_rate)) + (daily_pickup_avg * i))} for i in range(rem_days + 1)]
         st.line_chart(pd.DataFrame(curve_data).set_index("Day"))
 
     with tab3:
-        st.subheader("💰 ADR 조정에 따른 시나리오 분석")
-        st.caption("가격 탄력성(Elasticity) 1.5 가정: 가격이 10% 오르면 수요는 15% 감소하는 모델")
-        
-        elasticity = 1.5
-        adr_range = [target_adr * (1 + x/100) for x in range(-20, 21, 5)] # ADR -20% ~ +20% 구간
+        st.subheader("💰 ADR 조정 시나리오 분석")
+        elasticity = 1.5 # 가격 탄력성
+        adr_range = [target_adr * (1 + x/100) for x in range(-20, 21, 5)]
         
         sensitivity_data = []
         for test_adr in adr_range:
-            price_change = (test_adr / target_adr) - 1
-            demand_change = 1 - (price_change * elasticity)
-            
-            # 가격 변화에 따른 미래 픽업량 재계산
-            test_pickup = future_pickup * max(0, demand_change)
-            test_rms = min(net_total_cap, (current_otb * (1 - washout_rate)) + test_pickup)
-            test_rev = (test_rms * test_adr) / 10000
-            
-            sensitivity_data.append({
-                "단가(ADR)": f"{int(test_adr/1000)}k",
-                "예상객실수": int(test_rms),
-                "예상매출(만원)": int(test_rev)
-            })
+            p_change = (test_adr / target_adr) - 1
+            d_change = 1 - (p_change * elasticity)
+            t_rms = min(net_total_cap, (current_otb * (1 - washout_rate)) + (future_pickup * max(0, d_change)))
+            t_rev = (t_rms * test_adr) / 10000
+            sensitivity_data.append({"ADR": f"{int(test_adr/1000)}k", "RMS": int(t_rms), "REV": int(t_rev)})
         
-        sens_df = pd.DataFrame(sensitivity_data).set_index("단가(ADR)")
+        sens_df = pd.DataFrame(sensitivity_data).set_index("ADR")
         
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
+        c_s1, c_s2 = st.columns(2)
+        with c_s1:
             st.write("**ADR vs 예상 객실수**")
-            st.line_chart(sens_df["예상객실수"])
-        with col_s2:
+            st.line_chart(sens_df["RMS"])
+        with c_s2:
             st.write("**ADR vs 예상 매출액**")
-            st.line_chart(sens_df["예상매출액"])
-        
-        st.info("💡 **지배인님 Tip:** 매출 곡선이 가장 높은 지점이 수익 극대화(RevPAR Max) 가격입니다.")
+            st.line_chart(sens_df["REV"])
+        st.info("💡 매출 곡선(REV)의 정점이 RevPAR를 극대화하는 최적 단가입니다.")
 
-    # 6. 종합 KPI 대시보드
+    # 6. KPI 대시보드
     st.divider()
     k1, k2, k3, k4 = st.columns(4)
     rev_gap = final_rev_man - budget_rev
@@ -142,19 +137,20 @@ def run_forecasting():
     st.write("---")
     cola, colb = st.columns([1.5, 1])
     with cola:
-        st.write("#### 📑 세부 시나리오 수치")
+        st.write("#### 📑 세부 시뮬레이션 데이터")
         st.table(pd.DataFrame({
-            "구분": ["가용 재고", "현재 OTB", "추가 픽업", "취소 이탈"],
+            "구분": ["실질 가용 재고", "현재 확정(OTB)", "예상 추가 픽업", "이탈 예상"],
             "객실수": [int(net_total_cap), int(current_otb), int(future_pickup), int(-(current_otb * washout_rate))]
         }))
     with colb:
         st.write("#### 🎯 전략 권고")
-        if (final_rev_man/budget_rev) >= 1:
-            st.success(f"🎊 달성 예상! 현재 ADR ₩{target_adr:,} 유지 권장")
+        achieve_rate = (final_rev_man / budget_rev) * 100
+        if achieve_rate >= 100:
+            st.success(f"🎊 목표 달성 가시권 ({achieve_rate:.1f}%)")
         else:
-            st.error(f"⚠️ 목표 미달! ADR 하향을 통한 점유율 확보 검토 필요")
+            st.error(f"⚠️ 목표 미달 경보 ({achieve_rate:.1f}%)")
 
-    # 8. 운영 효율성 (무삭제)
+    # 8. 수익성 및 인건비 가이드 (무삭제)
     st.write("---")
     cv1, cv2 = st.columns(2)
     with cv1:
