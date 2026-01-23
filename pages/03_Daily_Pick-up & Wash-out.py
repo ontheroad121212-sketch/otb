@@ -223,68 +223,90 @@ def find_valid_header_row(df):
             return df.iloc[i+1:].reset_index(drop=True)
     return df
 
-def process_data(uploaded_file, status, sub_segment="General"):
-    """파일 업로드 처리"""
+def process_data(file, status, force_otb=False):
+    """
+    [수정됨] force_otb=True 옵션 추가: 파일 이름 상관없이 OTB 로직 강제 적용
+    """
     try:
-        is_otb = "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
+        # 파일명에 키워드가 있거나, 강제로 OTB로 지정했으면 OTB 로직 수행
+        is_filename_otb = "Sales on the Book" in file.name or "영업 현황" in file.name
+        is_otb = force_otb or is_filename_otb
         
-        if uploaded_file.name.endswith('.csv'):
-            df_raw = pd.read_csv(uploaded_file, header=None)
-        else:
-            df_raw = pd.read_excel(uploaded_file, header=None)
+        if file.name.endswith('.csv'): df_raw = pd.read_csv(file, header=None)
+        else: df_raw = pd.read_excel(file, header=None)
+        
+        # 헤더 찾기 (OTB일 경우 '매출', 'Revenue' 등도 키워드로 인정)
+        keywords = ['guest', 'name', 'check', 'date', 'room', '고객', '입실']
+        if is_otb: keywords += ['revenue', 'rev', '매출', '합계', 'total', 'amount']
+        
+        header_found = False
+        for i, row in df_raw.iterrows():
+            # 키워드가 2개 이상 포함된 줄을 헤더로 인식
+            if sum(1 for k in keywords if k in str(row.values).lower()) >= 2:
+                df_raw.columns = df_raw.iloc[i]
+                df_raw = df_raw.iloc[i+1:].reset_index(drop=True)
+                header_found = True
+                break
+        
+        # OTB인데 헤더를 못 찾았으면 첫 줄을 헤더로 간주 (안전장치)
+        if is_otb and not header_found:
+            if file.name.endswith('.csv'): df_raw = pd.read_csv(file, header=0)
+            else: df_raw = pd.read_excel(file, header=0)
 
         if is_otb:
-            df_raw = find_valid_header_row(df_raw)
+            # [OTB 처리 로직]
+            # 합계/소계 행 제거
             if '일자' in df_raw.columns: 
-                df_raw = df_raw[~df_raw['일자'].astype(str).str.contains('소계|Subtotal|합계|Total', na=False)]
+                df_raw = df_raw[~df_raw['일자'].astype(str).str.contains('합계|Total|소계', na=False)]
             
             df = pd.DataFrame()
-            df['Guest_Name'] = f'OTB_{sub_segment}_DATA'
-            date_col = next((c for c in df_raw.columns if '일자' in str(c) or 'Date' in str(c)), df_raw.columns[0])
+            # 날짜 컬럼 찾기
+            date_col = next((c for c in df_raw.columns if '일자' in str(c) or 'Date' in str(c) or 'CheckIn' in str(c)), df_raw.columns[0])
             df['CheckIn'] = pd.to_datetime(df_raw[date_col], errors='coerce')
             
             try:
-                df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
-                df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
-                df['ADR_Room'] = pd.to_numeric(df_raw.iloc[:, -3], errors='coerce').fillna(0)
-                df['Total_Revenue'] = df['Room_Revenue'] 
-            except:
-                df['RN'] = 0; df['Room_Revenue'] = 0; df['ADR_Room'] = 0; df['Total_Revenue'] = 0
-
-            df['ADR_Total'] = df['ADR_Room']
-            df['Booking_Date'] = df['CheckIn']
-            df['Segment'] = 'OTB' # 통합 OTB
+                # OTB 파일은 보통 맨 오른쪽이나 그 근처에 매출 데이터가 있음
+                # 1. 컬럼명으로 찾기 시도
+                rev_col = next((c for c in df_raw.columns if '매출' in str(c) or 'Rev' in str(c) or 'Amount' in str(c)), None)
+                rn_col = next((c for c in df_raw.columns if '객실수' in str(c) or 'RN' in str(c) or 'Qty' in str(c) or 'Rm' in str(c)), None)
+                
+                # 2. 없으면 위치 기반 (보통 우측 끝)
+                if rev_col: df['Room_Revenue'] = pd.to_numeric(df_raw[rev_col], errors='coerce').fillna(0)
+                else: df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
+                
+                if rn_col: df['RN'] = pd.to_numeric(df_raw[rn_col], errors='coerce').fillna(0)
+                else: df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0) # 대략적 위치
+                
+                df['Total_Revenue'] = df['Room_Revenue']
+            except: 
+                df['RN'] = 0; df['Room_Revenue'] = 0; df['Total_Revenue'] = 0
+            
+            # 필수 컬럼 채우기
+            df['Guest_Name'] = 'OTB_DATA'
+            df['Segment'] = 'OTB'
             df['Account'] = 'OTB_Summary'
-            df['Room_Type'] = 'Run of House'
-            df['Nat_Orig'] = 'KOR'
+            df['Room_Type'] = 'ROH'
+            df['Nat_Orig'] = 'KR'
+            df['Booking_Date'] = df['CheckIn']
             df['Lead_Time'] = 0
+            
         else:
-            df_raw = find_valid_header_row(df_raw)
-            df_raw = df_raw[~df_raw.iloc[:, 0].astype(str).str.contains('합계|Total|소계|Subtotal', case=False, na=False)]
+            # [일반 예약 처리 로직] (기존 유지)
+            df_raw = df_raw[~df_raw.iloc[:, 0].astype(str).str.contains('합계|Total', na=False)]
             df = normalize_and_map_columns(df_raw).copy()
+            req = ['Rooms','Nights','Room_Revenue','Total_Revenue','Guest_Name','Segment','Account','Room_Type','Nat_Orig','Lead_Time']
+            for c in req: 
+                if c not in df.columns: df[c] = 0 if c in ['Rooms','Nights','Room_Revenue','Total_Revenue','Lead_Time'] else 'Unknown'
             
-            if 'CheckIn' not in df.columns: return pd.DataFrame()
-            if 'Booking_Date' not in df.columns: df['Booking_Date'] = df['CheckIn']
+            for c in ['Room_Revenue','Total_Revenue','Rooms','Nights']:
+                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
             
-            req_cols = ['Rooms', 'Nights', 'Room_Revenue', 'Total_Revenue', 'Guest_Name', 'Segment', 'Account', 'Room_Type', 'Nat_Orig', 'Lead_Time']
-            for c in req_cols:
-                if c not in df.columns: 
-                    if c in ['Rooms', 'Nights', 'Room_Revenue', 'Total_Revenue', 'Lead_Time']: df[c] = 0 
-                    else: df[c] = 'Unknown'
-
-            for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time']:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            
-            df['Total_Revenue'] = np.where(df['Total_Revenue'] == 0, df['Room_Revenue'], df['Total_Revenue'])
+            df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
             df['RN'] = df['Rooms'] * df['Nights'].replace(0, 1)
-            df['Is_Zero_Rate'] = df['Room_Revenue'] <= 0
-            
-            df['ADR_Room'] = df.apply(lambda x: x['Room_Revenue'] / x['RN'] if x['RN'] > 0 else 0, axis=1)
-            df['ADR_Total'] = df.apply(lambda x: x['Total_Revenue'] / x['RN'] if x['RN'] > 0 else 0, axis=1)
 
-        df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d') 
+        # 공통 마무리
         df['Status'] = status
-        
+        df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
         df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['Booking_dt'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
         df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
@@ -292,44 +314,17 @@ def process_data(uploaded_file, status, sub_segment="General"):
         df = df.dropna(subset=['CheckIn_dt'])
         df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
-        df['Stay_YearWeek'] = df['CheckIn_dt'].dt.strftime('%Y-%U주')
-        df['Day_of_Week'] = df['CheckIn_dt'].dt.day_name()
-        df['Weekday_Num'] = df['CheckIn_dt'].dt.weekday
-        df['Day_Type'] = df['Weekday_Num'].apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
-        df['Lead_Time'] = df['Lead_Time'].fillna(0).astype(int)
+        df['Day_Type'] = df['CheckIn_dt'].dt.weekday.apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
         
-        def classify_nat(row):
-            name = str(row.get('Guest_Name', ''))
-            orig = str(row.get('Nat_Orig', '')).upper()
-            if re.search('[가-힣]', name): return 'KOR'
-            if any(x in orig for x in ['CHN', 'HKG', 'TWN', 'MAC']): return 'CHN'
+        def cls_nat(row):
+            if re.search('[가-힣]', str(row.get('Guest_Name',''))): return 'KOR'
+            if any(x in str(row.get('Nat_Orig','')).upper() for x in ['CHN','HKG']): return 'CHN'
             return 'OTH'
-        df['Nat_Group'] = df.apply(classify_nat, axis=1)
-
-        def get_month_label(row_dt):
-            try:
-                curr = datetime.now()
-                offset = (row_dt.year - curr.year) * 12 + (row_dt.month - curr.month)
-                if offset == 0: return "0.당월(M)"
-                elif offset == 1: return "1.익월(M+1)"
-                elif offset == 2: return "2.익익월(M+2)"
-                else: return "3.그외"
-            except: return "Unknown"
-        df['Month_Label'] = df['CheckIn_dt'].apply(get_month_label)
+        df['Nat_Group'] = df.apply(cls_nat, axis=1)
         
-        df['CheckIn'] = df['CheckIn_dt'].dt.strftime('%Y-%m-%d')
+        return clean_numeric_columns(df)
         
-        cols = ['Guest_Name', 'CheckIn', 'RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total', 'Segment', 'Account', 'Room_Type', 'Snapshot_Date', 'Status', 'Stay_Month', 'Booking_Month', 'Stay_YearWeek', 'Lead_Time', 'Day_Type', 'Day_of_Week', 'Nat_Group', 'Month_Label', 'Is_Zero_Rate']
-        
-        final_df = pd.DataFrame()
-        for c in cols:
-            final_df[c] = df[c] if c in df.columns else ''
-        
-        final_df = clean_numeric_columns(final_df)
-        return final_df
-
-    except Exception as e:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
 # ==============================================================================
 # 5. 합계 및 스타일 헬퍼
@@ -510,11 +505,12 @@ try:
         with st.expander("OTB (Sales on the Book)", expanded=True):
             f3_list = st.file_uploader("당월 OTB (12개월 통합)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
             if f3_list and st.button("OTB 저장"):
+                # [수정] force_otb=True를 넣어 파일 이름 상관없이 OTB로 인식시킴
                 for f in f3_list:
-                    df = process_data(f, "Booked", "Month") 
-                    if not df.empty and save_to_firestore(df):
-                        st.cache_data.clear()
-                        st.rerun()
+                    save_to_firestore(process_data(f, "Booked", force_otb=True))
+                # [수정] 반복문이 다 끝난 뒤에 리런 (그래야 12개가 다 올라감)
+                st.cache_data.clear()
+                st.rerun()
 
     # 3. 메인 콘텐츠
     if selected_date and not df_all.empty:
