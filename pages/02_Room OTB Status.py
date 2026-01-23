@@ -330,13 +330,21 @@ with tab_dashboard:
                 pass
 
 
- # 1. 분석된 결과(sob_curr)를 공용 게시판에 저장
+# 1. 현재 파일에서 분석 중인 월(Month) 정보를 안전하게 가져오기
+# 만약 파일 내에 month라는 변수가 있다면 그것을 사용하고, 없다면 데이터에서 추출합니다.
+try:
+    # 사용자님의 find_header_and_process 함수가 반환한 month 값을 활용하거나
+    # df_curr['Date'].iloc[0].month 등을 활용할 수 있습니다.
+    save_month = month  # 기존 코드에서 정의된 month 변수 사용
+except NameError:
+    save_month = report_date.month # 사이드바의 날짜 기준
+
+# 2. 공용 게시판(session_state)에 데이터 전송
 if 'sob_curr' in locals() and sob_curr is not None:
-    st.session_state[f"sob_{current_month}"] = sob_curr
+    st.session_state[f"sob_{save_month}"] = sob_curr
+    
+    if 'df_curr' in locals() and 'df_prev' in locals():
+        # 페이스 데이터(변화량) 저장
+        st.session_state[f"pace_{save_month}"] = len(df_curr) - len(df_prev)
 
-# 2. 페이스(변화량) 데이터 저장
-if 'df_curr' in locals() and 'df_prev' in locals():
-    # 여기서 사용자님이 계산하신 페이스 값을 저장합니다.
-    st.session_state[f"pace_{current_month}"] = len(df_curr) - len(df_prev)
-
-st.success(f"✅ {current_month}월 데이터가 포캐스팅 시스템으로 전송되었습니다.")
+    st.success(f"✅ {save_month}월 데이터가 포캐스팅 시스템으로 전송되었습니다.")
