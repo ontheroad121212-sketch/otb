@@ -504,6 +504,20 @@ for i, tab in enumerate(tabs):
         df_curr = None
         df_prev = None
         sob_curr = None 
+
+        # render_sob_dashboard 호출 직후에 아래 코드를 넣으세요
+        if sob_curr is not None:
+            # 1. S.O.B 데이터를 세션에 저장
+            st.session_state[f"sob_{current_month}"] = sob_curr
+            
+            # 2. Pace 데이터를 세션에 저장 (에러 방지용 기본값 0 설정)
+            try:
+                if df_prev is not None and df_curr is not None:
+                    st.session_state[f"pace_{current_month}"] = len(df_curr) - len(df_prev)
+                else:
+                    st.session_state[f"pace_{current_month}"] = 0
+            except:
+                st.session_state[f"pace_{current_month}"] = 0
         
         # ----------------------------------------------------------------------
         # 데이터 로드 전략: 파일 우선 -> 없으면 DB 조회
