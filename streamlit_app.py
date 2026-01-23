@@ -183,7 +183,7 @@ def save_data_with_sob(date_str, month, df, sob):
     except: return False
 
 # ==============================================================================
-# [3] 메인 화면 UI 및 사이드바 (들여쓰기 및 로직 최종 완결본)
+# [3] 메인 화면 UI 및 사이드바 (지배인님 데이터 필드 맞춤형 최종본)
 # ==============================================================================
 st.sidebar.header("⚙️ Settings")
 report_date = st.sidebar.date_input("기준 일자", datetime.now())
@@ -200,21 +200,20 @@ if st.session_state.get("authenticated"):
     
     st.sidebar.markdown("---")
     
-    # 분석 데이터가 없을 때만 분석 버튼 표시
+    # 과거 패턴 데이터가 없을 때만 분석 UI 표시
     if "historical_dow" not in st.session_state:
         st.sidebar.warning("⏳ 과거 패턴 분석이 필요합니다.")
         
         if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
-            # 사이드바 상태 표시기 시작
             with st.sidebar.status("데이터 고속 도로 개통 중...", expanded=True) as status:
                 try:
                     st.write("📡 파이어베이스 서버에 접속 중...")
                     db = firestore.client()
                     
-                    # 1. 전 구역 수색 (Collection Group) - 하위 계층까지 싹 수집
-                    st.write("🔎 전 구역에서 'hotel_bookings' 데이터를 수색합니다...")
-                    # [주의] 컬렉션명이 hotel_bookings인지 hotel_bookings인지 확인 후 자동 대응
-                    docs = db.collection_group("hotel_bookings").stream()
+                    # 1. 데이터 수집 (확인된 컬렉션명: hotel_booking)
+                    # 만약 DB 이름이 hotel_bookings라면 아래 문구에서 s만 붙여주세요.
+                    st.write("🔎 'hotel_booking' 데이터를 수색합니다...")
+                    docs = db.collection_group("hotel_booking").stream()
                     
                     hist_data = []
                     count = 0
@@ -223,61 +222,54 @@ if st.session_state.get("authenticated"):
                     for doc in docs:
                         hist_data.append(doc.to_dict())
                         count += 1
-                        # 1000건 단위로 진행 상황 표시
-                        if count % 1000 == 0:
-                            status_placeholder.write(f"📥 현재 {count:,}건 로드 중... (연결 유지 중)")
+                        if count % 2000 == 0:
+                            status_placeholder.write(f"📥 현재 {count:,}건 로드 중...")
                     
-                    # 2. 결과 처리 및 지표 계산
+                    # 2. 지배인님 데이터 맞춤형 지표 계산
                     if count > 0:
                         st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
                         h_df = pd.DataFrame(hist_data)
                         
-                        # 날짜 필드 자동 탐색 (booking_date, created_at, date 등)
-                        bd_col = next((c for c in h_df.columns if c.lower() in ['booking_date', 'created_at', 'date']), None)
-                        
-                        if bd_col:
-                            h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
+                        # [핵심] 한글 필드 '예약일자'를 찾아 날짜로 변환
+                        target_date_col = '예약일자' 
+                        if target_date_col in h_df.columns:
+                            st.write(f"📈 '{target_date_col}' 필드 분석 중...")
+                            h_df['b_date'] = pd.to_datetime(h_df[target_date_col], errors='coerce')
                             h_df = h_df.dropna(subset=['b_date'])
                             h_df['dow'] = h_df['b_date'].dt.dayofweek
                             
-                            # 요일 지수 세션 저장 (4만 건의 평균을 1.0으로 둠)
+                            # 요일 지수 세션 저장 (미래 예측의 핵심 엔진)
                             st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
                             
-                            # 재방문율 통계 (고객 ID 또는 전화번호 기준)
-                            cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'phone', 'guest_name']), None)
-                            if cust_col:
-                                st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
+                            # 재방문율 계산 (확인된 필드: '휴대폰')
+                            if '휴대폰' in h_df.columns:
+                                st.session_state["repeat_rate"] = (h_df['휴대폰'].value_counts() > 1).mean() * 100
                             
-                            status.update(label="✅ 분석 완료!", state="complete")
-                            st.sidebar.success(f"📊 {count:,}건 분석 데이터 로드 완료")
-                            # 결과 반영을 위한 앱 재시작
+                            status.update(label=f"✅ {count:,}건 분석 완료!", state="complete")
+                            st.sidebar.success(f"📊 {count:,}건의 패턴이 반영되었습니다.")
+                            
+                            # 결과 반영을 위해 즉시 앱 재실행
                             st.rerun()
                         else:
-                            st.error("❌ 날짜 필드를 찾지 못해 분석을 중단했습니다.")
+                            # 필드를 못 찾았을 때를 위한 디버깅용 정보 출력
+                            st.error(f"❌ '{target_date_col}' 필드를 찾지 못했습니다.")
+                            st.write("실제 데이터 필드명:", h_df.columns.tolist())
                     else:
-                        # 데이터가 0건일 때 수색 기능
-                        st.error("⚠️ 'hotel_bookings' 데이터를 찾을 수 없습니다.")
-                        st.write("---")
-                        st.write("🔎 **DB 내부 실제 컬렉션 목록:**")
-                        all_cols = db.collections()
-                        col_names = [c.id for c in all_cols]
-                        if col_names:
-                            st.info(f"📌 발견된 이름들: {', '.join(col_names)}")
-                        else:
-                            st.error("❌ 접근 가능한 컬렉션이 없습니다.")
+                        st.error("⚠️ 데이터를 수집하지 못했습니다. 컬렉션명을 확인해주세요.")
 
                 except Exception as e:
                     st.error(f"❌ 연결 실패 원인: {str(e)}")
-                    st.info("💡 팁: 인터넷 연결이나 파이어베이스 서비스 계정 권한을 확인해 보세요.")
+                    st.info("💡 팁: 서비스 계정 권한 또는 네트워크를 확인하세요.")
     else:
-        # 이미 데이터가 로드된 경우
-        st.sidebar.success("✅ 과거 패턴 데이터 로드 완료")
+        # 분석이 완료된 상태
+        st.sidebar.success("✅ 과거 패턴 분석 완료")
+        # 요일 지수가 잘 들어갔는지 시각적 피드백 (선택사항)
+        if "historical_dow" in st.session_state:
+            st.sidebar.info("📅 요일별 가중치 적용 중")
+            
         if st.sidebar.button("🔄 데이터 다시 분석"):
-            # 세션 초기화 후 재시작
             if "historical_dow" in st.session_state:
                 del st.session_state["historical_dow"]
-            if "repeat_rate" in st.session_state:
-                del st.session_state["repeat_rate"]
             st.rerun()
 
 if selected_page == "🎯 Forecasting":
