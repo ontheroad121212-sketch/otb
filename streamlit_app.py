@@ -631,22 +631,22 @@ for i, tab in enumerate(tabs):
             total_adr=total_adr_val
         )
 
-       # ----------------------------------------------------------------------
-       # [추가] 비밀 분석실(Forecasting)로 '진짜 픽업량' 전달
-       # ----------------------------------------------------------------------
-       if sob_curr is not None:
-           st.session_state[f"sob_{current_month}"] = sob_curr
+# ----------------------------------------------------------------------
+# [추가] 비밀 분석실(Forecasting)로 '진짜 픽업량' 전달
+# ----------------------------------------------------------------------
+if sob_curr is not None:
+    st.session_state[f"sob_{current_month}"] = sob_curr
     
-           # 하단 표(merged)가 성공적으로 계산되었다면, TOTAL 행의 Pick_RMS(변화량)를 가져옵니다.
-           if 'merged' in locals() and not merged.empty:
-               try:
-                   # 마지막 행(TOTAL)의 Pick_RMS 컬럼 값을 가져옴
-                   actual_pickup = merged.iloc[-1]['Pick_RMS']
-                   st.session_state[f"pace_{current_month}"] = actual_pickup
-               except:
-                   st.session_state[f"pace_{current_month}"] = 0
-           else:
-               st.session_state[f"pace_{current_month}"] = 0
+    # 하단 표(merged)가 성공적으로 계산되었다면, TOTAL 행의 Pick_RMS(변화량)를 가져옵니다.
+    if 'merged' in locals() and not merged.empty:
+        try:
+            # 마지막 행(TOTAL)의 Pick_RMS 컬럼 값을 가져옴
+            actual_pickup = merged.iloc[-1]['Pick_RMS']
+            st.session_state[f"pace_{current_month}"] = actual_pickup
+        except:
+            st.session_state[f"pace_{current_month}"] = 0
+    else:
+        st.session_state[f"pace_{current_month}"] = 0
 
         # ----------------------------------------------------------------------
         # [B] 하단 상세 리포트 데이터 병합 및 계산
