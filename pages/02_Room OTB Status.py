@@ -328,3 +328,15 @@ with tab_dashboard:
                     st.warning(f"⚠️ {yest_str} (어제) 데이터가 없어 비교할 수 없습니다.")
             else:
                 pass
+
+
+ # 1. 분석된 결과(sob_curr)를 공용 게시판에 저장
+if 'sob_curr' in locals() and sob_curr is not None:
+    st.session_state[f"sob_{current_month}"] = sob_curr
+
+# 2. 페이스(변화량) 데이터 저장
+if 'df_curr' in locals() and 'df_prev' in locals():
+    # 여기서 사용자님이 계산하신 페이스 값을 저장합니다.
+    st.session_state[f"pace_{current_month}"] = len(df_curr) - len(df_prev)
+
+st.success(f"✅ {current_month}월 데이터가 포캐스팅 시스템으로 전송되었습니다.")
