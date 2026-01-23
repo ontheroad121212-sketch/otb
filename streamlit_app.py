@@ -167,15 +167,16 @@ if st.session_state.get("authenticated"):
     
     st.sidebar.markdown("---")
     
-    # 분석 상태를 세션으로 관리하여 버튼 클릭 후 사라지지 않게 보호
+    # 분석 상태를 체크하여 버튼 표시 제어
     if "historical_dow" not in st.session_state:
         st.sidebar.warning("⏳ 과거 패턴 분석이 필요합니다.")
         
-        # 버튼을 누르면 즉시 실행
+        # 버튼 클릭 시 분석 시작
         if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
-            # 136의 지능으로 분석 과정을 사용자님께 실시간으로 보여줍니다.
+            # 분석 과정을 사용자님께 실시간으로 보여줍니다.
             with st.sidebar.status("데이터 처리 중...", expanded=True) as status:
                 st.write("📡 파이어베이스 연결 중...")
+                # 이미지에서 확인된 컬렉션명 revenue_integrity_history 호출
                 hist_docs = db.collection("revenue_integrity_history").stream()
                 hist_data = [d.to_dict() for d in hist_docs]
                 
@@ -183,15 +184,16 @@ if st.session_state.get("authenticated"):
                     st.write(f"📂 {len(hist_data):,}건 로드 완료! 분석 중...")
                     h_df = pd.DataFrame(hist_data)
                     
-                    # 필드명 자동 탐색 로직
+                    # 예약 생성일 필드 자동 탐색
                     bd_col = next((c for c in h_df.columns if c.lower() in ['created_at', 'booking_date', 'date']), None)
                     
                     if bd_col:
+                        st.write("📈 요일별 가중치 지수 생성 중...")
                         h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
                         h_df = h_df.dropna(subset=['b_date'])
                         h_df['dow'] = h_df['b_date'].dt.dayofweek
                         
-                        # 지표 저장
+                        # 지표를 세션에 저장
                         st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
                         
                         # 재방문율 분석
@@ -208,7 +210,9 @@ if st.session_state.get("authenticated"):
     else:
         st.sidebar.success("✅ 과거 패턴 분석 데이터 로드 완료")
         if st.sidebar.button("🔄 데이터 다시 분석"):
-            del st.session_state["historical_dow"]
+            # 기존 데이터를 지우고 처음부터 다시 분석할 때 사용
+            if "historical_dow" in st.session_state:
+                del st.session_state["historical_dow"]
             st.rerun()
 
 if selected_page == "🎯 Forecasting":
