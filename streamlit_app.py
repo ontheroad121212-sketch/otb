@@ -260,19 +260,6 @@ def find_header_and_process(file):
         if header_row_idx is None:
             return None, None, None
 
-        for i, tab in enumerate(tabs):
-        current_month = i + 1
-        with tab:
-            # (사용자님의 기존 데이터 처리 로직 실행...)
-            # 데이터가 확정되는 시점에 아래 코드를 넣어 데이터를 '비밀 분석실'로 보냅니다.
-            if 'sob_curr' in locals() and sob_curr is not None:
-                st.session_state[f"sob_{current_month}"] = sob_curr
-                # 예시: 오늘 예약 - 어제 예약 = 일일 페이스
-                if 'df_curr' in locals() and 'df_prev' in locals():
-                    st.session_state[f"pace_{current_month}"] = len(df_curr) - len(df_prev)
-            
-            st.info(f"{current_month}월 분석 완료. 데이터가 캐시에 저장되었습니다.")
-
         # 실제 데이터 로드 (헤더 다음 행부터)
         df_raw = pd.read_excel(file, header=None)
         start_row = header_row_idx + 1 
