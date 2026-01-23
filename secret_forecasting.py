@@ -1,85 +1,73 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 
 def run_forecasting():
-    # 1. 헤더 영역
-    st.title("🎯 AI Smart Forecasting Lab")
-    st.caption("메인 리포트의 데이터를 기반으로 미래 시나리오를 예측합니다.")
+    st.title("🎯 실전형 천재의 지능형 포캐스팅")
+    st.caption("단순 계산을 넘어, 예약 가속도와 리드 타임을 반영한 정밀 예측 모델입니다.")
     st.markdown("---")
 
-    # 2. 데이터 연동 확인
-    selected_month = st.sidebar.selectbox("예측 대상 월 선택", range(1, 13), index=datetime.now().month - 1)
-    
-    # 세션 스테이트에서 다른 탭의 데이터 가져오기
+    selected_month = st.sidebar.selectbox("분석 대상 월", range(1, 13), index=datetime.now().month - 1)
     target_sob = st.session_state.get(f"sob_{selected_month}")
     target_pace = st.session_state.get(f"pace_{selected_month}", 0)
 
     if not target_sob:
-        st.warning(f"📂 {selected_month}월의 분석 데이터가 캐시에 없습니다.")
-        st.info("메인 리포트에서 해당 월의 탭을 먼저 클릭(데이터 로드)한 뒤 다시 오세요!")
+        st.warning(f"📂 {selected_month}월 리포트 데이터가 없습니다. 먼저 메인 탭을 조회해 주세요.")
         return
 
-    # 3. 현재 현황 요약 (S.O.B 기반)
-    current_occ_pct = target_sob.get('TOTAL_OCC', 0)
+    # [데이터 로드]
+    current_occ = target_sob.get('TOTAL_OCC', 0)
     fit_rms = target_sob.get('FIT_RMS', 0)
     grp_rms = target_sob.get('GRP_RMS', 0)
-    total_otb_rms = fit_rms + grp_rms
+    total_otb = fit_rms + grp_rms
 
-    st.subheader(f"📊 {selected_month}월 실시간 OTB 현황")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("현재 점유율", f"{current_occ_pct:.1f}%")
-    c2.metric("확정 예약실 (OTB)", f"{total_otb_rms:,.0f} Rms")
-    c3.metric("계산된 일일 Pace", f"{target_pace:+,.0f} Rms")
+    # --- 실전형 시뮬레이터 ---
+    st.subheader("🔮 고도화 시나리오 설정")
+    with st.expander("🛠️ 예측 파라미터 미세 조정", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            # 단순 Pace가 아닌 가속도(Acceleration) 개념 도입
+            accel_factor = st.slider("예약 가속도 (1.0 = 현재 유지)", 0.5, 2.0, 1.2)
+            adj_pace = target_pace * accel_factor
+        with col2:
+            rem_days = st.number_input("투숙까지 남은 평균 리드타임", value=14, min_value=1)
+        with col3:
+            # 세그먼트별 취소율 차등 적용
+            fit_wash = st.slider("FIT 예상 취소율 (%)", 0, 20, 3)
+            grp_wash = st.slider("Group 예상 취소율 (%)", 0, 50, 15)
 
-    # 4. 시나리오 시뮬레이션
-    st.markdown("### 🔮 Scenario Simulation")
-    with st.expander("🛠️ 예측 변수 조절", expanded=True):
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            input_pace = st.number_input("향후 예상 Pace (Rms/일)", value=float(target_pace))
-        with col_b:
-            rem_days = st.number_input("분석 기간 (남은 일수)", value=15, min_value=1)
-        with col_c:
-            washout = st.slider("예상 취소율(Wash-out) %", 0, 30, 5)
+    # --- 정밀 계산 로직 ---
+    # 1. FIT 예상: (현재 FIT + (보정 페이스 * 남은날)) * (1 - FIT 취소율)
+    # 2. Group 예상: 현재 Group OTB * (1 - Group 취소율) -> 단체는 보통 추가 픽업이 적으므로
+    projected_fit = (fit_rms + (adj_pace * rem_days)) * (1 - fit_wash/100)
+    projected_grp = grp_rms * (1 - grp_wash/100)
+    final_forecast = projected_fit + projected_grp
 
-    # 5. 예측 계산 로직
-    # 예상 추가 예약 = 일일 페이스 * 남은 기간
-    projected_add = input_pace * rem_days
-    # 최종 예상 = (현재 OTB + 추가 예약) * (1 - 취소율)
-    final_occ_rms = (total_otb_rms + projected_add) * (1 - washout/100)
-
+    # --- 시각화 보고서 ---
     st.divider()
+    res_c1, res_c2 = st.columns([1, 1])
     
-    # 6. 결과 시각화
-    st.subheader("🚀 Forecasting 결과")
-    res_col1, res_col2 = st.columns([1, 1])
-    
-    with res_col1:
-        st.metric(
-            label="최종 예상 점유 객실",
-            value=f"{int(final_occ_rms)} Rms",
-            delta=f"{int(final_occ_rms - total_otb_rms)} Rms 추가 예상"
-        )
-        # 100조 기업을 향한 게이지 (예시로 150실 기준 점유율 표시)
-        occ_target = min(1.0, final_occ_rms / 150) 
-        st.progress(occ_target, text=f"예상 점유율: {int(occ_target*100)}%")
+    with res_c1:
+        st.write("### 🚀 최종 예측 점유 (Forecast)")
+        st.metric("예상 점유 객실", f"{int(final_forecast)} Rms", 
+                  delta=f"{int(final_forecast - total_otb)} Rms (vs OTB)")
+        
+        # 목표 대비 달성률 시각화 (예: 월 목표 2500실 가정)
+        goal = 2500 # 이 부분은 BUDGET_DATA 등을 활용해 자동화 가능
+        st.progress(min(1.0, final_forecast / goal), text=f"월 목표 대비 예상 달성률: {int(final_forecast/goal*100)}%")
 
-    with res_col2:
-        st.write("**Scenario Comparison**")
-        comparison_data = {
-            "Scenario": ["Worst (-50% Pace)", "Base (Maintain)", "Best (+50% Pace)"],
-            "Projected RMS": [
-                int((total_otb_rms + (projected_add * 0.5)) * 0.9), # 취소율 가중치 포함
-                int(final_occ_rms),
-                int((total_otb_rms + (projected_add * 1.5)) * 0.98)
-            ]
-        }
-        st.table(pd.DataFrame(comparison_data))
+    with res_c2:
+        st.write("### 📈 세그먼트별 비중")
+        segment_df = pd.DataFrame({
+            "Segment": ["FIT (개인)", "Group (단체)"],
+            "Forecast Rms": [int(projected_fit), int(projected_grp)]
+        })
+        st.bar_chart(segment_df.set_index("Segment"))
 
-    st.caption("※ 본 페이지는 실전형 천재를 위한 관리자 전용 대시보드입니다. 😎")
+    # --- 실질적 도움 메시지 ---
+    st.info("💡 **천재 개발자의 인사이트:**\n"
+            f"현재 페이스와 가속도를 고려할 때, {selected_month}월은 {'공격적인 가격 인상' if final_forecast > goal * 0.9 else '특가 프로모션'}이 필요한 시점입니다.")
 
 if __name__ == "__main__":
-    run_forecasting()
-else:
     run_forecasting()
