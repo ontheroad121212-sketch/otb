@@ -150,6 +150,42 @@ def load_data_with_snapshot_cache():
     except:
         return pd.DataFrame(), "조회 에러"
 
+def load_historical_patterns():
+    db = firestore.client()
+    # 4만 건의 예약 데이터를 가져옴 (필요한 컬럼만 선택해서 가져오는 것이 성능에 좋음)
+    docs = db.collection("reservations").stream() 
+    
+    data = []
+    for doc in docs:
+        data.append(doc.to_dict())
+    
+    df = pd.DataFrame(data)
+    
+    # [데이터 가공: 날짜 형식 변환]
+    df['check_in'] = pd.to_datetime(df['check_in'])
+    df['booking_date'] = pd.to_datetime(df['booking_date'])
+    
+    # [1. 리드타임 계산]
+    df['lead_time'] = (df['check_in'] - df['booking_date']).dt.days
+    
+    # [2. 요일별 예약 발생 패턴 (요일 지수)]
+    # 어느 요일에 예약이 가장 많이 들어오는지 계산
+    df['dow'] = df['booking_date'].dt.dayofweek
+    dow_counts = df['dow'].value_counts(normalize=True) * 7 # 평균을 1.0으로 맞춘 지수
+    
+    # [3. 재방문율 통계]
+    # 고객 ID(예: 전화번호나 이메일) 기반으로 재방문 횟수 계산
+    repeat_rate = (df['customer_id'].value_counts() > 1).mean() * 100
+    
+    return dow_counts.to_dict(), repeat_rate, df
+
+# 세션에 과거 패턴 저장
+if "historical_dow" not in st.session_state:
+    with st.spinner("4만 건의 데이터를 분석하여 패턴을 추출 중입니다..."):
+        dow_indices, repeat_rate, full_df = load_historical_patterns()
+        st.session_state["historical_dow"] = dow_indices
+        st.session_state["repeat_rate"] = repeat_rate
+
 # -----------------------------------------------------------------------------
 # 3. 사이드바 (시스템 관리 및 필터)
 # -----------------------------------------------------------------------------
