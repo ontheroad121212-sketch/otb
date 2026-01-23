@@ -210,10 +210,10 @@ if st.session_state.get("authenticated"):
                     st.write("📡 파이어베이스 서버에 접속 중...")
                     db = firestore.client()
                     
-                    # 1. 데이터 수집 (확인된 컬렉션명: hotel_booking)
+                    # 1. 데이터 수집 (확인된 컬렉션명: hotel_bookings)
                     # 만약 DB 이름이 hotel_bookings라면 아래 문구에서 s만 붙여주세요.
-                    st.write("🔎 'hotel_booking' 데이터를 수색합니다...")
-                    docs = db.collection_group("hotel_booking").stream()
+                    st.write("🔎 'hotel_bookings' 데이터를 수색합니다...")
+                    docs = db.collection_group("hotel_bookings").stream()
                     
                     hist_data = []
                     count = 0
