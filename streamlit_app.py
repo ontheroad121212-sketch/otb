@@ -10,6 +10,55 @@ import importlib.util
 import secret_forecasting  # 파일을 직접 임포트
 
 # ==============================================================================
+# [추가] 파이어베이스 데이터 분석 함수 (4만 건 데이터 처리)
+# ==============================================================================
+def load_historical_patterns():
+    # 4만 건의 예약 데이터를 가져옴
+    docs = db.collection("reservations").stream() 
+    data = [doc.to_dict() for doc in docs]
+    
+    if not data: return {}, 0, pd.DataFrame()
+    df = pd.DataFrame(data)
+    
+    # 필드명 자동 매칭 (사용자님 DB 필드명에 맞춰 유연하게 검색)
+    ci_col = next((c for c in df.columns if c.lower() in ['check_in', 'checkin', 'arrivaldate']), 'check_in')
+    bd_col = next((c for c in df.columns if c.lower() in ['booking_date', 'bookingdate', 'created_at']), 'booking_date')
+    cust_col = next((c for c in df.columns if c.lower() in ['customer_id', 'phone', 'guestname']), None)
+
+    df['check_in'] = pd.to_datetime(df[ci_col], errors='coerce')
+    df['booking_date'] = pd.to_datetime(df[bd_col], errors='coerce')
+    df = df.dropna(subset=['check_in', 'booking_date'])
+
+    # 요일 지수 계산 (0=월, 6=일)
+    df['dow'] = df['booking_date'].dt.dayofweek
+    dow_counts = df['dow'].value_counts(normalize=True) * 7
+    
+    # 재방문율 계산
+    repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
+    
+    return dow_counts.to_dict(), repeat_rate, df
+
+# [추가] 데이터 로드 상태 체크 함수
+def check_data_status():
+    if "historical_dow" not in st.session_state:
+        st.sidebar.warning("⏳ 과거 패턴 데이터 로딩 필요")
+        if st.sidebar.button("📊 4만건 데이터 패턴 분석 시작"):
+            with st.status("파이어베이스 데이터 분석 중...", expanded=True) as status:
+                st.write("1. 파이어베이스 연결 시도...")
+                dow_indices, repeat_rate, _ = load_historical_patterns()
+                
+                st.write("2. 요일별 예약 패턴 계산 완료...")
+                st.session_state["historical_dow"] = dow_indices
+                
+                st.write("3. 재방문 고객 통계 산출 완료...")
+                st.session_state["repeat_rate"] = repeat_rate
+                
+                status.update(label="✅ 분석 완료! 포캐스팅 사용 가능", state="complete", expanded=False)
+                st.rerun() # 화면 갱신
+    else:
+        st.sidebar.success("✅ 과거 패턴 로드 완료")
+
+# ==============================================================================
 # [1] 페이지 기본 설정
 # ==============================================================================
 st.set_page_config(
@@ -437,45 +486,6 @@ def render_sob_dashboard(current_month, budget, total_rev, vs_budget, achv_rate,
     """)
     st.markdown(html, unsafe_allow_html=True)    
 
-# 1. 파이어베이스 데이터 분석 함수 (부킹페이스에서 가져옴)
-def load_historical_patterns():
-    db = firestore.client()
-    docs = db.collection("reservations").stream() 
-    data = [doc.to_dict() for doc in docs]
-    
-    if not data: return {}, 0, pd.DataFrame()
-    df = pd.DataFrame(data)
-    
-    # [필드명 매칭 - 사용자 데이터에 맞게 자동 검색]
-    ci_col = next((c for c in df.columns if c.lower() in ['check_in', 'checkin']), 'check_in')
-    bd_col = next((c for c in df.columns if c.lower() in ['booking_date', 'bookingdate']), 'booking_date')
-
-    df['check_in'] = pd.to_datetime(df[ci_col], errors='coerce')
-    df['booking_date'] = pd.to_datetime(df[bd_col], errors='coerce')
-    df = df.dropna(subset=['check_in', 'booking_date'])
-
-    # 요일 지수 계산 (0=월, 6=일)
-    df['dow'] = df['booking_date'].dt.dayofweek
-    dow_counts = df['dow'].value_counts(normalize=True) * 7
-    
-    # 재방문율 계산
-    repeat_rate = (df['customer_id'].value_counts() > 1).mean() * 100 if 'customer_id' in df.columns else 0
-    
-    return dow_counts.to_dict(), repeat_rate, df
-
-# 2. 상태 체크 함수
-def check_data_status():
-    if "historical_dow" not in st.session_state:
-        st.sidebar.warning("⏳ 과거 패턴 데이터 로딩 필요")
-        if st.sidebar.button("📊 4만건 데이터 패턴 분석 시작"):
-            with st.status("파이어베이스 분석 중...", expanded=True) as status:
-                dow_indices, repeat_rate, _ = load_historical_patterns()
-                st.session_state["historical_dow"] = dow_indices
-                st.session_state["repeat_rate"] = repeat_rate
-                status.update(label="✅ 분석 완료!", state="complete")
-                st.rerun() # 데이터 반영을 위해 재실행
-    else:
-        st.sidebar.success("✅ 과거 패턴 로드 완료")
 
 # ==============================================================================
 # [5] 메인 실행 로직 (사이드바, 탭, 데이터 처리)
@@ -505,6 +515,10 @@ with st.sidebar:
     if st.session_state["authenticated"]:
         st.success("Admin Mode On")
         selected_page = st.radio("Navigation", ["Main Report", "🎯 Forecasting"])
+
+        # --- 여기에 추가하세요 ---
+        check_data_status() 
+        # -----------------------
 
 # --- 2. 페이지 렌더링 로직 ---
 if selected_page == "🎯 Forecasting":
