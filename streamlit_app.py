@@ -162,13 +162,53 @@ if admin_key == "master136":
 
 selected_page = "Main Report"
 if st.session_state.get("authenticated"):
-    st.sidebar.success("Admin Mode On")
+    st.sidebar.success("✅ Admin Mode On")
     selected_page = st.sidebar.radio("Navigation", ["Main Report", "🎯 Forecasting"])
-    if st.sidebar.button("📊 4만건 히스토리 전체 분석"):
-        with st.status("분석 중..."):
-            dow, repeat = load_all_historical_data()
-            st.session_state["historical_dow"], st.session_state["repeat_rate"] = dow, repeat
-            st.success("완료!")
+    
+    st.sidebar.markdown("---")
+    
+    # 분석 상태를 세션으로 관리하여 버튼 클릭 후 사라지지 않게 보호
+    if "historical_dow" not in st.session_state:
+        st.sidebar.warning("⏳ 과거 패턴 분석이 필요합니다.")
+        
+        # 버튼을 누르면 즉시 실행
+        if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
+            # 136의 지능으로 분석 과정을 사용자님께 실시간으로 보여줍니다.
+            with st.sidebar.status("데이터 처리 중...", expanded=True) as status:
+                st.write("📡 파이어베이스 연결 중...")
+                hist_docs = db.collection("revenue_integrity_history").stream()
+                hist_data = [d.to_dict() for d in hist_docs]
+                
+                if hist_data:
+                    st.write(f"📂 {len(hist_data):,}건 로드 완료! 분석 중...")
+                    h_df = pd.DataFrame(hist_data)
+                    
+                    # 필드명 자동 탐색 로직
+                    bd_col = next((c for c in h_df.columns if c.lower() in ['created_at', 'booking_date', 'date']), None)
+                    
+                    if bd_col:
+                        h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
+                        h_df = h_df.dropna(subset=['b_date'])
+                        h_df['dow'] = h_df['b_date'].dt.dayofweek
+                        
+                        # 지표 저장
+                        st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
+                        
+                        # 재방문율 분석
+                        cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'phone']), None)
+                        if cust_col:
+                            st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
+                    
+                    status.update(label="✅ 분석 완료! 포캐스팅 준비됨", state="complete", expanded=False)
+                    st.success("데이터 로드가 완료되었습니다!")
+                    # 반영을 위해 앱을 강제로 재시작합니다.
+                    st.rerun() 
+                else:
+                    st.error("데이터를 찾을 수 없습니다.")
+    else:
+        st.sidebar.success("✅ 과거 패턴 분석 데이터 로드 완료")
+        if st.sidebar.button("🔄 데이터 다시 분석"):
+            del st.session_state["historical_dow"]
             st.rerun()
 
 if selected_page == "🎯 Forecasting":
