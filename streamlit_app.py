@@ -508,6 +508,10 @@ with st.sidebar:
     if st.session_state.get("authenticated"):
         st.success("Admin Mode On")
         selected_page = st.radio("Navigation", ["Main Report", "🎯 Forecasting"])
+
+        # --- 여기에 추가하세요 ---
+        check_data_status() 
+        # -----------------------
     
     # ---------------------------------------------------------
     # [수정] 4만 건 컬렉션(revenue_integrity_history) 통합 분석
@@ -543,21 +547,7 @@ with st.sidebar:
             # ❌ 여기에 있던 콜론(:)을 제거했습니다.
             st.sidebar.success("✅ 과거 패턴 로드 완료")
         
-    st.sidebar.header("⚙️ Settings")
-    # 구석에 작게 배치 (총지배인님이 눈치 못 채게)
-    admin_key = st.text_input("Admin", type="password", help="인증 시 비밀 메뉴가 활성화됩니다.")
-    if admin_key == "master136":
-        st.session_state["authenticated"] = True
-    
-    # 인증되었을 때만 나타나는 비밀 메뉴
-    selected_page = "Main Report"
-    if st.session_state["authenticated"]:
-        st.success("Admin Mode On")
-        selected_page = st.radio("Navigation", ["Main Report", "🎯 Forecasting"])
 
-        # --- 여기에 추가하세요 ---
-        check_data_status() 
-        # -----------------------
 
 # --- 2. 페이지 렌더링 로직 ---
 if selected_page == "🎯 Forecasting":
