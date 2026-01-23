@@ -7,6 +7,7 @@ import io
 import numpy as np
 import textwrap
 import importlib.util
+import secret_forecasting  # 파일을 직접 임포트
 
 # ==============================================================================
 # [1] 페이지 기본 설정
@@ -467,15 +468,9 @@ with st.sidebar:
 
 # --- 2. 페이지 렌더링 로직 ---
 if selected_page == "🎯 Forecasting":
-    # 1. 포캐스팅 페이지 실행 (파일은 루트 폴더에 secret_forecasting.py로 있어야 함)
-    try:
-        spec = importlib.util.spec_from_file_location("secret_forecasting", "./secret_forecasting.py")
-        foo = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(foo)
-        st.stop() # 포캐스팅 실행 후 메인 리포트가 아래에 뜨지 않도록 중단
-    except Exception as e:
-        st.error(f"비밀 파일을 찾을 수 없습니다: {e}")
-        st.stop()
+    # 직접 함수 호출 (가장 안전한 방법)
+    secret_forecasting.run_forecasting()
+    st.stop()
 
 # 메인 타이틀
 st.title(f"🏨 Daily Pace Report")
