@@ -212,7 +212,7 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 및 매핑 로직 (OTB 로직 강화)
+# 4. 엑셀/CSV 파일 처리 및 매핑 로직
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -248,10 +248,9 @@ def normalize_and_map_columns(df):
 
 def process_data(file, status, force_otb=False):
     """
-    [파일 분석 결과 반영] 
-    1. OTB 파일 헤더는 index 3에 위치. 
-    2. OTB 매출 합계는 테이블 가장 오른쪽 열(index 18)에 위치.
-    3. 조식은 서비스코드에 'BF'가 포함된 경우.
+    [파일 분석 및 데이터 전처리]
+    - OTB: 물리적 마지막 열을 매출로 인식
+    - 조식: 서비스코드, 상품명 등 전체 검색
     """
     try:
         is_filename_otb = "Sales on the Book" in file.name or "영업 현황" in file.name
@@ -264,7 +263,7 @@ def process_data(file, status, force_otb=False):
         else: 
             df_raw = pd.read_excel(file, header=None)
 
-        # 헤더 자동 찾기 로직 (일자, 객실수, 매출 키워드가 가장 많이 매칭되는 행)
+        # 헤더 자동 찾기 로직
         keywords = ['guest', 'name', 'check', 'date', 'room', '고객', '입실', '객실', '서비스', '매출', '일자']
         best_row = 0; max_hit = 0
         for i, row in df_raw.head(15).iterrows():
@@ -275,126 +274,40 @@ def process_data(file, status, force_otb=False):
         df_raw.columns = df_raw.iloc[best_row]
         df_raw = df_raw.iloc[best_row+1:].reset_index(drop=True)
 
+        # ---------------------------------------------------------
+        # Case A: OTB (On The Books) 데이터 처리 (수정됨)
+        # ---------------------------------------------------------
         if is_otb:
             # 합계/소계 행 제거 (순수 일별 데이터만 추출)
             if '일자' in df_raw.columns:
                 df_raw = df_raw[~df_raw['일자'].astype(str).str.contains('합계|Total|소계', na=False)]
             
             df = pd.DataFrame()
-            # 날짜 컬럼 (첫 번째 컬럼 '일자')
+            
+            # 날짜 컬럼 찾기 (첫 번째 컬럼 '일자' 후보군)
             d_col = next((c for c in df_raw.columns if any(k in str(c) for k in ['일자', 'Date', 'CheckIn'])), df_raw.columns[0])
             df['CheckIn'] = pd.to_datetime(df_raw[d_col], errors='coerce')
             
-            # [중요] OTB 테이블의 가장 마지막 열(index 18)이 전체 합계 매출임
+            # [수정] OTB 매출은 테이블의 물리적 '가장 마지막 열(iloc -1)'을 가져옵니다.
+            # 이름과 상관없이 엑셀의 가장 오른쪽 열을 매출 합계로 간주합니다.
             try:
-                # 모든 '매출' 컬럼 중 가장 마지막 열 선택
-                rev_cols = [c for c in df_raw.columns if '매출' in str(c) or 'Rev' in str(c)]
-                df['Room_Revenue'] = pd.to_numeric(df_raw[rev_cols[-1]], errors='coerce').fillna(0)
-                # '객실수' 컬럼 중 가장 마지막 합계 열 선택
-                rn_cols = [c for c in df_raw.columns if '객실수' in str(c) or 'RN' in str(c)]
-                df['RN'] = pd.to_numeric(df_raw[rn_cols[-1]], errors='coerce').fillna(0)
-                df['Total_Revenue'] = df['Room_Revenue']
-            except:
-                # 위 방식 실패 시 물리적 마지막 열 선택
                 df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
-                df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
                 df['Total_Revenue'] = df['Room_Revenue']
-
-            df['Guest_Name'] = 'OTB_DATA'; df['Segment'] = 'OTB'; df['Account'] = 'OTB'
-            df['Room_Type'] = 'ROH'; df['Nat_Orig'] = 'KR'; df['Booking_Date'] = df['CheckIn']
-            df['Lead_Time'] = 0; df['Breakfast'] = 'Unknown'
-            
-        else:
-            # 일반 리스트 처리
-            df_raw = df_raw[~df_raw.iloc[:, 0].astype(str).str.contains('합계|Total', na=False)]
-            df = normalize_and_map_columns(df_raw).copy()
-            
-            req = ['Rooms','Nights','Room_Revenue','Total_Revenue','Guest_Name','Segment','Account','Room_Type','Nat_Orig','Lead_Time','Service_Code']
-            for c in req: 
-                if c not in df.columns: df[c] = 0 if c in ['Rooms','Nights','Room_Revenue','Total_Revenue','Lead_Time'] else 'Unknown'
-            
-            for c in ['Room_Revenue','Total_Revenue','Rooms','Nights']:
-                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
-            
-            df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
-            df['RN'] = df['Rooms'] * df['Nights'].replace(0, 1)
-            
-            # [수정] 조식 식별: 서비스코드(Service_Code)에 'BF'가 포함되어 있으면 조식 포함
-            def check_bf(row):
-                svc_code = str(row.get('Service_Code', '')).upper()
-                rate_plan = str(row.get('Rate_Plan', '')).upper()
-                if 'BF' in svc_code or '조식' in svc_code or 'BREAKFAST' in svc_code or '조식' in rate_plan:
-                    return 'Included (조식포함)'
-                return 'Not Included (불포함)'
-            df['Breakfast'] = df.apply(check_bf, axis=1)
-
-        # 공통 마무리 로직
-        df['Status'] = status
-        df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
-        df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
-        df['Booking_dt'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
-        df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
-        df = df.dropna(subset=['CheckIn_dt'])
-        
-        df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
-        df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
-        df['Day_Type'] = df['CheckIn_dt'].dt.weekday.apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
-        
-        def cls_nat(row):
-            if re.search('[가-힣]', str(row.get('Guest_Name',''))): return 'KOR'
-            if any(x in str(row.get('Nat_Orig','')).upper() for x in ['CHN','HKG']): return 'CHN'
-            return 'OTH'
-        df['Nat_Group'] = df.apply(cls_nat, axis=1)
-        
-        return clean_numeric_columns(df)
-    except Exception as e:
-        st.error(f"파일 처리 중 오류: {e}")
-        return pd.DataFrame()
-        
-        # ---------------------------------------------------------
-        # Case A: OTB (On The Books) 데이터 처리
-        # ---------------------------------------------------------
-        if is_otb:
-            # 합계/소계 행 제거
-            if '일자' in df_raw.columns: 
-                df_raw = df_raw[~df_raw['일자'].astype(str).str.contains('합계|Total|소계', na=False)]
-            
-            df = pd.DataFrame()
-            
-            # 날짜 컬럼 찾기
-            date_col_candidates = [c for c in df_raw.columns if any(k in str(c) for k in ['일자', 'Date', 'CheckIn'])]
-            date_col = date_col_candidates[0] if date_col_candidates else df_raw.columns[0]
-            
-            df['CheckIn'] = pd.to_datetime(df_raw[date_col], errors='coerce')
-            
-            # [중요] OTB 매출 컬럼 찾기 (맨 마지막 '매출'이 진짜 합계임)
-            try:
-                # 1. '매출', 'Rev'가 들어간 모든 컬럼 찾기
-                rev_cols = [c for c in df_raw.columns if any(k in str(c) for k in ['매출', 'Rev', 'Amount'])]
                 
-                if rev_cols:
-                    # 가장 마지막 컬럼을 선택 (개인->단체->'합계' 순서이므로)
-                    target_rev_col = rev_cols[-1]
-                    df['Room_Revenue'] = pd.to_numeric(df_raw[target_rev_col], errors='coerce').fillna(0)
+                # 객실수(RN) 찾기: '객실수', 'RN', 'Qty'가 포함된 마지막 컬럼
+                # 만약 없으면 뒤에서 5번째 혹은 2번째 열을 fallback으로 사용
+                rn_candidates = [c for c in df_raw.columns if any(k in str(c).upper() for k in ['RN', '객실수', 'QTY', 'ROOMS'])]
+                if rn_candidates:
+                    df['RN'] = pd.to_numeric(df_raw[rn_candidates[-1]], errors='coerce').fillna(0)
                 else:
-                    # 없으면 데이터프레임의 맨 마지막 열 사용 (안전장치)
-                    df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
-                
-                # 객실수(RN)도 마찬가지로 가장 뒤에 있는 것 선택
-                rn_cols = [c for c in df_raw.columns if any(k in str(c) for k in ['객실수', 'RN', 'Qty', 'Rm'])]
-                if rn_cols:
-                    target_rn_col = rn_cols[-1]
-                    df['RN'] = pd.to_numeric(df_raw[target_rn_col], errors='coerce').fillna(0)
-                else:
-                    # 대략 뒤에서 5번째가 객실수인 경우가 많음
+                    # 후보가 없으면 뒤에서 5번째 열 사용 (기존 로직 유지/fallback)
                     df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
-                
-                df['Total_Revenue'] = df['Room_Revenue']
-            except: 
-                df['RN'] = 0
+            except Exception as e:
+                # 실패 시 0 처리
                 df['Room_Revenue'] = 0
                 df['Total_Revenue'] = 0
-            
+                df['RN'] = 0
+
             # OTB 필수 컬럼 강제 주입
             df['Guest_Name'] = 'OTB_DATA'
             df['Segment'] = 'OTB'
@@ -403,10 +316,10 @@ def process_data(file, status, force_otb=False):
             df['Nat_Orig'] = 'KR'
             df['Booking_Date'] = df['CheckIn']
             df['Lead_Time'] = 0
-            df['Breakfast'] = 'Unknown' # OTB는 조식 정보 보통 없음
+            df['Breakfast'] = 'Unknown'
             
         # ---------------------------------------------------------
-        # Case B: 일반 예약/취소 리스트 처리
+        # Case B: 일반 예약/취소 리스트 처리 (조식 로직 강화됨)
         # ---------------------------------------------------------
         else:
             # 합계 행 제거
@@ -417,7 +330,7 @@ def process_data(file, status, force_otb=False):
             
             # 필수 컬럼 확인 및 기본값 채우기
             req_cols = ['Rooms', 'Nights', 'Room_Revenue', 'Total_Revenue', 'Guest_Name', 'Segment', 'Account', 'Room_Type', 'Nat_Orig', 'Lead_Time', 'Rate_Plan', 'Service_Code']
-            for c in req_cols:
+            for c in req_cols: 
                 if c not in df.columns: 
                     if c in ['Rooms', 'Nights', 'Room_Revenue', 'Total_Revenue', 'Lead_Time']: 
                         df[c] = 0 
@@ -431,16 +344,25 @@ def process_data(file, status, force_otb=False):
             df['Total_Revenue'] = np.where(df['Total_Revenue'] == 0, df['Room_Revenue'], df['Total_Revenue'])
             df['RN'] = df['Rooms'] * df['Nights'].replace(0, 1)
             
-            # [조식 식별 로직] - BF 포함 확인
-            def check_breakfast(row):
-                text = str(row.get('Service_Code', '')) + " " + str(row.get('Rate_Plan', '')) + " " + str(row.get('Room_Type', '')) + " " + str(row.get('Segment', ''))
-                text_up = text.upper()
-                # 서비스코드에 'BF'가 있거나, 패키지명에 '조식' 등이 있으면 포함
-                if any(k in text_up for k in ['BF', '조식', 'BREAKFAST', 'BKFST', 'PKG', '패키지', 'INCL']):
+            # [수정/강화] 조식 식별 로직
+            # Service_Code, Rate_Plan, Room_Type, Segment 모두를 합쳐서 검색
+            def check_breakfast_robust(row):
+                # 모든 관련 텍스트 정보를 하나로 합침 (대문자 변환)
+                full_text = (
+                    str(row.get('Service_Code', '')) + " " + 
+                    str(row.get('Rate_Plan', '')) + " " + 
+                    str(row.get('Room_Type', '')) + " " + 
+                    str(row.get('Segment', ''))
+                ).upper()
+                
+                # 조식을 의미하는 키워드 리스트 (PKG 포함)
+                bf_keywords = ['BF', '조식', 'BREAKFAST', 'BKFST', 'MORNING', 'ABF', 'PKG', 'INCL']
+                
+                if any(k in full_text for k in bf_keywords):
                     return 'Included (조식포함)'
                 return 'Not Included (불포함)'
             
-            df['Breakfast'] = df.apply(check_breakfast, axis=1)
+            df['Breakfast'] = df.apply(check_breakfast_robust, axis=1)
 
         # 공통 후처리
         df['Status'] = status
@@ -477,10 +399,11 @@ def process_data(file, status, force_otb=False):
 
     except Exception as e:
         # 에러 발생 시 빈 프레임 반환 (시스템 멈춤 방지)
+        st.error(f"처리 중 오류: {e}")
         return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 렌더링 헬퍼 함수들 (Key 오류 방지 추가됨)
+# 5. UI 렌더링 헬퍼 함수들 (Key 오류 방지 포함)
 # ==============================================================================
 
 def add_total(df, grp):
@@ -499,7 +422,7 @@ def style_df(df):
     st.dataframe(df.style.format(fmt).apply(lambda x: ['background-color: #fff9c4; font-weight: bold; color: black']*len(x) if str(x.iloc[0])=='TOTAL' else ['']*len(x), axis=1), hide_index=True, use_container_width=True)
 
 def render_tab(df, key_prefix):
-    """탭 분석 화면 (unique key 추가로 ID 중복 에러 해결)"""
+    """탭 분석 화면"""
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs(["📊 세그먼트", "📅 Pacing", "🏢 거래처", "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일", "🌐 국적", "🍳 조식"])
     
     with t1:
@@ -608,20 +531,17 @@ try:
                     st.cache_data.clear()
                     st.rerun()
 
-        # 3. OTB (12개월) 업로드 - 중요!
+        # 3. OTB (12개월) 업로드
         with st.expander("OTB (Sales on the Book)", expanded=True):
             f3_list = st.file_uploader("당월 OTB (12개월 통합)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
             if f3_list and st.button("OTB 저장"):
-                # [핵심] 여러 파일을 하나로 합쳐서 저장하는 로직
                 all_otb_data = []
                 for f in f3_list:
-                    # force_otb=True로 강제 인식
                     processed = process_data(f, "Booked", force_otb=True)
                     if not processed.empty:
                         all_otb_data.append(processed)
                 
                 if all_otb_data:
-                    # 데이터프레임 하나로 병합
                     combined_otb = pd.concat(all_otb_data, ignore_index=True)
                     if save_to_firestore(combined_otb):
                         st.success(f"12개월 OTB 데이터 통합 저장 완료! (총 {len(combined_otb)}건)")
@@ -714,7 +634,7 @@ try:
                     seg_gm = df_paid_bk.groupby('Segment').agg({'RN': 'sum','Room_Revenue': 'sum','Total_Revenue': 'sum'}).reset_index()
                     seg_gm['ADR_Room'] = np.where(seg_gm['RN']>0, seg_gm['Room_Revenue']/seg_gm['RN'], 0)
                     seg_gm['ADR_Total'] = np.where(seg_gm['RN']>0, seg_gm['Total_Revenue']/seg_gm['RN'], 0)
-                    show_dataframe_with_style(add_total_row(seg_gm, 'Segment')) 
+                    style_df(add_total(seg_gm, 'Segment')) 
                 else: st.info("예약 데이터 없음")
                 
                 st.divider()
@@ -734,18 +654,18 @@ try:
                     else: st.info("데이터 없음")
 
             # -----------------------------------------------------------
-            # 상세 분석 탭 (조식 포함) - Key를 추가하여 에러 방지
+            # 상세 분석 탭
             # -----------------------------------------------------------
-            with main_tab1: render_analysis_tab(df_paid_bk, "유료 예약", "bk", "Blues")
-            with main_tab2: render_analysis_tab(df_list_cn, "취소 데이터", "cn", "Reds")
-            with main_tab3: render_analysis_tab(df_total_paid, "종합(예약+취소)", "tot", "Greens")
+            with main_tab1: render_tab(df_paid_bk, "bk")
+            with main_tab2: render_tab(df_list_cn, "cn")
+            with main_tab3: render_tab(df_total_paid, "tot")
             
             with main_tab4:
                 st.subheader(f"🆓 0원 예약 (총 {len(df_zero_bk)}건)")
                 st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
 
             # -----------------------------------------------------------
-            # 6. OTB 현황 (Budget vs OTB) - 완벽 수정됨
+            # 6. OTB 현황 (Budget vs OTB)
             # -----------------------------------------------------------
             with main_tab5:
                 st.header("🎯 OTB 현황 (Budget vs OTB)")
@@ -753,7 +673,7 @@ try:
                 if df_otb.empty:
                     st.warning("⚠️ OTB 데이터가 없습니다. 사이드바에서 파일을 업로드해 주세요.")
                 else:
-                    # 1. 1월~12월 기본 틀 생성 (데이터가 없는 달도 표시)
+                    # 1. 1월~12월 기본 틀 생성
                     all_months = pd.DataFrame({'M': range(1, 13)})
                     
                     # 2. OTB 데이터 월별 집계
@@ -778,7 +698,7 @@ try:
                     to = fin['OTB'].sum()
                     tr = (to / tb * 100) if tb > 0 else 0
                     
-                    # 6. [그래프] 막대(OTB) + 선(Budget) + 달성률(%) 텍스트
+                    # 6. [그래프] 막대(OTB) + 선(Budget)
                     st.subheader("📊 월별 버짓 달성률 현황")
                     fig = go.Figure()
                     
@@ -802,7 +722,7 @@ try:
                     fig.update_layout(height=550, yaxis_title="매출 (KRW)", margin=dict(t=50))
                     st.plotly_chart(fig, use_container_width=True, key="otb_chart")
                     
-                    # 7. [표] 가로형 실적 요약표 (합계 포함)
+                    # 7. [표] 실적 요약표
                     st.subheader("📋 실적 요약 (Budget vs OTB)")
                     
                     res_dict = {}
