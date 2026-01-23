@@ -58,7 +58,7 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(dict(st.secrets["firebase"]))
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"🔥 DB 연결 실패: {e}")
+        st.error(f"🔥 데이터베이스 연결 실패: {e}")
         st.stop()
 
 db = firestore.client()
@@ -145,15 +145,15 @@ def normalize_and_map_columns(df):
     col_map = {}
     rules = {
         'CheckIn': ['checkin', 'arrival', '입실', '일자', 'date'],
-        'Guest_Name': ['guest', 'name', 'customer', '고객', '성명'],
+        'Guest_Name': ['guest', 'name', 'customer', '고객', '투숙객', '성명'],
         'Booking_Date': ['booking', 'create', 'res', '예약', '생성'],
         'Rooms': ['room', 'qty', 'rmws', '객실수', '수량'],
         'Nights': ['night', 'los', '박수', '박'],
         'Room_Revenue': ['room_rev', 'revenue', 'roomrate', '객실료', '매출'],
         'Total_Revenue': ['total', 'amount', '총금액', '합계'],
         'Segment': ['segment', '세그먼트'],
-        'Account': ['account', 'source', 'agent', '거래처'],
-        'Room_Type': ['type', 'cat', '객실타입'],
+        'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
+        'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
         'Rate_Plan': ['rate', 'plan', '상품', '패키지'], 
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
         'Lead_Time': ['lead', '리드', 'lt']
@@ -181,7 +181,6 @@ def process_data(file, status, force_otb=False):
         # [A] OTB 데이터 처리 (가장 마지막 행과 행의 셀 값 가져오기)
         # ---------------------------------------------------------
         if is_otb:
-            # 1. 월(Month) 파악 로직
             found_month_date = datetime.now()
             for r in range(min(15, len(df_raw))):
                 row_str = " ".join(df_raw.iloc[r].astype(str).values)
@@ -190,12 +189,9 @@ def process_data(file, status, force_otb=False):
                     found_month_date = pd.to_datetime(f"2026-{match.group(1)}-01")
                     break
             
-            # 2. 마지막 행/열 값 추출 (매출 합계)
             df_clean = df_raw.dropna(how='all').dropna(axis=1, how='all')
             try:
-                # 마지막 셀 값 (총 합계 매출)
                 total_rev = float(str(df_clean.iloc[-1, -1]).replace(',', '').replace('nan', '0').split('.')[0])
-                # 뒤에서 5번째 열 (RN 합계)
                 total_rn = float(str(df_clean.iloc[-1, -5]).replace(',', '').replace('nan', '0').split('.')[0])
             except:
                 total_rev = 0; total_rn = 0
@@ -380,10 +376,14 @@ try:
         with st.expander("예약/취소 리스트", expanded=True):
             f1 = st.file_uploader("예약 리스트", type=['xlsx','csv'], key="f1")
             if f1 and st.button("예약 저장"):
-                if save_to_firestore(process_data(f1, "Booked")): st.cache_data.clear(); st.rerun()
+                df = process_data(f1, "Booked")
+                if not df.empty and save_to_firestore(df):
+                    st.success("예약 리스트 저장 성공!"); time.sleep(1); st.cache_data.clear(); st.rerun()
             f2 = st.file_uploader("취소 리스트", type=['xlsx','csv'], key="f2")
             if f2 and st.button("취소 저장"):
-                if save_to_firestore(process_data(f2, "Cancelled")): st.cache_data.clear(); st.rerun()
+                df = process_data(f2, "Cancelled")
+                if not df.empty and save_to_firestore(df):
+                    st.success("취소 리스트 저장 성공!"); time.sleep(1); st.cache_data.clear(); st.rerun()
 
         with st.expander("OTB (Sales on the Book)", expanded=True):
             f3_list = st.file_uploader("당월 OTB (12개월 통합)", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
@@ -391,13 +391,12 @@ try:
                 otb_list = [process_data(f, "Booked", force_otb=True) for f in f3_list]
                 if otb_list:
                     if save_to_firestore(pd.concat(otb_list, ignore_index=True)):
-                        st.success("OTB 통합 저장 완료!"); st.cache_data.clear(); st.rerun()
+                        st.success("OTB 통합 저장 완료!"); time.sleep(1); st.cache_data.clear(); st.rerun()
 
     if selected_date and not df_all.empty:
         df_filtered = df_all[df_all['Snapshot_Date'] == selected_date].copy()
         df = clean_numeric_columns(df_filtered)
         
-        # 데이터 분리
         df_otb = df[df['Segment'].astype(str).str.contains('OTB')]
         df_list = df[~df['Segment'].astype(str).str.contains('OTB')]
         df_paid_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] > 0)]
@@ -433,8 +432,8 @@ try:
             else:
                 base = df_otb.copy()
                 base['M'] = pd.to_datetime(base['CheckIn']).dt.month
-                grp = base.groupby('M').agg({'Room_Revenue':'sum'}).reset_index()
-                fin = pd.merge(pd.DataFrame({'M': range(1, 13)}), grp, on='M', how='left').fillna(0)
+                grp_otb = base.groupby('M').agg({'Room_Revenue':'sum'}).reset_index()
+                fin = pd.merge(pd.DataFrame({'M': range(1, 13)}), grp_otb, on='M', how='left').fillna(0)
                 fin['Budget'] = fin['M'].map(BUDGET_DATA).fillna(0)
                 fin['Rate'] = np.where(fin['Budget'] > 0, (fin['Room_Revenue'] / fin['Budget']) * 100, 0)
                 fin['Month_Label'] = fin['M'].astype(str) + "월"
@@ -442,8 +441,8 @@ try:
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=fin['Month_Label'], y=fin['Room_Revenue'], name='OTB', text=fin['Rate'].apply(lambda x: f"{x:.1f}%"), textposition='outside', marker_color='#2E86C1'))
                 fig.add_trace(go.Scatter(x=fin['Month_Label'], y=fin['Budget'], name='Budget', line=dict(color='red', dash='dot', width=3)))
-                fig.update_layout(height=550, yaxis_title="매출 (KRW)", margin=dict(t=50), key="otb_final_integrity_chart")
-                st.plotly_chart(fig, use_container_width=True)
+                fig.update_layout(height=550, yaxis_title="매출 (KRW)", margin=dict(t=50))
+                st.plotly_chart(fig, use_container_width=True, key="otb_final_integrity_chart")
                 
                 res_dict = {}
                 for _, r in fin.iterrows(): res_dict[f"{int(r['M'])}월"] = [f"{r['Budget']:,.0f}", f"{r['Room_Revenue']:,.0f}", f"{r['Rate']:.1f}%"]
