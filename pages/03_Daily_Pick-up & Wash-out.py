@@ -663,17 +663,21 @@ try:
                 st.subheader(f"🆓 0원 예약 (총 {len(df_zero_bk)}건)")
                 st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
 
-            with tabs[5]:
+            with main_tab5:
                 st.header("🎯 OTB 현황 (Budget vs OTB)")
                 
                 if df_otb.empty:
-                    st.warning("⚠️ OTB 데이터가 없습니다. (파일을 업로드했는지 확인해주세요)")
+                    st.warning("⚠️ OTB 데이터가 없습니다. (사이드바에서 OTB 파일을 업로드해주세요)")
                 else:
                     # 1. 1월~12월 프레임 생성 (데이터 누락 방지)
                     all_months = pd.DataFrame({'M': range(1, 13)})
                     
                     # 2. OTB 데이터 월별 집계
                     base = df_otb.copy()
+                    # 날짜 파싱 안전장치
+                    if 'CheckIn_dt' not in base.columns or base['CheckIn_dt'].isnull().all():
+                        base['CheckIn_dt'] = pd.to_datetime(base['CheckIn'], errors='coerce')
+                        
                     base['M'] = base['CheckIn_dt'].dt.month
                     otb_grp = base.groupby('M').agg({'Room_Revenue':'sum'}).reset_index()
                     
@@ -701,8 +705,8 @@ try:
                         y=fin['OTB'], 
                         name='OTB (현재)', 
                         marker_color='#2E86C1',
-                        text=fin['Rate'].apply(lambda x: f"{x:.1f}%"), # 막대 위 숫자
-                        textposition='outside', # 막대 바깥에
+                        text=fin['Rate'].apply(lambda x: f"{x:.1f}%"), # 막대 위 숫자 표시
+                        textposition='outside', # 막대 바깥에 표시
                         textfont=dict(size=14, weight='bold', color='black')
                     ))
                     
@@ -711,16 +715,21 @@ try:
                         x=fin['Name'], 
                         y=fin['Budget'], 
                         name='Budget (목표)', 
-                        line=dict(color='red', dash='dot')
+                        line=dict(color='red', dash='dot', width=3)
                     ))
                     
-                    fig.update_layout(height=500, yaxis_title="매출 (KRW)", margin=dict(t=30))
+                    fig.update_layout(
+                        height=550, 
+                        yaxis_title="매출 (KRW)", 
+                        margin=dict(t=50, b=0),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
                     st.plotly_chart(fig, use_container_width=True)
                     
                     # 7. [표] 가로형 요약표 (월별 + 합계)
-                    st.subheader("📋 실적 요약")
+                    st.subheader("📋 실적 요약 (Budget vs OTB)")
                     
-                    # 가로형 데이터 생성
+                    # 가로형 데이터 구성을 위한 딕셔너리
                     res = {}
                     for _, r in fin.iterrows():
                         res[r['Name']] = [
@@ -739,7 +748,7 @@ try:
                     # 데이터프레임 변환
                     tbl = pd.DataFrame(res, index=['Budget (목표)', 'OTB (현재)', '달성률 (%)'])
                     
-                    # 합계 열 노란색 강조 스타일
+                    # 합계 열 노란색 강조 스타일 적용
                     def highlight_total_col(s):
                         if s.name == '합계 (Total)':
                             return ['background-color: #fff9c4; font-weight: bold; border-left: 2px solid black; color: black'] * len(s)
