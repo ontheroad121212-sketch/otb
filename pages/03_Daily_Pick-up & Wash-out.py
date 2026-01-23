@@ -212,7 +212,7 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 및 매핑 로직
+# 4. 엑셀/CSV 파일 처리 및 매핑 로직 (OTB 로직 강화)
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -318,26 +318,29 @@ def process_data(uploaded_file, status, force_otb=False):
             df = pd.DataFrame()
             
             # 날짜 컬럼 찾기
-            date_col_candidates = [c for c in df_raw.columns if '일자' in str(c) or 'Date' in str(c) or 'CheckIn' in str(c)]
+            date_col_candidates = [c for c in df_raw.columns if any(k in str(c) for k in ['일자', 'Date', 'CheckIn'])]
             date_col = date_col_candidates[0] if date_col_candidates else df_raw.columns[0]
             
             df['CheckIn'] = pd.to_datetime(df_raw[date_col], errors='coerce')
             
-            # 매출 및 객실수 컬럼 찾기 (수정됨: 가장 마지막 열이 합계일 확률 높음)
+            # [중요] OTB 매출 컬럼 찾기 (맨 마지막 '매출'이 진짜 합계임)
             try:
-                # '매출'이 포함된 컬럼들 중 가장 뒤에 있는 것 선택 (개인/단체/합계 중 합계)
+                # 1. '매출', 'Rev'가 들어간 모든 컬럼 찾기
                 rev_cols = [c for c in df_raw.columns if any(k in str(c) for k in ['매출', 'Rev', 'Amount'])]
+                
                 if rev_cols:
-                    # 마지막 '매출' 컬럼 선택 (Total Revenue)
-                    df['Room_Revenue'] = pd.to_numeric(df_raw[rev_cols[-1]], errors='coerce').fillna(0)
+                    # 가장 마지막 컬럼을 선택 (개인->단체->'합계' 순서이므로)
+                    target_rev_col = rev_cols[-1]
+                    df['Room_Revenue'] = pd.to_numeric(df_raw[target_rev_col], errors='coerce').fillna(0)
                 else:
-                    # '매출' 컬럼 없으면 무조건 맨 마지막 컬럼
+                    # 없으면 데이터프레임의 맨 마지막 열 사용 (안전장치)
                     df['Room_Revenue'] = pd.to_numeric(df_raw.iloc[:, -1], errors='coerce').fillna(0)
                 
-                # '객실수'가 포함된 컬럼들 중 가장 뒤에 있는 것 선택
+                # 객실수(RN)도 마찬가지로 가장 뒤에 있는 것 선택
                 rn_cols = [c for c in df_raw.columns if any(k in str(c) for k in ['객실수', 'RN', 'Qty', 'Rm'])]
                 if rn_cols:
-                    df['RN'] = pd.to_numeric(df_raw[rn_cols[-1]], errors='coerce').fillna(0)
+                    target_rn_col = rn_cols[-1]
+                    df['RN'] = pd.to_numeric(df_raw[target_rn_col], errors='coerce').fillna(0)
                 else:
                     # 대략 뒤에서 5번째가 객실수인 경우가 많음
                     df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
@@ -384,25 +387,18 @@ def process_data(uploaded_file, status, force_otb=False):
             df['Total_Revenue'] = np.where(df['Total_Revenue'] == 0, df['Room_Revenue'], df['Total_Revenue'])
             df['RN'] = df['Rooms'] * df['Nights'].replace(0, 1)
             
-            # [조식 포함 여부 식별 로직 강화] BF 포함 확인
+            # [조식 식별 로직] - BF 포함 확인
             def check_breakfast(row):
-                # 서비스코드, 요금제, 객실타입, 세그먼트 모두 검사
-                text_source = str(row.get('Service_Code', '')) + " " + str(row.get('Rate_Plan', '')) + " " + str(row.get('Room_Type', '')) + " " + str(row.get('Segment', ''))
-                text_upper = text_source.upper()
-                
-                # 조식 관련 키워드
-                keywords = ['BF', '조식', 'BREAKFAST', 'BKFST', 'PKG', '패키지', 'INCL', '조포']
-                
-                if any(k in text_upper for k in keywords):
+                text = str(row.get('Service_Code', '')) + " " + str(row.get('Rate_Plan', '')) + " " + str(row.get('Room_Type', '')) + " " + str(row.get('Segment', ''))
+                text_up = text.upper()
+                # 서비스코드에 'BF'가 있거나, 패키지명에 '조식' 등이 있으면 포함
+                if any(k in text_up for k in ['BF', '조식', 'BREAKFAST', 'BKFST', 'PKG', '패키지', 'INCL']):
                     return 'Included (조식포함)'
-                else:
-                    return 'Not Included (불포함)'
+                return 'Not Included (불포함)'
             
             df['Breakfast'] = df.apply(check_breakfast, axis=1)
 
-        # ---------------------------------------------------------
-        # 공통 후처리 (날짜, 파생변수)
-        # ---------------------------------------------------------
+        # 공통 후처리
         df['Status'] = status
         df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
         
@@ -440,7 +436,7 @@ def process_data(uploaded_file, status, force_otb=False):
         return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 렌더링 헬퍼 함수들
+# 5. UI 렌더링 헬퍼 함수들 (Key 오류 방지 추가됨)
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
@@ -496,10 +492,9 @@ def show_dataframe_with_style(df):
     styler = styler.apply(highlight_total, axis=1)
     st.dataframe(styler, hide_index=True, use_container_width=True)
 
-def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
+def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"):
     """
-    각 탭(예약, 취소, 종합)의 세부 분석 내용을 렌더링합니다.
-    조식(Breakfast) 분석 탭이 포함되어 있습니다.
+    [수정] unique_key를 인자로 받아서 plotly_chart의 ID 중복 에러를 방지합니다.
     """
     if target_df.empty:
         st.warning(f"⚠️ {title_prefix} 데이터가 없습니다.")
@@ -518,15 +513,16 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
         seg_stats['ADR_Total'] = np.where(seg_stats['RN']>0, seg_stats['Total_Revenue']/seg_stats['RN'], 0)
         
         c1, c2 = st.columns(2)
-        c1.plotly_chart(px.pie(seg_stats, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True)
-        c2.plotly_chart(px.bar(seg_stats, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True)
+        # unique_key를 사용하여 ID 중복 방지
+        c1.plotly_chart(px.pie(seg_stats, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True, key=f"{unique_key}_seg_pie")
+        c2.plotly_chart(px.bar(seg_stats, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True, key=f"{unique_key}_seg_bar")
         
         show_dataframe_with_style(add_total_row(seg_stats, 'Segment'))
 
     with t2:
         st.subheader(f"📅 Booking Pacing (예약 시점)")
         piv = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum').fillna(0)
-        st.plotly_chart(px.imshow(piv, text_auto="d", aspect="auto", color_continuous_scale=color_scale), use_container_width=True)
+        st.plotly_chart(px.imshow(piv, text_auto="d", aspect="auto", color_continuous_scale=color_scale), use_container_width=True, key=f"{unique_key}_pacing")
 
     with t3:
         st.subheader("🏢 상위 거래처 (Top 50)")
@@ -546,7 +542,7 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
         lead_stats['ADR_Room'] = np.where(lead_stats['RN']>0, lead_stats['Room_Revenue']/lead_stats['RN'], 0)
         lead_stats['ADR_Total'] = np.where(lead_stats['RN']>0, lead_stats['Total_Revenue']/lead_stats['RN'], 0)
         
-        st.plotly_chart(px.bar(lead_stats, x='Lead_Group', y='RN', title="리드타임별 건수"), use_container_width=True)
+        st.plotly_chart(px.bar(lead_stats, x='Lead_Group', y='RN', title="리드타임별 건수"), use_container_width=True, key=f"{unique_key}_lead")
         show_dataframe_with_style(add_total_row(lead_stats, 'Lead_Group'))
 
     with t5:
@@ -564,8 +560,8 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
         wd_stats['ADR_Total'] = np.where(wd_stats['RN']>0, wd_stats['Total_Revenue']/wd_stats['RN'], 0)
         
         c1, c2 = st.columns(2)
-        c1.plotly_chart(px.bar(wd_stats, x='Day_Type', y='Room_Revenue'), use_container_width=True)
-        c2.plotly_chart(px.pie(wd_stats, values='RN', names='Day_Type'), use_container_width=True)
+        c1.plotly_chart(px.bar(wd_stats, x='Day_Type', y='Room_Revenue'), use_container_width=True, key=f"{unique_key}_day_bar")
+        c2.plotly_chart(px.pie(wd_stats, values='RN', names='Day_Type'), use_container_width=True, key=f"{unique_key}_day_pie")
         show_dataframe_with_style(add_total_row(wd_stats, 'Day_Type'))
 
     with t7:
@@ -576,8 +572,8 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
             nat_stats['ADR_Total'] = np.where(nat_stats['RN']>0, nat_stats['Total_Revenue']/nat_stats['RN'], 0)
             
             c1, c2 = st.columns(2)
-            c1.plotly_chart(px.pie(nat_stats, values='RN', names='Nat_Group', title="국적 비중"), use_container_width=True)
-            c2.plotly_chart(px.bar(nat_stats, x='Nat_Group', y='Room_Revenue'), use_container_width=True)
+            c1.plotly_chart(px.pie(nat_stats, values='RN', names='Nat_Group', title="국적 비중"), use_container_width=True, key=f"{unique_key}_nat_pie")
+            c2.plotly_chart(px.bar(nat_stats, x='Nat_Group', y='Room_Revenue'), use_container_width=True, key=f"{unique_key}_nat_bar")
             show_dataframe_with_style(add_total_row(nat_stats, 'Nat_Group'))
         else:
             st.info("국적 데이터 없음")
@@ -590,12 +586,12 @@ def render_analysis_tab(target_df, title_prefix, color_scale="Blues"):
             bf_stats['ADR_Total'] = np.where(bf_stats['RN']>0, bf_stats['Total_Revenue']/bf_stats['RN'], 0)
             
             c1, c2 = st.columns(2)
-            c1.plotly_chart(px.pie(bf_stats, values='RN', names='Breakfast', title="조식 포함 비율 (RN)"), use_container_width=True)
-            c2.plotly_chart(px.bar(bf_stats, x='Breakfast', y='Room_Revenue', title="조식 포함 여부별 매출"), use_container_width=True)
+            c1.plotly_chart(px.pie(bf_stats, values='RN', names='Breakfast', title="조식 포함 비율 (RN)"), use_container_width=True, key=f"{unique_key}_bf_pie")
+            c2.plotly_chart(px.bar(bf_stats, x='Breakfast', y='Room_Revenue', title="매출 비교"), use_container_width=True, key=f"{unique_key}_bf_bar")
             
             show_dataframe_with_style(add_total_row(bf_stats, 'Breakfast'))
         else:
-            st.info("데이터에서 조식 정보를 식별할 수 없습니다.")
+            st.info("조식 데이터가 없습니다.")
 
 # ==============================================================================
 # UI 메인 실행부
@@ -774,22 +770,22 @@ try:
                     st.subheader("3. 국적별 비중")
                     if 'Nat_Group' in df_paid_bk.columns and not df_paid_bk.empty:
                         nat_gm = df_paid_bk.groupby('Nat_Group')['RN'].sum().reset_index()
-                        st.plotly_chart(px.pie(nat_gm, values='RN', names='Nat_Group', hole=0.4), use_container_width=True)
+                        st.plotly_chart(px.pie(nat_gm, values='RN', names='Nat_Group', hole=0.4), use_container_width=True, key="gm_pie")
                     else: st.info("데이터 없음")
                 with c_right:
                     st.subheader("4. 월별 예약/취소 추이")
                     bk_m = df_paid_bk.groupby('Stay_Month')['RN'].sum().reset_index(); bk_m['Type'] = '예약'
                     cn_m = df_list_cn.groupby('Stay_Month')['RN'].sum().reset_index(); cn_m['Type'] = '취소'
                     comb_m = pd.concat([bk_m, cn_m])
-                    if not comb_m.empty: st.plotly_chart(px.bar(comb_m, x='Stay_Month', y='RN', color='Type', barmode='group'), use_container_width=True)
+                    if not comb_m.empty: st.plotly_chart(px.bar(comb_m, x='Stay_Month', y='RN', color='Type', barmode='group'), use_container_width=True, key="gm_bar")
                     else: st.info("데이터 없음")
 
             # -----------------------------------------------------------
-            # 상세 분석 탭 (조식 포함)
+            # 상세 분석 탭 (조식 포함) - Key를 추가하여 에러 방지
             # -----------------------------------------------------------
-            with main_tab1: render_analysis_tab(df_paid_bk, "유료 예약", "Blues")
-            with main_tab2: render_analysis_tab(df_list_cn, "취소 데이터", "Reds")
-            with main_tab3: render_analysis_tab(df_total_paid, "종합(예약+취소)", "Greens")
+            with main_tab1: render_analysis_tab(df_paid_bk, "유료 예약", "bk", "Blues")
+            with main_tab2: render_analysis_tab(df_list_cn, "취소 데이터", "cn", "Reds")
+            with main_tab3: render_analysis_tab(df_total_paid, "종합(예약+취소)", "tot", "Greens")
             
             with main_tab4:
                 st.subheader(f"🆓 0원 예약 (총 {len(df_zero_bk)}건)")
@@ -851,7 +847,7 @@ try:
                     ))
                     
                     fig.update_layout(height=550, yaxis_title="매출 (KRW)", margin=dict(t=50))
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key="otb_chart")
                     
                     # 7. [표] 가로형 실적 요약표 (합계 포함)
                     st.subheader("📋 실적 요약 (Budget vs OTB)")
