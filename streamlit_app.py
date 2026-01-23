@@ -467,11 +467,15 @@ with st.sidebar:
 
 # --- 2. 페이지 렌더링 로직 ---
 if selected_page == "🎯 Forecasting":
-    # pages 폴더 밖에 있는 파일을 직접 실행
-    spec = importlib.util.spec_from_file_location("secret_forecasting", "./secret_forecasting.py")
-    foo = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(foo)
-    # 06_Forecasting.py의 메인 함수나 로직이 실행됩니다.
+    # 1. 포캐스팅 페이지 실행 (파일은 루트 폴더에 secret_forecasting.py로 있어야 함)
+    try:
+        spec = importlib.util.spec_from_file_location("secret_forecasting", "./secret_forecasting.py")
+        foo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(foo)
+        st.stop() # 포캐스팅 실행 후 메인 리포트가 아래에 뜨지 않도록 중단
+    except Exception as e:
+        st.error(f"비밀 파일을 찾을 수 없습니다: {e}")
+        st.stop()
 
 # 메인 타이틀
 st.title(f"🏨 Daily Pace Report")
