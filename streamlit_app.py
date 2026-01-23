@@ -12,51 +12,46 @@ import secret_forecasting  # 파일을 직접 임포트
 # ==============================================================================
 # [추가] 파이어베이스 데이터 분석 함수 (4만 건 데이터 처리)
 # ==============================================================================
-def load_historical_patterns():
-    # 4만 건의 예약 데이터를 가져옴
-    docs = db.collection("reservations").stream() 
+def load_all_historical_data():
+    """이미지의 revenue_integrity_history 컬렉션 전체 로드 및 분석"""
+    db = firestore.client()
+    # 이미지에 확인된 컬렉션 이름을 정확히 입력합니다.
+    docs = db.collection("revenue_integrity_history").stream() 
     data = [doc.to_dict() for doc in docs]
     
-    if not data: return {}, 0, pd.DataFrame()
+    if not data: return {}, 0
+    
     df = pd.DataFrame(data)
     
-    # 필드명 자동 매칭 (사용자님 DB 필드명에 맞춰 유연하게 검색)
-    ci_col = next((c for c in df.columns if c.lower() in ['check_in', 'checkin', 'arrivaldate']), 'check_in')
-    bd_col = next((c for c in df.columns if c.lower() in ['booking_date', 'bookingdate', 'created_at']), 'booking_date')
-    cust_col = next((c for c in df.columns if c.lower() in ['customer_id', 'phone', 'guestname']), None)
-
-    df['check_in'] = pd.to_datetime(df[ci_col], errors='coerce')
-    df['booking_date'] = pd.to_datetime(df[bd_col], errors='coerce')
-    df = df.dropna(subset=['check_in', 'booking_date'])
-
-    # 요일 지수 계산 (0=월, 6=일)
-    df['dow'] = df['booking_date'].dt.dayofweek
-    dow_counts = df['dow'].value_counts(normalize=True) * 7
+    # 4만 건 데이터의 요일별 예약 강도(DOW Index) 계산
+    # 'created_at'이나 'booking_date' 등 예약 생성일 기준 필드를 자동으로 찾습니다.
+    bd_col = next((c for c in df.columns if c.lower() in ['booking_date', 'created_at', 'date']), None)
     
-    # 재방문율 계산
+    if bd_col:
+        df['b_date'] = pd.to_datetime(df[bd_col], errors='coerce')
+        df = df.dropna(subset=['b_date'])
+        df['dow'] = df['b_date'].dt.dayofweek
+        # 과거 4만 건 기준 요일별 예약 비중 지수화
+        dow_indices = (df['dow'].value_counts(normalize=True) * 7).to_dict()
+    else:
+        dow_indices = {i: 1.0 for i in range(7)} # 필드 없으면 기본값 1.0
+
+    # 재방문율 등 추가 통계
+    cust_col = next((c for c in df.columns if c.lower() in ['customer_id', 'guest_id', 'phone']), None)
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
     
-    return dow_counts.to_dict(), repeat_rate, df
+    return dow_indices, repeat_rate
 
-# [추가] 데이터 로드 상태 체크 함수
-def check_data_status():
+# 사이드바 관리자 모드 하단에 배치
+if st.session_state.get("authenticated"):
     if "historical_dow" not in st.session_state:
-        st.sidebar.warning("⏳ 과거 패턴 데이터 로딩 필요")
-        if st.sidebar.button("📊 4만건 데이터 패턴 분석 시작"):
-            with st.status("파이어베이스 데이터 분석 중...", expanded=True) as status:
-                st.write("1. 파이어베이스 연결 시도...")
-                dow_indices, repeat_rate, _ = load_historical_patterns()
-                
-                st.write("2. 요일별 예약 패턴 계산 완료...")
-                st.session_state["historical_dow"] = dow_indices
-                
-                st.write("3. 재방문 고객 통계 산출 완료...")
-                st.session_state["repeat_rate"] = repeat_rate
-                
-                status.update(label="✅ 분석 완료! 포캐스팅 사용 가능", state="complete", expanded=False)
-                st.rerun() # 화면 갱신
-    else:
-        st.sidebar.success("✅ 과거 패턴 로드 완료")
+        if st.sidebar.button("📊 4만건 히스토리 전체 분석"):
+            with st.status("데이터 통합 분석 중..."):
+                dow, repeat = load_all_historical_data()
+                st.session_state["historical_dow"] = dow
+                st.session_state["repeat_rate"] = repeat
+                st.success("데이터 로드 완료!")
+                st.rerun()
 
 # ==============================================================================
 # [1] 페이지 기본 설정
