@@ -663,105 +663,88 @@ try:
                 st.subheader(f"🆓 0원 예약 (총 {len(df_zero_bk)}건)")
                 st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
 
-            with main_tab5:
+            with tabs[5]:
                 st.header("🎯 OTB 현황 (Budget vs OTB)")
                 
                 if df_otb.empty:
-                    st.warning("⚠️ 업로드된 OTB 데이터가 없습니다.")
+                    st.warning("⚠️ OTB 데이터가 없습니다. (파일을 업로드했는지 확인해주세요)")
                 else:
-                    # 1. [데이터 가공] 1월~12월 빈 틀 만들기 (데이터 누락 방지)
-                    all_months = pd.DataFrame({'Month_Num': range(1, 13)})
+                    # 1. 1월~12월 프레임 생성 (데이터 누락 방지)
+                    all_months = pd.DataFrame({'M': range(1, 13)})
                     
                     # 2. OTB 데이터 월별 집계
-                    # CheckIn_dt가 있으면 그것을 쓰고, 없으면 문자열 변환 시도
-                    if 'CheckIn_dt' not in df_otb.columns:
-                        df_otb['CheckIn_dt'] = pd.to_datetime(df_otb['CheckIn'], errors='coerce')
+                    base = df_otb.copy()
+                    base['M'] = base['CheckIn_dt'].dt.month
+                    otb_grp = base.groupby('M').agg({'Room_Revenue':'sum'}).reset_index()
                     
-                    otb_base = df_otb.copy()
-                    otb_base['Month_Num'] = otb_base['CheckIn_dt'].dt.month
-                    otb_grouped = otb_base.groupby('Month_Num')['Room_Revenue'].sum().reset_index()
-                    
-                    # 3. 틀과 데이터 병합 (Left Join) -> 없는 달은 0원으로 채움
-                    final_df = pd.merge(all_months, otb_grouped, on='Month_Num', how='left').fillna(0)
+                    # 3. 프레임과 병합 (Left Join) -> 없는 달은 0으로 채움
+                    fin = pd.merge(all_months, otb_grp, on='M', how='left').fillna(0)
                     
                     # 4. Budget 매핑 및 달성률 계산
-                    final_df['Budget'] = final_df['Month_Num'].map(BUDGET_DATA).fillna(0)
-                    final_df['OTB'] = final_df['Room_Revenue']
-                    final_df['Rate'] = np.where(final_df['Budget'] > 0, (final_df['OTB'] / final_df['Budget']) * 100, 0)
-                    final_df['Month_Name'] = final_df['Month_Num'].apply(lambda x: f"{x}월")
+                    fin['Budget'] = fin['M'].map(BUDGET_DATA).fillna(0)
+                    fin['OTB'] = fin['Room_Revenue']
+                    fin['Rate'] = np.where(fin['Budget']>0, (fin['OTB']/fin['Budget'])*100, 0)
+                    fin['Name'] = fin['M'].astype(str) + "월"
                     
-                    # 5. [합계(Total) 계산]
-                    total_budget = final_df['Budget'].sum()
-                    total_otb = final_df['OTB'].sum()
-                    total_rate = (total_otb / total_budget * 100) if total_budget > 0 else 0
+                    # 5. 합계(Total) 계산
+                    tb = fin['Budget'].sum()
+                    to = fin['OTB'].sum()
+                    tr = (to/tb*100) if tb>0 else 0
                     
-                    # -------------------------------------------------------
-                    # [시각화] 막대(OTB) + 선(Budget) + 텍스트(달성률)
-                    # -------------------------------------------------------
-                    st.subheader("📊 월별 Budget 대비 달성률")
-                    
+                    # 6. [시각화] 막대(OTB) + 선(Budget) + 달성률(%) 텍스트
+                    st.subheader("📊 월별 달성률 현황")
                     fig = go.Figure()
                     
-                    # (1) OTB 막대 (달성률 % 숫자 표시)
+                    # OTB 막대 (텍스트 크게 표시)
                     fig.add_trace(go.Bar(
-                        x=final_df['Month_Name'],
-                        y=final_df['OTB'],
-                        name='OTB (현재예약)',
+                        x=fin['Name'], 
+                        y=fin['OTB'], 
+                        name='OTB (현재)', 
                         marker_color='#2E86C1',
-                        text=final_df['Rate'].apply(lambda x: f"{x:.1f}%"), # 막대 위 숫자
-                        textposition='outside', # 막대 바깥에 표시
+                        text=fin['Rate'].apply(lambda x: f"{x:.1f}%"), # 막대 위 숫자
+                        textposition='outside', # 막대 바깥에
                         textfont=dict(size=14, weight='bold', color='black')
                     ))
                     
-                    # (2) Budget 점선
+                    # Budget 선
                     fig.add_trace(go.Scatter(
-                        x=final_df['Month_Name'],
-                        y=final_df['Budget'],
-                        name='Budget (목표)',
-                        line=dict(color='#E74C3C', width=3, dash='dot')
+                        x=fin['Name'], 
+                        y=fin['Budget'], 
+                        name='Budget (목표)', 
+                        line=dict(color='red', dash='dot')
                     ))
                     
-                    fig.update_layout(
-                        yaxis=dict(title="매출액 (KRW)"),
-                        height=500,
-                        margin=dict(t=30, b=0),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                    )
+                    fig.update_layout(height=500, yaxis_title="매출 (KRW)", margin=dict(t=30))
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # -------------------------------------------------------
-                    # [표] 가로형 요약표 (월별 + 합계)
-                    # -------------------------------------------------------
-                    st.subheader("📋 실적 요약표")
+                    # 7. [표] 가로형 요약표 (월별 + 합계)
+                    st.subheader("📋 실적 요약")
                     
-                    # 표시할 데이터 딕셔너리 생성
-                    display_data = {}
-                    
-                    # 1~12월 데이터 넣기
-                    for _, row in final_df.iterrows():
-                        m_name = row['Month_Name']
-                        display_data[m_name] = [
-                            f"{row['Budget']:,.0f}", 
-                            f"{row['OTB']:,.0f}", 
-                            f"{row['Rate']:.1f}%"
+                    # 가로형 데이터 생성
+                    res = {}
+                    for _, r in fin.iterrows():
+                        res[r['Name']] = [
+                            f"{r['Budget']:,.0f}", 
+                            f"{r['OTB']:,.0f}", 
+                            f"{r['Rate']:.1f}%"
                         ]
                     
-                    # 합계(Total) 데이터 넣기
-                    display_data['합계 (Total)'] = [
-                        f"{total_budget:,.0f}", 
-                        f"{total_otb:,.0f}", 
-                        f"{total_rate:.1f}%"
+                    # 합계 열 추가
+                    res['합계 (Total)'] = [
+                        f"{tb:,.0f}", 
+                        f"{to:,.0f}", 
+                        f"{tr:.1f}%"
                     ]
                     
-                    # 데이터프레임 변환 (인덱스 설정)
-                    table_df = pd.DataFrame(display_data, index=['Budget (목표)', 'OTB (현재)', '달성률 (%)'])
+                    # 데이터프레임 변환
+                    tbl = pd.DataFrame(res, index=['Budget (목표)', 'OTB (현재)', '달성률 (%)'])
                     
-                    # 스타일링: '합계' 열만 노란색 강조
+                    # 합계 열 노란색 강조 스타일
                     def highlight_total_col(s):
                         if s.name == '합계 (Total)':
-                            return ['background-color: #fff9c4; font-weight: bold; color: black; border-left: 2px solid black'] * len(s)
+                            return ['background-color: #fff9c4; font-weight: bold; border-left: 2px solid black; color: black'] * len(s)
                         return [''] * len(s)
 
-                    st.dataframe(table_df.style.apply(highlight_total_col, axis=0), use_container_width=True)
+                    st.dataframe(tbl.style.apply(highlight_total_col, axis=0), use_container_width=True)
 except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
