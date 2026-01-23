@@ -553,20 +553,6 @@ for i, tab in enumerate(tabs):
         df_curr = None
         df_prev = None
         sob_curr = None 
-
-        # render_sob_dashboard 호출 직후에 아래 코드를 넣으세요
-        if sob_curr is not None:
-            # 1. S.O.B 데이터를 세션에 저장
-            st.session_state[f"sob_{current_month}"] = sob_curr
-            
-            # 2. Pace 데이터를 세션에 저장 (에러 방지용 기본값 0 설정)
-            try:
-                if df_prev is not None and df_curr is not None:
-                    st.session_state[f"pace_{current_month}"] = len(df_curr) - len(df_prev)
-                else:
-                    st.session_state[f"pace_{current_month}"] = 0
-            except:
-                st.session_state[f"pace_{current_month}"] = 0
         
         # ----------------------------------------------------------------------
         # 데이터 로드 전략: 파일 우선 -> 없으면 DB 조회
@@ -645,13 +631,22 @@ for i, tab in enumerate(tabs):
             total_adr=total_adr_val
         )
 
-        # ----------------------------------------------------------------------
-        # [추가] 비밀 분석실(Forecasting)로 데이터 전달
-        # ----------------------------------------------------------------------
-        st.session_state[f"sob_{current_month}"] = sob_curr
-        if df_prev is not None and df_curr is not None:
-            # 오늘의 총 예약실수 - 어제의 총 예약실수 = 오늘의 페이스
-            st.session_state[f"pace_{current_month}"] = len(df_curr) - len(df_prev)
+       # ----------------------------------------------------------------------
+       # [추가] 비밀 분석실(Forecasting)로 '진짜 픽업량' 전달
+       # ----------------------------------------------------------------------
+       if sob_curr is not None:
+           st.session_state[f"sob_{current_month}"] = sob_curr
+    
+           # 하단 표(merged)가 성공적으로 계산되었다면, TOTAL 행의 Pick_RMS(변화량)를 가져옵니다.
+           if 'merged' in locals() and not merged.empty:
+               try:
+                   # 마지막 행(TOTAL)의 Pick_RMS 컬럼 값을 가져옴
+                   actual_pickup = merged.iloc[-1]['Pick_RMS']
+                   st.session_state[f"pace_{current_month}"] = actual_pickup
+               except:
+                   st.session_state[f"pace_{current_month}"] = 0
+           else:
+               st.session_state[f"pace_{current_month}"] = 0
 
         # ----------------------------------------------------------------------
         # [B] 하단 상세 리포트 데이터 병합 및 계산
