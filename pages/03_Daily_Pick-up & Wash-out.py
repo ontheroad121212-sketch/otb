@@ -13,15 +13,28 @@ import time
 # 0. 사용자 정의 버짓 데이터 (1월~12월 목표 매출)
 # ==============================================================================
 BUDGET_DATA = { 
-    1: 514992575, 2: 786570856, 3: 529599040, 4: 695351004,
-    5: 903705440, 6: 808203820, 7: 1231949142, 8: 1388376999,
-    9: 952171506, 10: 897171539, 11: 667146771, 12: 804030110 
+    1: 514992575, 
+    2: 786570856, 
+    3: 529599040, 
+    4: 695351004,
+    5: 903705440,
+    6: 808203820,
+    7: 1231949142,
+    8: 1388376999,
+    9: 952171506,
+    10: 897171539,
+    11: 667146771,
+    12: 804030110 
 }
 
 # ==============================================================================
 # 1. 페이지 설정 및 CSS 스타일링
 # ==============================================================================
-st.set_page_config(page_title="ARI Final Integrity", layout="wide")
+st.set_page_config(
+    page_title="ARI Final Integrity", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 st.markdown("""
 <style>
@@ -30,7 +43,7 @@ st.markdown("""
     div[data-testid="stMetricLabel"] { font-size: 15px !important; font-weight: 700; color: #64748b; }
     button[data-baseweb="tab"] { font-size: 16px !important; font-weight: 700; }
     [data-testid="stDataFrame"] table tr:last-child td {
-        font-weight: 900 !important; background-color: #fff9c4 !important; color: black; border-top: 2px solid black;
+        font-weight: 900 !important; background-color: #fff9c4 !important; color: #000000 !important; border-top: 2px solid #000000 !important;
     }
     div.stButton > button:first-child { border-color: #ff4b4b; color: #ff4b4b; }
     div.stButton > button:first-child:hover { background-color: #ff4b4b; color: white; }
@@ -121,11 +134,11 @@ def delete_otb_data_only():
                     deleted_count += 1
         return deleted_count
     except Exception as e:
-        st.error(f"OTB 삭제 중 오류: {e}")
+        st.error(f"OTB 삭제 오류: {e}")
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 로직 (OTB 마지막 열 추출, K열 조식 확인)
+# 4. 엑셀/CSV 파일 처리 (OTB 마지막 셀, K열 조식 로직 완벽 적용)
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -157,7 +170,9 @@ def normalize_and_map_columns(df):
 
 def process_data(file, status, force_otb=False):
     try:
-        is_otb = force_otb or "Sales on the Book" in file.name
+        is_filename_otb = "Sales on the Book" in file.name or "영업 현황" in file.name
+        is_otb = force_otb or is_filename_otb
+        
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=None)
             except: df_raw = pd.read_csv(file, header=None, encoding='cp949')
@@ -165,7 +180,7 @@ def process_data(file, status, force_otb=False):
             df_raw = pd.read_excel(file, header=None)
 
         # ---------------------------------------------------------
-        # [A] OTB 데이터 처리 (가장 마지막 행과 행의 셀 값 가져오기)
+        # [A] OTB 처리: 무조건 마지막 행의 마지막 열 값을 합계 매출로 사용
         # ---------------------------------------------------------
         if is_otb:
             found_month_date = datetime.now()
@@ -177,12 +192,11 @@ def process_data(file, status, force_otb=False):
                     found_month_date = pd.to_datetime(f"2026-{match.group(1)}-01")
                     break
             
-            # 마지막 행/열 값 추출 (매출 합계)
+            # 마지막 값 추출 (빈 행/열 제거 후 맨 오른쪽 하단)
             df_clean = df_raw.dropna(how='all').dropna(axis=1, how='all')
             try:
-                # 엑셀 물리적 맨 우측 하단 셀
                 total_rev = float(str(df_clean.iloc[-1, -1]).replace(',', '').replace('nan', '0').split('.')[0])
-                # 엑셀 물리적 맨 우측 하단에서 왼쪽으로 4칸 (보통 객실수 합계)
+                # RN은 뒤에서 5번째 열 (보통 객실수 합계)
                 total_rn = float(str(df_clean.iloc[-1, -5]).replace(',', '').replace('nan', '0').split('.')[0])
             except:
                 total_rev = 0; total_rn = 0
@@ -205,34 +219,27 @@ def process_data(file, status, force_otb=False):
                 header_idx = i; break
         
         if header_idx != -1:
-            # 엑셀 원본 컬럼명 확보
-            original_headers = df_raw.iloc[header_idx].values
-            df = df_raw.iloc[header_idx+1:].reset_index(drop=True)
-            df.columns = original_headers
+            # 원본 헤더와 데이터 분리
+            df_original = df_raw.iloc[header_idx+1:].reset_index(drop=True)
             
-            # [수정] 조식 식별 로직: 서비스코드는 엑셀의 K열(11번째)에 위치함
-            # 데이터프레임 인덱스로는 10 (0부터 시작)
-            svc_col_idx = 10 
-            
-            # 컬럼 매핑
-            df = normalize_and_map_columns(df).copy()
-            
-            # 조식 분류 (K열 데이터를 서비스코드로 보고 'BF' 포함 여부 확인)
-            def check_breakfast(row):
-                # 인덱스로 접근하거나, '서비스코드'라는 이름으로 접근 시도
-                svc_val = ""
-                if len(row) > svc_col_idx:
-                    svc_val = str(row.iloc[svc_col_idx]).upper()
-                
-                # 만약 매핑 과정에서 이름이 바뀌었다면 이름으로도 확인
-                if not svc_val or svc_val == 'NAN':
-                    svc_val = str(row.get('서비스코드', '')).upper()
-                
-                if 'BF' in svc_val:
-                    return 'Included (조식포함)'
+            # [수정] 조식 식별 로직: K열(11번째 열, 인덱스 10)을 직접 검사
+            # 데이터프레임으로 읽었을 때 컬럼 갯수 확인 후 K열 위치의 값을 추출
+            def check_breakfast_k_column(row):
+                try:
+                    # K열은 물리적으로 11번째 열이므로 인덱스 10을 확인
+                    val = str(row.iloc[10]).upper() if len(row) > 10 else ""
+                    if 'BF' in val:
+                        return 'Included (조식포함)'
+                except: pass
                 return 'Not Included (불포함)'
             
-            df['Breakfast'] = df.apply(check_breakfast, axis=1)
+            # 조식 여부를 먼저 계산 (컬럼명 매핑 전 원본 인덱스 기반)
+            breakfast_series = df_original.apply(check_breakfast_k_column, axis=1)
+            
+            # 이제 헤더 입히고 매핑 진행
+            df_original.columns = df_raw.iloc[header_idx].values
+            df = normalize_and_map_columns(df_original).copy()
+            df['Breakfast'] = breakfast_series # 미리 계산한 조식 데이터 삽입
             
             # 숫자 처리
             for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time']:
@@ -255,6 +262,7 @@ def process_data(file, status, force_otb=False):
             return clean_numeric_columns(df)
             
     except Exception as e:
+        st.error(f"파일 처리 에러: {e}")
         return pd.DataFrame()
 
 # ==============================================================================
@@ -348,13 +356,13 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
             show_dataframe_with_style(add_total_row(nat_stats, 'Nat_Group'))
 
     with t8:
-        # [핵심] 조식 비중 탭 렌더링
-        st.subheader("🍳 조식 포함 여부 (서비스코드 BF 기준)")
+        # [중요] 조식 비중 탭 렌더링
+        st.subheader("🍳 조식 포함 여부 (서비스코드 K열 BF 기준)")
         if 'Breakfast' in target_df.columns:
             bf_stats = target_df.groupby('Breakfast').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
             c1, c2 = st.columns(2)
-            c1.plotly_chart(px.pie(bf_stats, values='RN', names='Breakfast', title="조식 비중"), use_container_width=True, key=f"{unique_key}_bf_pie")
-            c2.plotly_chart(px.bar(bf_stats, x='Breakfast', y='Room_Revenue'), use_container_width=True, key=f"{unique_key}_bf_bar")
+            c1.plotly_chart(px.pie(bf_stats, values='RN', names='Breakfast', title="조식 비중 (RN)"), use_container_width=True, key=f"{unique_key}_bf_pie")
+            c2.plotly_chart(px.bar(bf_stats, x='Breakfast', y='Room_Revenue', title="조식 여부별 매출"), use_container_width=True, key=f"{unique_key}_bf_bar")
             show_dataframe_with_style(add_total_row(bf_stats, 'Breakfast'))
 
 # ==============================================================================
@@ -400,6 +408,7 @@ try:
         df_filtered = df_all[df_all['Snapshot_Date'] == selected_date].copy()
         df = clean_numeric_columns(df_filtered)
         
+        # 데이터 분리
         df_otb = df[df['Segment'].astype(str).str.contains('OTB')]
         df_list = df[~df['Segment'].astype(str).str.contains('OTB')]
         df_paid_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] > 0)]
