@@ -435,7 +435,29 @@ def render_sob_dashboard(current_month, budget, total_rev, vs_budget, achv_rate,
         </div>
     </div>
     """)
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(html, unsafe_allow_html=True)    
+
+# --- 데이터 로드 상태 체크 함수 ---
+def check_data_status():
+    if "historical_dow" not in st.session_state:
+        st.sidebar.warning("⏳ 과거 패턴 데이터 로딩 필요")
+        if st.sidebar.button("📊 4만건 데이터 패턴 분석 시작"):
+            with st.status("파이어베이스 데이터 분석 중...", expanded=True) as status:
+                st.write("1. 파이어베이스 연결 시도...")
+                dow_indices, repeat_rate, _ = load_historical_patterns()
+                
+                st.write("2. 요일별 예약 패턴 계산 완료...")
+                st.session_state["historical_dow"] = dow_indices
+                
+                st.write("3. 재방문 고객 통계 산출 완료...")
+                st.session_state["repeat_rate"] = repeat_rate
+                
+                status.update(label="✅ 분석 완료! 포캐스팅 사용 가능", state="complete", expanded=False)
+    else:
+        st.sidebar.success("✅ 과거 패턴 로드 완료")
+
+# 사이드바 상단에서 실행
+check_data_status()
 
 # ==============================================================================
 # [5] 메인 실행 로직 (사이드바, 탭, 데이터 처리)
