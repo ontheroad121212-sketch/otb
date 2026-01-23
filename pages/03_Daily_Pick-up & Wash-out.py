@@ -489,14 +489,26 @@ except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
 
 
-# 1. 현재 파일에서 분석 중인 월(Month) 정보를 안전하게 가져오기
-# 만약 파일 내에 month라는 변수가 있다면 그것을 사용하고, 없다면 데이터에서 추출합니다.
+# --- 02_Room OTB Status.py 하단 수정 ---
+
+# 1. 월(Month) 정보 가져오기 (가장 안전한 방법)
+# 위쪽 코드에서 'current_month'나 'month'를 정의했다면 그것을 쓰고, 
+# 없으면 데이터프레임(df_curr)에서 직접 추출합니다.
 try:
-    # 사용자님의 find_header_and_process 함수가 반환한 month 값을 활용하거나
-    # df_curr['Date'].iloc[0].month 등을 활용할 수 있습니다.
-    save_month = month  # 기존 코드에서 정의된 month 변수 사용
-except NameError:
-    save_month = report_date.month # 사이드바의 날짜 기준
+    if 'current_month' in locals():
+        save_month = current_month
+    elif 'month' in locals():
+        save_month = month
+    elif 'df_curr' in locals() and df_curr is not None:
+        # 데이터프레임의 첫 번째 행 날짜에서 월 추출
+        save_month = df_curr['Date'].iloc[0].month
+    else:
+        # 이도 저도 안 되면 오늘 날짜 기준
+        import datetime
+        save_month = datetime.datetime.now().month
+except Exception:
+    import datetime
+    save_month = datetime.datetime.now().month
 
 # 2. 공용 게시판(session_state)에 데이터 전송
 if 'sob_curr' in locals() and sob_curr is not None:
