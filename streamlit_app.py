@@ -439,13 +439,23 @@ def render_sob_dashboard(current_month, budget, total_rev, vs_budget, achv_rate,
 # [5] 메인 실행 로직 (사이드바, 탭, 데이터 처리)
 # ==============================================================================
 
-# 사이드바 설정
+# --- 사이드바 설정 ---
 st.sidebar.header("⚙️ Report Settings")
 report_date = st.sidebar.date_input("기준 일자 (오늘)", datetime.now())
 report_date_str = report_date.strftime("%Y-%m-%d")
 
 compare_date = st.sidebar.date_input("비교 일자 (어제)", report_date - timedelta(days=1))
 compare_date_str = compare_date.strftime("%Y-%m-%d")
+
+# --- [추가] 관리자 인증 로직 ---
+st.sidebar.divider()
+with st.sidebar.expander("🔐 Admin Access", expanded=False):
+    admin_key = st.text_input("Password", type="password")
+    if admin_key == "master136": # 사용자님의 암호
+        st.session_state["authenticated"] = True
+        st.success("인증 완료 (Forecasting 활성화)")
+    else:
+        st.session_state["authenticated"] = False
 
 # 메인 타이틀
 st.title(f"🏨 Daily Pace Report")
@@ -473,15 +483,7 @@ for i, tab in enumerate(tabs):
         
         df_curr = None
         df_prev = None
-        sob_curr = None
-
-with st.sidebar:
-    admin_key = st.text_input("Admin Access", type="password")
-    if admin_key == "master136":
-        st.session_state["authenticated"] = True
-        st.success("인증되었습니다. 포캐스팅 메뉴를 이용하세요.")
-    else:
-        st.session_state["authenticated"] = False        
+        sob_curr = None 
         
         # ----------------------------------------------------------------------
         # 데이터 로드 전략: 파일 우선 -> 없으면 DB 조회
