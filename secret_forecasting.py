@@ -8,6 +8,26 @@ def run_forecasting():
     st.caption("4만 건의 과거 데이터를 기반으로 한 Booking Curve 모델링이 적용되었습니다.")
     st.markdown("---")
 
+    # 파이어베이스 분석 데이터 가져오기
+    dow_indices = st.session_state.get("historical_dow", {})
+    repeat_rate = st.session_state.get("repeat_rate", 0)
+    
+    # 오늘 요일에 해당하는 가중치 자동 적용
+    current_dow = datetime.now().weekday()
+    auto_dow_index = dow_indices.get(current_dow, 1.1) # 데이터 없으면 기본값 1.1
+
+    st.subheader("📊 데이터 기반 실전 분석")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("분석된 평균 재방문율", f"{repeat_rate:.1f}%")
+    with col2:
+        st.metric("오늘의 예약 강도 (요일 지수)", f"{auto_dow_index:.2f}x")
+
+    # [정밀 포캐스팅 수식 업데이트]
+    # 수동 슬라이더 값 대신 파이어베이스에서 추출된 auto_dow_index를 사용
+    projected_pickup = base_pace * auto_dow_index * rem_days
+    final_forecast = (total_otb + projected_pickup)
+
     # 1. 데이터 로드
     selected_month = st.sidebar.selectbox("분석 대상 월 선택", range(1, 13), index=datetime.now().month - 1)
     target_sob = st.session_state.get(f"sob_{selected_month}")
