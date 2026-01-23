@@ -4,112 +4,110 @@ import numpy as np
 from datetime import datetime
 
 def run_forecasting():
-    st.title("🏛️ 전략 RM 지배인 포캐스팅 (v10.0)")
-    st.caption("131실 가변 재고 모델 및 4만 건 예약 패턴 동기화 엔진")
+    st.title("⚖️ 131실 전용 정밀 RM 시뮬레이터")
+    st.caption("고장 객실(OOO) 및 가변 인벤토리를 반영한 지배인 전용 의사결정 도구")
 
-    # 1. 데이터 호출 및 세션 체크
+    # 1. 세션 데이터 확인
     selected_month = st.sidebar.selectbox("🎯 분석 대상 월", range(1, 13), index=datetime.now().month-1)
     target_sob = st.session_state.get(f"sob_{selected_month}")
     actual_pace = float(st.session_state.get(f"pace_{selected_month}", 0)) 
     dow_indices = st.session_state.get("historical_dow", {})
     
     if not target_sob:
-        st.warning("먼저 메인 리포트에서 해당 월의 데이터를 로드하세요.")
+        st.warning("메인 리포트에서 데이터를 먼저 로드해야 정밀 분석이 시작됩니다.")
         return
 
-    # [기본 물리량 설정]
+    # [131실 특화 물리량 설정]
     TOTAL_ROOMS = 131
-    MONTH_DAYS = 30 # 대상 월의 일수 (필요시 달력 연동 가능)
+    MONTH_DAYS = 31 if selected_month in [1,3,5,7,8,10,12] else 30
+    if selected_month == 2: MONTH_DAYS = 28
+    
     fit_otb = float(target_sob.get('FIT_RMS', 0))
     grp_otb = float(target_sob.get('GRP_RMS', 0))
     current_otb = fit_otb + grp_otb
     auto_dow_index = float(dow_indices.get(datetime.now().weekday(), 1.0))
 
-    # 2. 지배인 전략 변수 (인벤토리 및 리스크 관리)
-    st.subheader(f"📊 {selected_month}월 시뮬레이션 환경 설정")
-    
-    with st.container(border=True):
+    # 2. 지배인 전략 컨트롤러 (이 부분이 더 세밀해졌습니다)
+    st.write("### 🛠️ 실시간 전략 변수 설정")
+    with st.expander("📝 인벤토리 및 가속도 상세 설정", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.write("**🏨 인벤토리 관리**")
-            ooo_rooms = st.slider("일평균 고장 객실 (OOO)", 0, 10, 2)
-            net_capacity = (TOTAL_ROOMS - ooo_rooms) * MONTH_DAYS
-            st.caption(f"실 가용 객실: {net_capacity:,} Rms")
+            ooo_rooms = st.number_input("일평균 고장 객실 (OOO)", 0, 131, 2)
+            net_daily_cap = TOTAL_ROOMS - ooo_rooms
+            net_total_cap = net_daily_cap * MONTH_DAYS
         with c2:
-            st.write("**🔥 시장 모멘텀**")
-            accel = st.slider("예약 가속도 (Accel)", 0.5, 3.0, 1.1)
-            rem_days = st.number_input("남은 기간 (Days)", value=7, min_value=1)
+            accel = st.slider("📈 예약 가속도 (Accel)", 0.3, 3.0, 1.0, step=0.1)
+            rem_days = st.number_input("입실까지 남은 기간 (Days)", 1, 365, 7)
         with c3:
-            st.write("**💰 수익 지표**")
-            current_adr = int(target_sob.get('FIT_REV', 0)/max(1, fit_otb)) if fit_otb > 0 else 230000
-            target_adr = st.number_input("목표 ADR (평균단가)", value=current_adr, step=5000)
+            target_adr = st.number_input("목표 ADR (단가)", 50000, 1000000, 240000, step=5000)
+            washout = st.slider("예약 이탈율 (Wash-out %)", 0, 20, 3)
 
-    # 3. [정밀 수식 엔진]
-    # 리드타임 보정: 임박할수록 예약 밀도가 높아짐
-    lt_factor = (1.0 + (1.0 / np.log1p(rem_days)))
+    # 3. [고도화 엔진] Net Inventory 기반 수식
+    lt_factor = (1.0 + (1.0 / np.log1p(rem_days))) # 리드타임 보정
     
-    # 예상 픽업량 계산 (공급량 한계 설정)
-    expected_pickup = actual_pace * auto_dow_index * accel * lt_factor * rem_days
+    # 추가 픽업량 계산
+    future_pickup = actual_pace * auto_dow_index * accel * lt_factor * rem_days
+    # 취소분 계산
+    loss_val = current_otb * (washout / 100)
     
-    # Wash-out (취소 예상)
-    washout_rate = 0.03 # 기본 3% 설정
-    expected_loss = current_otb * washout_rate
-    
-    # 최종 예상 객실수 (가용 객실 초과 불가)
-    final_rms = min(net_capacity, (current_otb - expected_loss) + expected_pickup)
+    # [핵심] 131실 총량 제한 적용 (현실적인 숫자 산출)
+    final_rms = min(net_total_cap, (current_otb - loss_val) + future_pickup)
     final_rev = final_rms * target_adr
+    occ_pct = (final_rms / net_total_cap) * 100
 
-    # 4. 고도화된 대시보드 출력
+    # 4. 화려하지 않지만 '강력한' 데이터 대시보드
     st.divider()
     
-    # KPI 3종 지표
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    with kpi1:
+    # 상단 핵심 KPI
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
         st.metric("최종 예상 객실", f"{int(final_rms):,} Rms", f"{int(final_rms - current_otb):+d}")
-    with kpi2:
-        occ_pct = (final_rms / net_capacity) * 100
-        st.metric("예상 점유율(OCC)", f"{occ_pct:.1f}%")
-    with kpi3:
-        st.metric("예상 매출액", f"₩{int(final_rev/10000):,}만")
-    with kpi4:
-        # 예상 마감 속도 측정
-        days_to_full = (net_capacity - current_otb) / max(0.1, (expected_pickup / rem_days))
-        st.metric("만실 예상", f"{int(days_to_full)}일 뒤" if occ_pct < 100 else "SOLD OUT")
+    with m2:
+        st.metric("최종 예상 OCC", f"{occ_pct:.1f}%")
+    with m3:
+        st.metric("예상 총 매출", f"₩{int(final_rev/10000):,}만")
+    with m4:
+        # 잔여 객실 기반 마감 압박 지수
+        remaining_inventory = net_total_cap - final_rms
+        st.metric("잔여 판매 가능", f"{int(max(0, remaining_inventory))}실")
 
-    # 시각화 차트 영역
-    [Image of hotel room occupancy forecast chart comparing current OTB vs trend line vs total capacity]
-    
+    # 5. [신규] 전략적 분석 리포트 (지배인이 보고 싶어 하는 것)
     st.write("---")
+    col_left, col_right = st.columns([1.5, 1])
     
-    col_a, col_b = st.columns([1.5, 1])
-    
-    with col_a:
-        st.write("### 📈 시뮬레이션 상세 분석")
-        # 데이터프레임으로 깔끔하게 정리
-        analysis_df = pd.DataFrame({
-            "구분": ["현재 확정(OTB)", "예약 취소(Wash-out)", "미래 추가 픽업", "고장객실 손실"],
-            "객실수": [int(current_otb), int(-expected_loss), int(expected_pickup), int(-(ooo_rooms * MONTH_DAYS))],
-            "영향력": ["기본값", "낮음", "높음", "중간"]
-        })
-        st.table(analysis_df)
+    with col_left:
+        st.write("#### 📑 세부 예측 내역")
+        # 데이터프레임 구성
+        report_data = {
+            "항목": ["전체 가용 객실 (Gross)", "고장 객실 손실 (OOO)", "실질 가용 객실 (Net)", "현재 OTB", "미래 예상 픽업", "이탈 예상 (Wash)"],
+            "수치": [int(TOTAL_ROOMS * MONTH_DAYS), int(ooo_rooms * MONTH_DAYS), int(net_total_cap), int(current_otb), int(future_pickup), int(-loss_val)],
+            "비중": ["100%", f"{(ooo_rooms/TOTAL_ROOMS)*100:.1f}%", "-", f"{(current_otb/net_total_cap)*100:.1f}%", f"{(future_pickup/net_total_cap)*100:.1f}%", "-"]
+        }
+        st.table(pd.DataFrame(report_data))
+        [Image of a hotel yield management chart showing occupancy displacement and price sensitivity]
 
-    with col_b:
-        st.write("### 💡 RM 지배인 전략 제언")
-        if occ_pct > 90:
-            st.error("🚨 **OVERBOOKING 위험**")
-            st.write("현재 속도라면 만실이 예상됩니다. 즉시 저가 채널(OTA)을 닫고 ADR을 15% 이상 상향하세요.")
-        elif occ_pct > 75:
-            st.warning("⚡ **ADR 상향 구간**")
-            st.write("안정적인 수요가 확인되었습니다. 주말 단가를 높이고 연박(Min Stay) 제한을 검토하세요.")
+    with col_right:
+        st.write("#### 🎯 RM 전략 권고")
+        # 점유율 구간별 지배인 행동 지침
+        if occ_pct > 95:
+            st.error("🚨 **FULL-HOUSE 경보**")
+            st.write("가용 객실이 거의 없습니다. 모든 저가 채널을 즉시 닫고, 대기 예약을 관리하세요. 취소 위약금 규정을 엄격히 적용할 때입니다.")
+        elif occ_pct > 80:
+            st.warning("⚡ **수익 극대화 구간**")
+            st.write("안정적인 만실이 예상됩니다. ADR을 공격적으로 높여 RevPAR를 끌어올리세요. 1박 예약보다는 연박 예약을 우선 수선하세요.")
+        elif occ_pct > 60:
+            st.info("📈 **판매 가속 구간**")
+            st.write("흐름이 좋습니다. 주요 OTA 노출을 강화하고 패키지 판매를 통해 점유율을 80%대까지 견인하세요.")
         else:
-            st.info("📉 **수요 촉진 구간**")
-            st.write("픽업 속도가 더딥니다. 당일 특가 또는 패키지 노출을 강화하여 OCC를 끌어올려야 합니다.")
+            st.error("📉 **긴급 수요 창출 필요**")
+            st.write("현재 픽업 속도로는 목표 달성이 어렵습니다. 플래시 세일이나 법인 특가 제안을 검토해야 합니다.")
 
-    # 5. 과거 4만건 기반 요일별 인사이트 (세밀한 기능 추가)
-    with st.expander("🔍 과거 데이터 기반 요일별 ADR 전략 정보"):
-        st.write(f"현재 분석된 요일({datetime.now().strftime('%A')})의 예약 강도는 **{auto_dow_index:.2f}배** 입니다.")
-        st.write("- **평일(월-목):** 비즈니스 수요 위주, 안정적 단가 유지 필요")
-        st.write("- **주말(금-일):** 레저 수요 집중, 높은 ADR 탄력성 확인됨")
+    # 6. [데이터 신뢰도] 요일별 가중치 상세
+    with st.expander("🔍 분석 근거 (4만 건 데이터 요일 지수)"):
+        dow_df = pd.DataFrame(list(dow_indices.items()), columns=['요일', '가중치'])
+        dow_df['요일'] = dow_df['요일'].map({0:'월', 1:'화', 2:'수', 3:'목', 4:'금', 5:'토', 6:'일'})
+        st.line_chart(dow_df.set_index('요일'))
+        st.caption("※ 1.0보다 높으면 평균보다 예약이 많이 들어오는 요일입니다.")
 
 if __name__ == "__main__":
     run_forecasting()
