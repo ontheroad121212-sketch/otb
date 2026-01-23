@@ -212,9 +212,9 @@ if st.session_state.get("authenticated"):
                     db = firestore.client()
                     
                     # 1. 전 구역 수색 (Collection Group) - 하위 계층까지 싹 수집
-                    st.write("🔎 전 구역에서 'hotel_booking' 데이터를 수색합니다...")
-                    # [주의] 컬렉션명이 hotel_booking인지 hotel_bookings인지 확인 후 자동 대응
-                    docs = db.collection_group("hotel_booking").stream()
+                    st.write("🔎 전 구역에서 'hotel_bookings' 데이터를 수색합니다...")
+                    # [주의] 컬렉션명이 hotel_bookings인지 hotel_bookings인지 확인 후 자동 대응
+                    docs = db.collection_group("hotel_bookings").stream()
                     
                     hist_data = []
                     count = 0
@@ -256,7 +256,7 @@ if st.session_state.get("authenticated"):
                             st.error("❌ 날짜 필드를 찾지 못해 분석을 중단했습니다.")
                     else:
                         # 데이터가 0건일 때 수색 기능
-                        st.error("⚠️ 'hotel_booking' 데이터를 찾을 수 없습니다.")
+                        st.error("⚠️ 'hotel_bookings' 데이터를 찾을 수 없습니다.")
                         st.write("---")
                         st.write("🔎 **DB 내부 실제 컬렉션 목록:**")
                         all_cols = db.collections()
