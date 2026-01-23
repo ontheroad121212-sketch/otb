@@ -53,6 +53,42 @@ if st.session_state.get("authenticated"):
                 st.success("데이터 로드 완료!")
                 st.rerun()
 
+def run_forecasting():
+    st.title("🎯 데이터 기반 정밀 포캐스팅 (v7.0)")
+    
+    selected_month = st.sidebar.selectbox("대상 월", range(1, 13), index=datetime.now().month-1)
+    target_sob = st.session_state.get(f"sob_{selected_month}")
+    
+    # 1. 메인 리포트의 17박(Pace)과 4만 건의 요일 지수 가져오기
+    real_pace = float(st.session_state.get(f"pace_{selected_month}", 0))
+    dow_indices = st.session_state.get("historical_dow", {})
+    
+    if not target_sob:
+        st.warning("먼저 메인 리포트에서 해당 월의 탭을 클릭해 데이터를 로드하세요.")
+        return
+
+    # 2. 기초 지표 설정 (2400박 보존)
+    current_otb = float(target_sob.get('FIT_RMS', 0) + target_sob.get('GRP_RMS', 0))
+    current_dow = datetime.now().weekday()
+    dow_weight = float(dow_indices.get(current_dow, 1.0))
+
+    # 3. 정밀 시뮬레이션 (산수: 2400 + (17 * 요일지수 * 가속도 * 7일))
+    st.subheader(f"📊 현재 실적: {int(current_otb)} Rms 기준")
+    col1, col2 = st.columns(2)
+    with col1:
+        rem_days = st.number_input("남은 기간 (Days)", value=7)
+        accel = st.slider("예약 가속도 (Market Accel)", 0.5, 3.0, 1.2)
+    
+    future_pickup = real_pace * dow_weight * accel * rem_days
+    final_forecast = current_otb + future_pickup # 마이너스 방지
+
+    # 4. 결과 출력
+    st.divider()
+    st.metric("최종 예상 실적", f"{int(final_forecast)} Rms", 
+              delta=f"+{int(future_pickup)} Rms (현재 OTB 대비)")
+    
+    st.info(f"💡 근거: 일평균 {real_pace}박 픽업 + 4만건 기반 요일지수({dow_weight:.2f}x) 적용")
+
 # ==============================================================================
 # [1] 페이지 기본 설정
 # ==============================================================================
@@ -499,6 +535,46 @@ if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 with st.sidebar:
+    st.sidebar.header("⚙️ Settings")
+    admin_key = st.text_input("Admin", type="password")
+    if admin_key == "master136":
+        st.session_state["authenticated"] = True
+    
+    if st.session_state.get("authenticated"):
+        st.success("Admin Mode On")
+        selected_page = st.radio("Navigation", ["Main Report", "🎯 Forecasting"])
+        
+        # ---------------------------------------------------------
+        # [추가] 4만 건 컬렉션(revenue_integrity_history) 통합 분석 로직
+        # ---------------------------------------------------------
+        if "historical_dow" not in st.session_state:
+            if st.sidebar.button("📊 4만건 히스토리 전체 분석"):
+                with st.status("이미지의 revenue_integrity_history 분석 중..."):
+                    # 1. 파이어베이스 컬렉션 직접 호출
+                    hist_docs = db.collection("revenue_integrity_history").stream()
+                    hist_data = [d.to_dict() for d in hist_docs]
+                    
+                    if hist_data:
+                        h_df = pd.DataFrame(hist_data)
+                        # 예약 생성일 기준 필드 자동 탐색 (created_at, booking_date 등)
+                        bd_col = next((c for c in h_df.columns if c.lower() in ['created_at', 'booking_date', 'date']), None)
+                        
+                        if bd_col:
+                            h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
+                            h_df = h_df.dropna(subset=['b_date'])
+                            h_df['dow'] = h_df['b_date'].dt.dayofweek
+                            # 요일별 예약 강도 지수화 (Booking Pace의 핵심)
+                            st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
+                        
+                        # 재방문율 분석
+                        cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'guest_id', 'phone']), None)
+                        if cust_col:
+                            st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
+                        
+                        st.success("✅ 분석 완료! 포캐스팅에 반영됩니다.")
+                        st.rerun()
+        else:
+            st.sidebar.success("✅ 과거 패턴 로드 완료"):
     st.sidebar.header("⚙️ Settings")
     # 구석에 작게 배치 (총지배인님이 눈치 못 채게)
     admin_key = st.text_input("Admin", type="password", help="인증 시 비밀 메뉴가 활성화됩니다.")
