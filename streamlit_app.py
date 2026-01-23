@@ -209,10 +209,7 @@ if st.session_state.get("authenticated"):
                     st.write("📡 파이어베이스 서버에 접속 중...")
                     db = firestore.client()
                     
-                    # ---------------------------------------------------------
                     # 1. 전 구역 수색 (Collection Group)
-                    # 하위 폴더 어디에 있든 'hotel_booking' 이름이면 싹 긁어옵니다.
-                    # ---------------------------------------------------------
                     st.write("🔎 전 구역에서 'hotel_booking' 데이터를 수색합니다...")
                     docs = db.collection_group("hotel_booking").stream()
                     
@@ -226,24 +223,19 @@ if st.session_state.get("authenticated"):
                         if count % 1000 == 0:
                             status_placeholder.write(f"📥 현재 {count:,}건 로드 중... (연결 유지 중)")
                     
-                    # ---------------------------------------------------------
-                    # 2. 결과 처리 및 예외 상황 대응 (0건일 때 탐사 기능 포함)
-                    # ---------------------------------------------------------
+                    # 2. 결과 처리 및 지표 계산
                     if count > 0:
                         st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
                         h_df = pd.DataFrame(hist_data)
                         
-                        # 예약 생성일 필드 자동 탐색 (booking_date, created_at, date 등)
-                        bd_col = next((c for c in h_df.columns if c.lower() in ['booking_date', 'created_at', 'reservation_date', 'date']), None)
-                        
+                        bd_col = next((c for c in h_df.columns if c.lower() in ['booking_date', 'created_at', 'date']), None)
                         if bd_col:
                             h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
                             h_df = h_df.dropna(subset=['b_date'])
                             h_df['dow'] = h_df['b_date'].dt.dayofweek
-                            # 요일 지수 세션 저장 (4만 건의 평균을 1.0으로 둠)
+                            # 요일 지수 세션 저장
                             st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
                             
-                            # 추가 통계 (재방문율)
                             cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'phone', 'guest_name']), None)
                             if cust_col:
                                 st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
@@ -252,24 +244,18 @@ if st.session_state.get("authenticated"):
                         st.rerun()
                         
                     else:
-                        # 0건일 경우: 지배인님을 위해 진짜 컬렉션 이름이 뭔지 뒤져서 보여줍니다.
                         st.error("⚠️ 'hotel_booking' 데이터를 찾을 수 없습니다.")
                         st.write("---")
-                        st.write("🔎 **DB 내부 실제 컬렉션 목록 (오타 확인용):**")
-                        
-                        # 최상위 컬렉션 목록 추출
+                        st.write("🔎 **DB 내부 실제 컬렉션 목록:**")
                         all_cols = db.collections()
                         col_names = [c.id for c in all_cols]
-                        
                         if col_names:
                             st.info(f"📌 발견된 이름들: {', '.join(col_names)}")
-                            st.caption("위 이름 중 예약번호가 담긴 이름을 찾아 알려주시면 바로 수정해 드릴게요!")
                         else:
-                            st.error("❌ DB 연결은 성공했으나 접근 가능한 컬렉션이 하나도 없습니다.")
+                            st.error("❌ 접근 가능한 컬렉션이 없습니다.")
 
                 except Exception as e:
                     st.error(f"❌ 연결 실패 원인: {str(e)}")
-                    st.info("💡 팁: 인터넷 연결이나 파이어베이스 서비스 계정 권한을 확인해 보세요.")
 
 if selected_page == "🎯 Forecasting":
     secret_forecasting.run_forecasting()
