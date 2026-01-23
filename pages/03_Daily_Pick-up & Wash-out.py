@@ -12,7 +12,6 @@ import time
 # ==============================================================================
 # 0. 사용자 정의 버짓 데이터 (1월~12월 목표 매출)
 # ==============================================================================
-# 2026년도 월별 목표 매출 데이터입니다.
 BUDGET_DATA = { 
     1: 514992575, 
     2: 786570856, 
@@ -88,7 +87,6 @@ st.markdown("""
 # ==============================================================================
 # 2. 파이어베이스 데이터베이스 연결
 # ==============================================================================
-# 이미 앱이 실행 중이면 기존 연결을 사용하고, 없으면 새로 연결합니다.
 if not firebase_admin._apps:
     try:
         cred = credentials.Certificate(dict(st.secrets["firebase"]))
@@ -112,20 +110,23 @@ def clean_numeric_columns(df):
     target_cols = [
         'RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total', 
         'Lead_Time', 'OTB_Rev', 'Budget_Rev', 'Budget_Achiev', 'OTB_RN', 
-        'OTB_ADR', 'Actual_Rev', 'Actual_RN'
+        'OTB_ADR', 'Actual_Rev', 'Actual_RN', 'Rooms', 'Nights'
     ]
     
     for col in target_cols:
         if col in df.columns:
-            # 문자열로 변환 -> 콤마 제거 -> nan 제거 -> 숫자 변환
-            # 통화 기호 등 특수문자 제거 로직 강화 (수정됨)
+            # 문자열로 변환 -> 콤마, 통화기호, 공백 제거 -> 숫자 변환
             df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(',', '').str.replace('₩', '').str.replace('$', '').str.replace('nan', '0'), 
+                df[col].astype(str)
+                .str.replace(',', '')
+                .str.replace('₩', '')
+                .str.replace('$', '')
+                .str.replace(' ', '')
+                .str.replace('nan', '0'), 
                 errors='coerce'
             ).fillna(0)
             
     # ADR(객실단가) 재계산 로직 (매출 / 박수)
-    # RN이 0인 경우 0으로 처리하여 에러 방지
     if 'RN' in df.columns:
         if 'Room_Revenue' in df.columns:
             df['ADR_Room'] = np.where(df['RN'] > 0, df['Room_Revenue'] / df['RN'], 0)
@@ -137,16 +138,13 @@ def clean_numeric_columns(df):
 def save_to_firestore(df):
     """
     전처리된 데이터프레임을 파이어베이스 DB에 저장합니다.
-    리스트 형태(records)로 변환하여 하나의 문서에 저장합니다.
     """
     try:
         if df.empty:
             return False
             
-        # 데이터프레임을 딕셔너리 리스트로 변환
         records = df.fillna(0).astype(str).to_dict(orient='records')
         
-        # Firestore 컬렉션에 추가
         db.collection(COLLECTION_NAME).add({
             'data': records,
             'uploaded_at': datetime.now(),
@@ -161,7 +159,6 @@ def save_to_firestore(df):
 def load_data_from_firestore():
     """
     파이어베이스 DB에서 모든 데이터를 불러옵니다.
-    캐싱(cache)을 사용하여 속도를 높이되, ttl=0으로 최신 상태를 유지합니다.
     """
     try:
         docs = db.collection(COLLECTION_NAME).stream()
@@ -170,12 +167,10 @@ def load_data_from_firestore():
         for doc in docs:
             doc_dict = doc.to_dict()
             if 'data' in doc_dict:
-                # 문서의 스냅샷 날짜 가져오기
                 doc_date = doc_dict.get('snapshot_date', '')
                 rows = doc_dict['data']
                 
                 for row in rows:
-                    # 개별 행에 스냅샷 날짜가 없으면 문서 날짜를 할당
                     if 'Snapshot_Date' not in row or not row['Snapshot_Date']:
                         row['Snapshot_Date'] = doc_date
                     all_data.append(row)
@@ -188,7 +183,6 @@ def load_data_from_firestore():
 def delete_otb_data_only():
     """
     기존 DB에서 OTB(On The Books) 데이터만 골라서 삭제합니다.
-    초기화 버튼 클릭 시 실행됩니다.
     """
     try:
         docs = db.collection(COLLECTION_NAME).stream()
@@ -199,7 +193,6 @@ def delete_otb_data_only():
             if 'data' in doc_data and len(doc_data['data']) > 0:
                 first_row = doc_data['data'][0]
                 
-                # 데이터의 세그먼트나 이름에 'OTB'가 포함되어 있는지 확인
                 segment = str(first_row.get('Segment', ''))
                 g_name = str(first_row.get('Guest_Name', ''))
                 
@@ -213,13 +206,12 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 및 매핑 로직 (OTB 로직 강화)
+# 4. 엑셀/CSV 파일 처리 및 매핑 로직
 # ==============================================================================
 
 def normalize_and_map_columns(df):
     """
     다양한 이름의 컬럼들을 표준화된 이름으로 매핑합니다.
-    예: '객실료', '매출', 'Room Charge' -> 'Room_Revenue'
     """
     col_map = {}
     rules = {
@@ -234,7 +226,7 @@ def normalize_and_map_columns(df):
         'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
         'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
-        'Service_Code': ['service', '서비스', 'code'], # 조식 식별용
+        'Service_Code': ['service', '서비스', 'code'], 
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
         'Lead_Time': ['lead', '리드', 'lt', 'l/t']
     }
@@ -246,7 +238,6 @@ def normalize_and_map_columns(df):
         for target_col, keywords in rules.items():
             for kw in keywords:
                 if kw in clean_col:
-                    # 중복 매핑 방지 규칙
                     if target_col == 'Room_Revenue' and 'total' in clean_col: continue
                     if target_col == 'Total_Revenue' and 'room' in clean_col and 'total' not in clean_col: continue
                     if target_col == 'CheckIn' and ('book' in clean_col or 'res' in clean_col): continue
@@ -259,58 +250,37 @@ def normalize_and_map_columns(df):
             
     return df.rename(columns=col_map)
 
-def find_valid_header_row(df):
-    """
-    엑셀 파일의 실제 헤더(제목 줄) 위치를 찾아 데이터프레임을 정리합니다.
-    """
-    for i, row in df.iterrows():
-        row_str = " ".join(row.astype(str).values).lower()
-        # 헤더로 추정되는 키워드들이 포함되어 있는지 확인
-        keywords = ['guest', 'name', 'check', 'date', 'room', '고객', '입실', '객실']
-        if sum(1 for k in keywords if k in row_str) >= 2:
-            df.columns = df.iloc[i]
-            return df.iloc[i+1:].reset_index(drop=True)
-    return df
-
 def process_data(uploaded_file, status, force_otb=False):
     """
-    업로드된 파일을 읽고 표준 형식으로 가공하는 핵심 함수입니다.
-    force_otb=True인 경우 파일 이름과 상관없이 OTB 로직을 강제합니다.
+    [핵심 수정] 
+    1. 헤더 자동 찾기 (키워드 매칭)
+    2. OTB: 무조건 마지막 열(Last Column)을 매출로 인식
+    3. 조식: Service_Code에 'BF' 포함 여부로 판단
     """
     try:
-        # OTB 파일인지 판단 (이름 또는 강제 설정)
         is_filename_otb = "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
         is_otb = force_otb or is_filename_otb
         
-        # 파일 포인터 초기화 (중요)
+        # 파일 포인터 초기화
         uploaded_file.seek(0)
         
-        # 파일 읽기
         if uploaded_file.name.endswith('.csv'):
             df_raw = pd.read_csv(uploaded_file, header=None)
         else:
             df_raw = pd.read_excel(uploaded_file, header=None)
 
-        # 헤더 찾기 로직 (OTB일 경우 키워드 확장)
-        keywords = ['guest', 'name', 'check', 'date', 'room', '고객', '입실']
-        if is_otb:
-            keywords += ['revenue', 'rev', '매출', '합계', 'total', 'amount']
+        # 헤더 자동 찾기 (상위 20행 검사)
+        keywords = ['guest', 'name', 'check', 'date', 'room', '고객', '입실', '객실', '서비스', '매출', '일자']
+        best_row = 0; max_hit = 0
+        for i, row in df_raw.head(20).iterrows():
+            hit = sum(1 for k in keywords if k in str(row.values).lower())
+            if hit > max_hit: max_hit = hit; best_row = i
         
-        header_found = False
-        for i, row in df_raw.iterrows():
-            if sum(1 for k in keywords if k in str(row.values).lower()) >= 2:
-                df_raw.columns = df_raw.iloc[i]
-                df_raw = df_raw.iloc[i+1:].reset_index(drop=True)
-                header_found = True
-                break
+        df_raw.columns = df_raw.iloc[best_row]
+        df_raw = df_raw.iloc[best_row+1:].reset_index(drop=True)
         
-        # 헤더를 못 찾았는데 OTB라면 첫 줄을 헤더로 가정 (안전장치)
-        if is_otb and not header_found:
-            uploaded_file.seek(0)
-            if uploaded_file.name.endswith('.csv'):
-                df_raw = pd.read_csv(uploaded_file, header=0)
-            else:
-                df_raw = pd.read_excel(uploaded_file, header=0)
+        # 컬럼 이름 공백 제거
+        df_raw.columns = [str(c).strip() for c in df_raw.columns]
 
         # ---------------------------------------------------------
         # Case A: OTB (On The Books) 데이터 처리
@@ -328,22 +298,21 @@ def process_data(uploaded_file, status, force_otb=False):
             
             df['CheckIn'] = pd.to_datetime(df_raw[date_col], errors='coerce')
             
-            # [수정] OTB 매출 컬럼 찾기 (무조건 가장 마지막 열을 가져옴)
+            # [수정] OTB 매출 컬럼: 무조건 가장 마지막 열(iloc[:, -1]) 사용
             try:
-                # 데이터가 있는 가장 마지막 열을 찾기 위해 dropna를 하지 않고 iloc 사용
-                # 사용자가 "테이블 가장 오른쪽 열"이라고 지정했으므로 -1 사용
+                # 데이터가 있는 가장 마지막 열을 찾기 위해 -1 인덱스 사용
                 df['Room_Revenue'] = pd.to_numeric(
                     df_raw.iloc[:, -1].astype(str).str.replace(',', '').str.replace('₩', '').str.replace('nan', '0'), 
                     errors='coerce'
                 ).fillna(0)
                 
-                # 객실수(RN) 찾기
-                rn_cols = [c for c in df_raw.columns if any(k in str(c) for k in ['객실수', 'RN', 'Qty', 'Rm'])]
-                if rn_cols:
-                    target_rn_col = rn_cols[-1]
+                # 객실수(RN) 찾기 (보통 매출 앞쪽)
+                rn_candidates = [c for c in df_raw.columns if any(k in str(c).upper() for k in ['RN', '객실수', 'QTY', 'ROOMS'])]
+                if rn_candidates:
+                    target_rn_col = rn_candidates[-1]
                     df['RN'] = pd.to_numeric(df_raw[target_rn_col], errors='coerce').fillna(0)
                 else:
-                    # 대략 뒤에서 5번째가 객실수인 경우가 많음
+                    # 없으면 뒤에서 5번째 열 (Fallback)
                     df['RN'] = pd.to_numeric(df_raw.iloc[:, -5], errors='coerce').fillna(0)
                 
                 df['Total_Revenue'] = df['Room_Revenue']
@@ -360,7 +329,7 @@ def process_data(uploaded_file, status, force_otb=False):
             df['Nat_Orig'] = 'KR'
             df['Booking_Date'] = df['CheckIn']
             df['Lead_Time'] = 0
-            df['Breakfast'] = 'Unknown' # OTB는 조식 정보 보통 없음
+            df['Breakfast'] = 'Unknown'
             
         # ---------------------------------------------------------
         # Case B: 일반 예약/취소 리스트 처리
@@ -369,10 +338,9 @@ def process_data(uploaded_file, status, force_otb=False):
             # 합계 행 제거
             df_raw = df_raw[~df_raw.iloc[:, 0].astype(str).str.contains('합계|Total|소계|Subtotal', case=False, na=False)]
             
-            # 컬럼 매핑 실행
             df = normalize_and_map_columns(df_raw).copy()
             
-            # 필수 컬럼 확인 및 기본값 채우기
+            # 필수 컬럼 채우기
             req_cols = ['Rooms', 'Nights', 'Room_Revenue', 'Total_Revenue', 'Guest_Name', 'Segment', 'Account', 'Room_Type', 'Nat_Orig', 'Lead_Time', 'Rate_Plan', 'Service_Code']
             for c in req_cols:
                 if c not in df.columns: 
@@ -381,17 +349,16 @@ def process_data(uploaded_file, status, force_otb=False):
                     else: 
                         df[c] = 'Unknown'
 
-            # 숫자 변환
-            for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time']:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
+            # 숫자 변환 (clean_numeric_columns에서 처리되지만 RN 계산 위해 미리 변환)
+            for c in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time']:
+                df[c] = pd.to_numeric(df[c].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
             
             df['Total_Revenue'] = np.where(df['Total_Revenue'] == 0, df['Room_Revenue'], df['Total_Revenue'])
             df['RN'] = df['Rooms'] * df['Nights'].replace(0, 1)
             
-            # [수정] 조식 식별 로직 - Service_Code에 'BF'가 포함되어 있는지 확인
+            # [수정] 조식 식별 로직: Service_Code에 'BF'가 포함되면 조식 포함
             def check_breakfast(row):
                 svc_code = str(row.get('Service_Code', '')).upper()
-                # 서비스코드에 'BF'가 포함되어 있으면 조식 포함으로 간주
                 if 'BF' in svc_code:
                     return 'Included (조식포함)'
                 return 'Not Included (불포함)'
@@ -405,13 +372,10 @@ def process_data(uploaded_file, status, force_otb=False):
         df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['Booking_dt'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
         
-        # 예약일 없는 경우 체크인 날짜로 대체
         df.loc[df['Booking_dt'].isna(), 'Booking_dt'] = df.loc[df['Booking_dt'].isna(), 'CheckIn_dt']
         
-        # 날짜 오류 데이터 제거
         df = df.dropna(subset=['CheckIn_dt'])
         
-        # 분석용 날짜 컬럼 생성
         df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
         df['Stay_YearWeek'] = df['CheckIn_dt'].dt.strftime('%Y-%U주')
@@ -419,7 +383,6 @@ def process_data(uploaded_file, status, force_otb=False):
         df['Weekday_Num'] = df['CheckIn_dt'].dt.weekday
         df['Day_Type'] = df['Weekday_Num'].apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
         
-        # 국적 그룹핑
         def classify_nat(row):
             name = str(row.get('Guest_Name', ''))
             orig = str(row.get('Nat_Orig', '')).upper()
@@ -428,15 +391,13 @@ def process_data(uploaded_file, status, force_otb=False):
             return 'OTH'
         df['Nat_Group'] = df.apply(classify_nat, axis=1)
         
-        # 숫자 컬럼 최종 정리
         return clean_numeric_columns(df)
 
     except Exception as e:
-        # 에러 발생 시 빈 프레임 반환 (시스템 멈춤 방지)
         return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 렌더링 헬퍼 함수들 (Key 오류 방지 추가됨)
+# 5. UI 렌더링 헬퍼 함수들 (오류 수정됨)
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
@@ -456,7 +417,6 @@ def add_total_row(df, group_col_name="구분"):
     else:
         total_row[df.columns[0]] = "TOTAL"
 
-    # ADR 재계산
     if 'RN' in total_row and total_row['RN'] > 0:
         if 'Room_Revenue' in total_row:
             total_row['ADR_Room'] = total_row['Room_Revenue'] / total_row['RN']
@@ -468,6 +428,7 @@ def add_total_row(df, group_col_name="구분"):
             
     return pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
 
+# [수정] 함수 이름 통일: show_dataframe_with_style
 def show_dataframe_with_style(df):
     """
     데이터프레임을 보기 좋게 스타일링하여 출력합니다.
@@ -482,7 +443,6 @@ def show_dataframe_with_style(df):
     if 'Budget_Achiev' in df.columns:
         styler = styler.format({'Budget_Achiev': "{:.1f}%"})
     
-    # 합계 행 강조 스타일
     def highlight_total(row):
         is_total = False
         for val in row:
@@ -494,13 +454,12 @@ def show_dataframe_with_style(df):
 
 def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"):
     """
-    [수정] unique_key를 인자로 받아서 plotly_chart의 ID 중복 에러를 방지합니다.
+    분석 탭 렌더링 함수
     """
     if target_df.empty:
         st.warning(f"⚠️ {title_prefix} 데이터가 없습니다.")
         return
 
-    # 탭 구성 (조식 포함)
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         "📊 세그먼트", "📅 Pacing", "🏢 거래처", 
         "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일", "🌐 국적", "🍳 조식"
@@ -513,7 +472,6 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
         seg_stats['ADR_Total'] = np.where(seg_stats['RN']>0, seg_stats['Total_Revenue']/seg_stats['RN'], 0)
         
         c1, c2 = st.columns(2)
-        # unique_key를 사용하여 ID 중복 방지
         c1.plotly_chart(px.pie(seg_stats, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True, key=f"{unique_key}_seg_pie")
         c2.plotly_chart(px.bar(seg_stats, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True, key=f"{unique_key}_seg_bar")
         
