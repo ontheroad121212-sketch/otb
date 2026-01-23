@@ -80,13 +80,13 @@ BUDGET_DATA = {1:514992575, 2:786570856, 3:529599040, 4:695351004, 5:903705440, 
                7:1231949142, 8:1388376999, 9:952171506, 10:897171539, 11:667146771, 12:804030110}
 
 def load_all_historical_data():
-    """hotel_booking 컬렉션에서 4만 건의 예약 데이터를 직접 분석"""
+    """hotel_bookings 컬렉션에서 4만 건의 예약 데이터를 직접 분석"""
     db = firestore.client()
-    st.write("📡 hotel_booking 데이터베이스 연결 중...")
+    st.write("📡 hotel_bookings 데이터베이스 연결 중...")
     
     # 1. 4만 건을 한꺼번에 가져오기 위한 스트림 설정
     # (주의: 데이터가 너무 많으면 시간이 걸리므로 덩어리로 끊어서 로드하는 것이 안전함)
-    docs = db.collection("hotel_booking").stream()
+    docs = db.collection("hotel_bookings").stream()
     
     data = []
     count = 0
@@ -209,8 +209,8 @@ if st.session_state.get("authenticated"):
                     db = firestore.client()
                     
                     # 1. 전 구역 수색 (Collection Group) - 하위 계층까지 싹 뒤집니다.
-                    st.write("🔎 전 구역에서 'hotel_booking' 데이터를 수색합니다...")
-                    docs = db.collection_group("hotel_booking").stream()
+                    st.write("🔎 전 구역에서 'hotel_bookings' 데이터를 수색합니다...")
+                    docs = db.collection_group("hotel_bookings").stream()
                     
                     hist_data = []
                     count = 0
@@ -245,7 +245,7 @@ if st.session_state.get("authenticated"):
                         st.rerun()
                         
                     else:
-                        st.error("⚠️ 'hotel_booking' 데이터를 찾을 수 없습니다.")
+                        st.error("⚠️ 'hotel_bookings' 데이터를 찾을 수 없습니다.")
                         st.write("---")
                         st.write("🔎 **DB 내부 실제 컬렉션 목록:**")
                         all_cols = db.collections()
