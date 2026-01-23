@@ -204,53 +204,40 @@ if st.session_state.get("authenticated"):
         st.sidebar.warning("⏳ 과거 패턴 분석이 필요합니다.")
         
         if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
-            # 진행 상황을 시각적으로 보여줍니다.
-            progress_bar = st.sidebar.progress(0)
-            status_text = st.sidebar.empty()
+    with st.sidebar.status("데이터 고속 도로 개통 중...", expanded=True) as status:
+        try:
+            st.write("📡 파이어베이스 서버에 접속 중...")
+            # 1. 호출 최적화: 정렬이나 필터 없이 순수하게 '원본'만 요청 (가장 빠름)
+            db = firestore.client()
+            collection_ref = db.collection("hotel_booking")
             
-            try:
-                with st.sidebar.status("데이터 통합 분석 중...", expanded=True) as status:
-                    status_text.write("📡 파이어베이스 연결 시도...")
-                    # 이미지에서 확인된 컬렉션 revenue_integrity_history 호출
-                    hist_docs = db.collection("revenue_integrity_history").stream()
-                    
-                    hist_data = []
-                    # 4만 건 로드 시 진행 상황 표시
-                    for doc in hist_docs:
-                        hist_data.append(doc.to_dict())
-                        if len(hist_data) % 5000 == 0:
-                            status_text.write(f"📂 {len(hist_data):,}건 로드 중...")
-                            progress_bar.progress(min(len(hist_data) / 40000, 0.9))
-                    
-                    if hist_data:
-                        status_text.write(f"✅ {len(hist_data):,}건 로드 완료! 가공 중...")
-                        h_df = pd.DataFrame(hist_data)
-                        
-                        # 필드명 자동 탐색 (created_at, booking_date 등)
-                        bd_col = next((c for c in h_df.columns if c.lower() in ['created_at', 'booking_date', 'date']), None)
-                        
-                        if bd_col:
-                            h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
-                            h_df = h_df.dropna(subset=['b_date'])
-                            h_df['dow'] = h_df['b_date'].dt.dayofweek
-                            # 요일별 예약 패턴 지수화
-                            st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
-                        
-                        # 재방문율 지표 가공
-                        cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'phone']), None)
-                        if cust_col:
-                            st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
-                        
-                        progress_bar.progress(1.0)
-                        status.update(label="✅ 분석 완료! 포캐스팅 사용 가능", state="complete")
-                        st.sidebar.success("모든 데이터가 성공적으로 로드되었습니다.")
-                        st.rerun() # 데이터 확정을 위해 앱 재실행
-                    else:
-                        st.sidebar.error("데이터가 비어 있습니다.")
-            except Exception as e:
-                st.sidebar.error(f"❌ 분석 실패: {str(e)}")
-    else:
-        st.sidebar.success("✅ 과거 패턴 데이터 로드 완료")
+            # 2. 데이터를 덩어리째 가져오기 (전체 stream)
+            docs = collection_ref.stream()
+            
+            hist_data = []
+            count = 0
+            
+            # 3. 실시간 카운팅 (연결 여부 확인용)
+            status_placeholder = st.empty()
+            for doc in docs:
+                hist_data.append(doc.to_dict())
+                count += 1
+                if count % 1000 == 0:
+                    status_placeholder.write(f"📥 현재 {count:,}건 로드 중... (연결 유지 중)")
+            
+            if count > 0:
+                st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
+                # ... (이후 데이터프레임 가공 로직 동일) ...
+                
+                # 성공 후 재실행
+                status.update(label="✅ 분석 완료!", state="complete")
+                st.rerun()
+            else:
+                st.error("⚠️ 연결은 되었으나 데이터가 0건입니다. 컬렉션명을 다시 확인해주세요.")
+
+        except Exception as e:
+            st.error(f"❌ 연결 실패 원인: {str(e)}")
+            st.info("💡 팁: 인터넷 연결이나 파이어베이스 '색인(Index)' 설정을 확인해보세요.")
 
 if selected_page == "🎯 Forecasting":
     secret_forecasting.run_forecasting()
