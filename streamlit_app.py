@@ -474,6 +474,14 @@ for i, tab in enumerate(tabs):
         df_curr = None
         df_prev = None
         sob_curr = None
+
+with st.sidebar:
+    admin_key = st.text_input("Admin Access", type="password")
+    if admin_key == "master136":
+        st.session_state["authenticated"] = True
+        st.success("인증되었습니다. 포캐스팅 메뉴를 이용하세요.")
+    else:
+        st.session_state["authenticated"] = False        
         
         # ----------------------------------------------------------------------
         # 데이터 로드 전략: 파일 우선 -> 없으면 DB 조회
