@@ -506,40 +506,43 @@ with st.sidebar:
         st.session_state["authenticated"] = True
     
     if st.session_state.get("authenticated"):
-        st.success("Admin Mode On")
-        selected_page = st.radio("Navigation", ["Main Report", "🎯 Forecasting"])
-        
-        # ---------------------------------------------------------
-        # [추가] 4만 건 컬렉션(revenue_integrity_history) 통합 분석 로직
-        # ---------------------------------------------------------
-        if "historical_dow" not in st.session_state:
-            if st.sidebar.button("📊 4만건 히스토리 전체 분석"):
-                with st.status("이미지의 revenue_integrity_history 분석 중..."):
-                    # 1. 파이어베이스 컬렉션 직접 호출
-                    hist_docs = db.collection("revenue_integrity_history").stream()
-                    hist_data = [d.to_dict() for d in hist_docs]
+    st.success("Admin Mode On")
+    selected_page = st.radio("Navigation", ["Main Report", "🎯 Forecasting"])
+    
+    # ---------------------------------------------------------
+    # [수정] 4만 건 컬렉션(revenue_integrity_history) 통합 분석
+    # ---------------------------------------------------------
+    if "historical_dow" not in st.session_state:
+        st.sidebar.warning("⏳ 과거 패턴 데이터 로딩 필요")
+        if st.sidebar.button("📊 4만건 히스토리 전체 분석"):
+            with st.status("이미지의 revenue_integrity_history 분석 중..."):
+                # 파이어베이스 컬렉션 직접 호출
+                hist_docs = db.collection("revenue_integrity_history").stream()
+                hist_data = [d.to_dict() for d in hist_docs]
+                
+                if hist_data:
+                    h_df = pd.DataFrame(hist_data)
+                    # 필드명 자동 탐색
+                    bd_col = next((c for c in h_df.columns if c.lower() in ['created_at', 'booking_date', 'date']), None)
                     
-                    if hist_data:
-                        h_df = pd.DataFrame(hist_data)
-                        # 예약 생성일 기준 필드 자동 탐색 (created_at, booking_date 등)
-                        bd_col = next((c for c in h_df.columns if c.lower() in ['created_at', 'booking_date', 'date']), None)
-                        
-                        if bd_col:
-                            h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
-                            h_df = h_df.dropna(subset=['b_date'])
-                            h_df['dow'] = h_df['b_date'].dt.dayofweek
-                            # 요일별 예약 강도 지수화 (Booking Pace의 핵심)
-                            st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
-                        
-                        # 재방문율 분석
-                        cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'guest_id', 'phone']), None)
-                        if cust_col:
-                            st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
-                        
-                        st.success("✅ 분석 완료! 포캐스팅에 반영됩니다.")
-                        st.rerun()
-        else:
-            st.sidebar.success("✅ 과거 패턴 로드 완료"):
+                    if bd_col:
+                        h_df['b_date'] = pd.to_datetime(h_df[bd_col], errors='coerce')
+                        h_df = h_df.dropna(subset=['b_date'])
+                        h_df['dow'] = h_df['b_date'].dt.dayofweek
+                        # 요일별 예약 강도 지수화
+                        st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
+                    
+                    # 재방문율 분석
+                    cust_col = next((c for c in h_df.columns if c.lower() in ['customer_id', 'guest_id', 'phone']), None)
+                    if cust_col:
+                        st.session_state["repeat_rate"] = (h_df[cust_col].value_counts() > 1).mean() * 100
+                    
+                    st.success("✅ 분석 완료! 포캐스팅에 반영됩니다.")
+                    st.rerun()
+    else:
+        # ❌ 여기에 있던 콜론(:)을 제거했습니다.
+        st.sidebar.success("✅ 과거 패턴 로드 완료")
+        
     st.sidebar.header("⚙️ Settings")
     # 구석에 작게 배치 (총지배인님이 눈치 못 채게)
     admin_key = st.text_input("Admin", type="password", help="인증 시 비밀 메뉴가 활성화됩니다.")
