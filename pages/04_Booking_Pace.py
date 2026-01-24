@@ -109,7 +109,6 @@ def delete_all_data():
 
 @st.cache_data(ttl=3600)
 def load_data_with_snapshot_cache():
-    # 1. 로컬 캐시 파일이 있으면 즉시 로드
     if os.path.exists(CACHE_FILE):
         try:
             df = pd.read_parquet(CACHE_FILE)
@@ -117,7 +116,6 @@ def load_data_with_snapshot_cache():
         except:
             pass
 
-    # 2. 파일 없으면 Firestore에서 불러오기
     if db is None: return pd.DataFrame(), "연결 안됨"
     try:
         docs = db.collection('hotel_bookings').limit(100000).stream() 
@@ -128,8 +126,6 @@ def load_data_with_snapshot_cache():
         df['입실일자'] = pd.to_datetime(df['입실일자'], errors='coerce')
         df['예약일자'] = pd.to_datetime(df['예약일자'], errors='coerce')
         df = df.dropna(subset=['입실일자', '예약일자'])
-        
-        if df.empty: return pd.DataFrame(), "데이터 비었음"
         
         df['입실일자'] = df['입실일자'].dt.tz_localize(None)
         df['예약일자'] = df['예약일자'].dt.tz_localize(None)
@@ -142,7 +138,6 @@ def load_data_with_snapshot_cache():
         if 'Snapshot' not in df.columns:
             df['Snapshot'] = "이전 데이터"
             
-        # 3. 로컬 파일로 저장
         df.to_parquet(CACHE_FILE)
         return df, "Firestore (실시간)"
     except:
@@ -211,7 +206,7 @@ with st.sidebar:
     # [정밀 취소 키워드 정의]
     cancel_k = ['취소', 'CXL', 'CANCEL', 'NO', 'NOSHOW', 'RC', 'RX']
     all_sts = df['상태'].unique().astype(str) if '상태' in df.columns else []
-    # 해당 키워드가 포함된 모든 상태 자동 감지
+    
     def_exc = [s for s in all_sts if any(x in s.upper() for x in cancel_k)]
     
     exc_sts = st.multiselect(
@@ -220,7 +215,7 @@ with st.sidebar:
         default=def_exc,
         help="체크된 상태는 매출 및 ADR 분석에서 제외됩니다."
     )
-    # [중요] 여기서 1차로 취소가 걸러진 df_clean 생성
+    
     df_clean = df[~df['상태'].isin(exc_sts)] if '상태' in df.columns else df
 
 # -----------------------------------------------------------------------------
@@ -365,11 +360,11 @@ if target_df.empty:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 5. 시각화 탭 (통합: 0~5 기본, 6~7 신규)
+# 5. 시각화 탭 통합
 # -----------------------------------------------------------------------------
 tabs = st.tabs(["💰 매출", "💳 ADR", "⏳ 리드타임", "📅 요일", "🌏 국적/객실", "🔁 로열티(재방문)", "🚀 RM 분석", "🎯 수익 전략"])
 
-# [TAB 0] Revenue
+# [TAB 1] Revenue
 with tabs[0]:
     st.subheader(f"매출 페이스: {chart_sub}")
     def get_pace(d):
@@ -385,7 +380,7 @@ with tabs[0]:
     fig.update_layout(xaxis={'autorange': 'reversed'}, xaxis_title="D-Day", yaxis_title="누적 매출", height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-# [TAB 1] ADR
+# [TAB 2] ADR
 with tabs[1]:
     st.subheader(f"ADR(객단가) 추이")
     def get_adr(d):
@@ -400,7 +395,7 @@ with tabs[1]:
     fig2.update_layout(xaxis={'autorange': 'reversed'}, height=500)
     st.plotly_chart(fig2, use_container_width=True)
 
-# [TAB 2] Lead Time
+# [TAB 3] Lead Time
 with tabs[2]:
     st.subheader("예약 리드타임 분포")
     bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]
@@ -413,7 +408,7 @@ with tabs[2]:
     fig3 = px.bar(pd.concat([tg, rg]), x='Group', y='총금액', color='Type', barmode='group', color_discrete_map={'Target':'#0052cc','Ref':'#bababa'})
     st.plotly_chart(fig3, use_container_width=True)
 
-# [TAB 3] Day of Week
+# [TAB 4] Day of Week
 with tabs[3]:
     st.subheader("요일별 매출 퍼포먼스")
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -424,7 +419,7 @@ with tabs[3]:
     fig4.add_trace(go.Scatter(x=rd['DayOfWeek'], y=rd['총금액'], name='Ref', line=dict(color='gray', dash='dot')))
     st.plotly_chart(fig4, use_container_width=True)
 
-# [TAB 4] Demographics
+# [TAB 5] Demographics
 with tabs[4]:
     st.subheader("국적 및 객실 타입 분석")
     c1, c2 = st.columns(2)
@@ -439,7 +434,7 @@ with tabs[4]:
         fig6 = px.bar(pd.concat([rt_t, rt_r])[pd.concat([rt_t, rt_r])['객실타입'].isin(top)], x='객실타입', y='총금액', color='Type', barmode='group')
         st.plotly_chart(fig6, use_container_width=True)
 
-# [TAB 5] Guest Loyalty (Smart Logic) - 에러 수정 완료
+# [TAB 6] Guest Loyalty (Smart Logic)
 with tabs[5]:
     st.header("🔁 고객 로열티 심층 리포트 (VIP & N차 분석)")
     
@@ -506,13 +501,13 @@ with tabs[5]:
         c1, c2 = st.columns(2)
         grade_order = ["1회 (신규)", "2회 (리피터)", "3회 (단골)", "4회 (충성)", "5회 이상 (VVIP)"]
         
-        # [수정] Plotly 컬럼 에러 방지
-        grade_counts = df_target_loyalty.groupby('CustomerGrade').size().reindex(grade_order).fillna(0).reset_index(name='Count')
+        grade_counts = df_target_loyalty.groupby('CustomerGrade').size().reindex(grade_order).fillna(0).reset_index()
+        grade_counts.columns = ['등급', 'count'] # 컬럼명 강제 지정하여 에러 방지
         
         with c1:
-            st.plotly_chart(px.pie(grade_counts, names='CustomerGrade', values='Count', hole=0.4, title="고객 등급 구성비"), use_container_width=True)
+            st.plotly_chart(px.pie(grade_counts, names='등급', values='count', hole=0.4, title="고객 등급 구성비"), use_container_width=True)
         with c2:
-            st.plotly_chart(px.bar(grade_counts, x='CustomerGrade', y='Count', text_auto=True, title="등급별 예약 건수", color='CustomerGrade'), use_container_width=True)
+            st.plotly_chart(px.bar(grade_counts, x='등급', y='count', text_auto=True, title="등급별 예약 건수", color='등급'), use_container_width=True)
 
         st.divider()
 
@@ -566,7 +561,7 @@ with tabs[5]:
                 st.dataframe(regular_list, use_container_width=True)
                 st.download_button("📥 단골 리스트 다운로드", data=regular_list.to_csv(index=False).encode('utf-8-sig'), file_name="Regular_Guest_List.csv")
 
-# [TAB 6] 🚀 수익 관리 (RM 정밀 분석 & 핀셋 필터) - ADR 60만원 오류 수정본
+# [TAB 7] 🚀 수익 관리 (RM 정밀 분석 & 핀셋 필터) - ADR 60만원 오류 수정 및 에러 해결본
 with tabs[6]:
     st.header("🚀 수익 관리(RM) 기간별 정밀 분석")
     st.info("💡 RC, RX 등 취소 건을 철저히 제외한 **순수 투숙(Net)** 기준 분석입니다.")
@@ -619,12 +614,20 @@ with tabs[6]:
             lt_c = pd.concat([df_a_valid.assign(P='A'), df_b_valid.assign(P='B')])
             st.plotly_chart(px.box(lt_c, x='P', y='LeadTime', color='P', title="Lead Time 변동 (Net 기준)"), use_container_width=True)
 
-        with sub_rm[4]: # 국적/채널
+        with sub_rm[4]: # 국적/채널 - [에러 수정 완료] 컬럼명 강제 지정
             c1, c2 = st.columns(2)
             c1.plotly_chart(px.pie(df_b_valid.groupby('국적')['총금액'].sum().reset_index().head(7), values='총금액', names='국적', title="현재 국적 비중"), use_container_width=True)
-            acc_a = df_a_valid['거래처'].value_counts(normalize=True).head(7).reset_index().assign(P='A')
-            acc_b = df_b_valid['거래처'].value_counts(normalize=True).head(7).reset_index().assign(P='B')
-            c2.plotly_chart(px.line(pd.concat([acc_a, acc_b]), x='index', y='거래처', color='P', markers=True, title="Account Share Shift"), use_container_width=True)
+            
+            # [수정] value_counts() 후 컬럼명 명시적 지정
+            acc_a = df_a_valid['거래처'].value_counts(normalize=True).head(7).reset_index()
+            acc_a.columns = ['거래처', '점유율']
+            acc_a['P'] = 'A'
+            
+            acc_b = df_b_valid['거래처'].value_counts(normalize=True).head(7).reset_index()
+            acc_b.columns = ['거래처', '점유율']
+            acc_b['P'] = 'B'
+            
+            c2.plotly_chart(px.line(pd.concat([acc_a, acc_b]), x='거래처', y='점유율', color='P', markers=True, title="Account Share Shift"), use_container_width=True)
 
         with sub_rm[5]: # 픽업 (Net Change)
             pickup_a = df_a_valid.groupby(d_col)['객실수'].sum()
@@ -632,13 +635,12 @@ with tabs[6]:
             diff = (pickup_b - pickup_a).fillna(pickup_b).reset_index(name='Pickup')
             st.plotly_chart(px.bar(diff, x=d_col, y='Pickup', color='Pickup', title="기간별 예약 증감 (Net)"), use_container_width=True)
 
-# [TAB 7] 🎯 수익 전략 (Golden ADR 등 - 정밀 필터링 적용)
+# [TAB 8] 🎯 수익 전략 (Golden ADR 등 - 정밀 필터링 적용)
 with tabs[7]:
     st.header("🎯 수익 극대화 전략 (Strategy)")
     s_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "🛡️ 취소 예측"])
     
     # [정밀 포인트] df_clean은 이미 사이드바에서 취소가 걸러진 데이터임
-    # 따라서 df_clean을 쓰면 RC, RX가 포함되지 않은 순수 ADR이 계산됨
     
     with s_tabs[0]:
         # 입실일자별 유효 객실수와 매출 합계
@@ -646,7 +648,8 @@ with tabs[7]:
         # ADR 재계산 (취소된 매출 0원 데이터가 섞이지 않음)
         df_g = df_g[df_g['객실수'] > 0] # 0인 경우 제외
         df_g['ADR'] = df_g['총금액'] / df_g['객실수']
-        # [수정] trendline 제거하여 에러 방지
+        
+        # [수정] trendline 제거 (에러 방지)
         st.plotly_chart(px.scatter(df_g, x='ADR', y='총금액', size='객실수', title="가격(ADR) 대비 매출 상관관계 (Net 기준)"), use_container_width=True)
         
     with s_tabs[1]:
@@ -660,7 +663,6 @@ with tabs[7]:
         cxl_rate_hist = df_raw['is_cxl_hist'].mean()
         
         # 현재 타겟(OTB)에 적용
-        # 현재 OTB는 '아직 취소 안 된' 것들이므로 잠재적 취소를 뺀 Net 예측
         current_otb = target_df['객실수'].sum()
         net_predict = int(current_otb * (1 - cxl_rate_hist))
         
@@ -672,8 +674,8 @@ with tabs[7]:
 try:
     df_raw['dow_idx'] = df_raw['예약일자'].dt.dayofweek
     st.session_state["historical_dow"] = (df_raw['dow_idx'].value_counts(normalize=True)*7).to_dict()
-    if f_n:
-        st.session_state["repeat_rate"] = (df_raw[f_n].value_counts()>1).mean()*100
+    if f_name:
+        st.session_state["repeat_rate"] = (df_raw[f_name].value_counts()>1).mean()*100
     
     # 저장할 월 데이터 (타겟 데이터 기준)
     s_m = df_clean['입실일자'].iloc[0].month if not df_clean.empty else datetime.now().month
