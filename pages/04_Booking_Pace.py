@@ -720,88 +720,93 @@ with tabs[6]:
             st.write("▼ B기간(비교 기간) 일자별 룸나잇 생산 현황")
             st.plotly_chart(px.bar(pk_b.reset_index(), x=d_col, y='RoomNights', color='RoomNights'), use_container_width=True)
 
-# [TAB 7] 🎯 수익 전략 (Strategy) - [정밀 계산 적용]
+# [TAB 7] 🎯 수익 전략 (A vs B 완벽 비교 & 6개 탭 구현)
 with tabs[7]:
-    st.header("🎯 데이터 기반 수익 전략")
-    st.info("단순 산점도를 넘어선 심층 분석: 가격 민감도(탄력성), RevPAR 히트맵, 취소 리드타임 분석")
-
-    # 전략 탭을 위한 별도 날짜 선택 (RM 탭과 공유할 수도 있으나 독립성 위해 유지)
+    st.header("🎯 데이터 기반 수익 전략 (A vs B 정밀 비교)")
+    
+    # 1. 전략 전용 기간 선택
     sc1, sc2 = st.columns(2)
     with sc1: sd_a = st.date_input("전략 기준 기간 (A)", [datetime(2025,1,1), datetime(2025,1,31)], key="sda")
     with sc2: sd_b = st.date_input("전략 비교 기간 (B)", [datetime(2026,1,1), datetime(2026,1,24)], key="sdb")
     
-    s_df_a = df_clean[(df_clean['입실일자'].dt.date >= sd_a[0]) & (df_clean['입실일자'].dt.date <= sd_a[1])]
-    s_df_b = df_clean[(df_clean['입실일자'].dt.date >= sd_b[0]) & (df_clean['입실일자'].dt.date <= sd_b[1])]
+    # 데이터 필터링 (Clean = Net Data, Raw = All including Cancel)
+    s_clean_a = df_clean[(df_clean['입실일자'].dt.date >= sd_a[0]) & (df_clean['입실일자'].dt.date <= sd_a[1])].copy()
+    s_raw_a = df_raw[(df_raw['입실일자'].dt.date >= sd_a[0]) & (df_raw['입실일자'].dt.date <= sd_a[1])].copy()
     
-    s_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "🛡️ 취소 예측", "💰 가격 민감도(Elasticity)", "📅 RevPAR 히트맵", "📉 취소 타이밍 분석"])
+    s_clean_b = df_clean[(df_clean['입실일자'].dt.date >= sd_b[0]) & (df_clean['입실일자'].dt.date <= sd_b[1])].copy()
+    s_raw_b = df_raw[(df_raw['입실일자'].dt.date >= sd_b[0]) & (df_raw['입실일자'].dt.date <= sd_b[1])].copy()
     
-    with s_tabs[0]:
-        # [정밀 포인트] ADR = RoomRevenue / RoomNights
-        df_g = df_clean.groupby('입실일자').agg({'RoomRevenue':'sum', 'RoomNights':'sum'}).reset_index()
-        df_g = df_g[df_g['RoomNights'] > 0]
-        df_g['ADR'] = df_g['RoomRevenue'] / df_g['RoomNights']
-        
-        # [수정] trendline 제거 (ModuleNotFoundError 방지)
-        st.plotly_chart(px.scatter(df_g, x='ADR', y='RoomRevenue', size='RoomNights', title="가격(ADR) 대비 객실매출 상관관계"), use_container_width=True)
-        
-    with s_tabs[1]:
-        # 국적별 수익성 (객실매출 기준)
-        nat_p = df_clean.groupby('국적').agg({'RoomRevenue':'mean','LeadTime':'mean','RoomNights':'sum','예약번호':'count'}).reset_index()
-        st.plotly_chart(px.scatter(nat_p[nat_p['예약번호']>5], x='LeadTime', y='RoomRevenue', size='RoomNights', text='국적', title="국적별 수익성 (객실매출)"), use_container_width=True)
-        
-    with s_tabs[2]:
-        # 취소 예측 (전체 데이터 기반)
-        df_raw['is_cxl_hist'] = df_raw['상태'].isin(def_exc)
-        cxl_rate_hist = df_raw['is_cxl_hist'].mean()
-        
-        current_otb = target_df['RoomNights'].sum()
-        net_predict = int(current_otb * (1 - cxl_rate_hist))
-        
-        st.metric("현재 OTB 기준 실투숙 룸나잇 예측", f"{net_predict}박", f"예상 취소: {int(current_otb * cxl_rate_hist)}박")
-
-    with st_tabs[3]: # 가격 민감도 (A vs B Scatter)
-        def make_sensitivity(d, label):
-            g = d.groupby('입실일자').agg({'객실수':'sum', 'RoomRevenue':'sum'}).reset_index()
-            g['OCC'] = (g['객실수']/60)*100
-            g['ADR'] = g['RoomRevenue']/g['객실수']
+    # [수정 완료] 6개 탭 모두 정의
+    st_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "🛡️ 취소 예측", "📉 가격 민감도", "📅 히트맵", "⏳ 취소 시점"])
+    
+    # 1. 황금 ADR (A/B 비교 - Scatter)
+    with st_tabs[0]:
+        def make_golden(d, label):
+            g = d.groupby('입실일자').agg({'RoomRevenue':'sum', 'RoomNights':'sum'}).reset_index()
+            g = g[g['RoomNights']>0]
+            g['ADR'] = g['RoomRevenue']/g['RoomNights']
             g['Period'] = label
-            return g[g['ADR']>0]
-        
-        sens_a = make_sensitivity(s_df_a, 'A기간')
-        sens_b = make_sensitivity(s_df_b, 'B기간')
-        sens_all = pd.concat([sens_a, sens_b])
-        
-        st.write("### 📉 시기별 가격 저항선 변화 (OCC vs ADR)")
-        fig_sens = px.scatter(sens_all, x='OCC', y='ADR', color='Period', size='객실수', hover_data=['입실일자'], title="기간별 가격 민감도 이동")
-        st.plotly_chart(fig_sens, use_container_width=True)
-        
-    with st_tabs[4]: # 히트맵 (Side by Side)
+            return g
+        ga = make_golden(s_clean_a, 'A기간'); gb = make_golden(s_clean_b, 'B기간')
+        gall = pd.concat([ga, gb])
+        st.plotly_chart(px.scatter(gall, x='ADR', y='RoomRevenue', size='RoomNights', color='Period', title="황금 ADR 비교 (객실매출 vs ADR)"), use_container_width=True)
+
+    # 2. 국적 분석 (A/B 비교 - Scatter)
+    with st_tabs[1]:
+        def make_nat(d, label):
+            n = d.groupby('국적').agg({'RoomRevenue':'mean','LeadTime':'mean','RoomNights':'sum'}).reset_index()
+            n['Period'] = label
+            return n[n['RoomNights']>5]
+        na = make_nat(s_clean_a, 'A기간'); nb = make_nat(s_clean_b, 'B기간')
+        nall = pd.concat([na, nb])
+        st.plotly_chart(px.scatter(nall, x='LeadTime', y='RoomRevenue', size='RoomNights', color='Period', text='국적', title="국적별 수익성 이동"), use_container_width=True)
+
+    # 3. 취소 예측 (Metric)
+    with st_tabs[2]:
+        cxl_a = s_raw_a['상태'].isin(def_exc).mean()
+        cxl_b = s_raw_b['상태'].isin(def_exc).mean()
+        otb_b = s_clean_b['RoomNights'].sum() # 현재 B기간의 Net OTB
+        # 취소율을 적용하여 '추가로 취소될' 수량 예측 (단순화: B기간 전체 취소율 적용)
+        # 이미 취소된건 제외된게 s_clean_b이므로, 향후 취소 가능성을 전체 평균으로 가늠
+        risk = int(otb_b * cxl_b)
+        st.metric("B기간 현재 룸나잇(OTB)", f"{otb_b}박")
+        st.metric("B기간 예상 취소 리스크", f"-{risk}박", f"취소율 {cxl_b*100:.1f}% 적용")
+
+    # 4. 가격 민감도 (OCC vs ADR)
+    with st_tabs[3]:
+        def make_sens(d, label):
+            g = d.groupby('입실일자').agg({'RoomRevenue':'sum', 'RoomNights':'sum', '객실수':'sum'}).reset_index()
+            g['OCC'] = (g['객실수']/60)*100
+            g['ADR'] = g.apply(lambda x: x['RoomRevenue']/x['RoomNights'] if x['RoomNights']>0 else 0, axis=1)
+            g['Period'] = label
+            return g[(g['OCC']>0) & (g['ADR']>0)]
+        sa = make_sens(s_clean_a, 'A기간'); sb = make_sens(s_clean_b, 'B기간')
+        sall = pd.concat([sa, sb])
+        st.plotly_chart(px.scatter(sall, x='OCC', y='ADR', color='Period', size='RoomNights', title="가격 민감도 (OCC vs ADR)"), use_container_width=True)
+
+    # 5. 히트맵 (Side by Side)
+    with st_tabs[4]:
         c_h1, c_h2 = st.columns(2)
         def plot_hm(d, title):
+            if d.empty: return go.Figure()
             d['W'] = d['입실일자'].dt.day_name(); d['M'] = d['입실일자'].dt.month
             hm = d.groupby(['M','W'])['RoomRevenue'].mean().reset_index()
             days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
             hm['W'] = pd.Categorical(hm['W'], categories=days, ordered=True)
             p = hm.pivot(index='W', columns='M', values='RoomRevenue')
             return go.Figure(data=go.Heatmap(z=p.values, x=p.columns, y=p.index, colorscale='RdBu_r'), layout=dict(title=title))
-            
-        with c_h1: st.plotly_chart(plot_hm(s_df_a, "A기간 평균 일매출"), use_container_width=True)
-        with c_h2: st.plotly_chart(plot_hm(s_df_b, "B기간 평균 일매출"), use_container_width=True)
-        
-    with st_tabs[5]: # 취소 커브 비교
-        # 취소 데이터는 df_raw에서 가져와야 함 (df_clean은 취소 제외됨)
-        raw_a = df_raw[(df_raw['입실일자'].dt.date >= sd_a[0]) & (df_raw['입실일자'].dt.date <= sd_a[1]) & df_raw['상태'].isin(def_exc)]
-        raw_b = df_raw[(df_raw['입실일자'].dt.date >= sd_b[0]) & (df_raw['입실일자'].dt.date <= sd_b[1]) & df_raw['상태'].isin(def_exc)]
-        
-        st.write("### 📉 취소 리드타임 분포 (언제 취소하는가?)")
-        if not raw_a.empty and not raw_b.empty:
-            fig_cxl = go.Figure()
-            fig_cxl.add_trace(go.Histogram(x=raw_a['LeadTime'], name='A기간', opacity=0.5))
-            fig_cxl.add_trace(go.Histogram(x=raw_b['LeadTime'], name='B기간', opacity=0.5))
-            fig_cxl.update_layout(barmode='overlay', title="기간별 취소 건의 리드타임 비교")
-            st.plotly_chart(fig_cxl, use_container_width=True)
-        else:
-            st.warning("선택한 기간에 취소 데이터가 충분하지 않습니다.")
+        with c_h1: st.plotly_chart(plot_hm(s_clean_a, "A기간 요일별 매출"), use_container_width=True)
+        with c_h2: st.plotly_chart(plot_hm(s_clean_b, "B기간 요일별 매출"), use_container_width=True)
+
+    # 6. 취소 시점 (Histogram)
+    with st_tabs[5]:
+        ra = s_raw_a[s_raw_a['상태'].isin(def_exc)]
+        rb = s_raw_b[s_raw_b['상태'].isin(def_exc)]
+        fig_c = go.Figure()
+        if not ra.empty: fig_c.add_trace(go.Histogram(x=ra['LeadTime'], name='A 취소', opacity=0.5))
+        if not rb.empty: fig_c.add_trace(go.Histogram(x=rb['LeadTime'], name='B 취소', opacity=0.5))
+        fig_c.update_layout(barmode='overlay', title="취소 리드타임 분포")
+        st.plotly_chart(fig_c, use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # 6. 포캐스팅 시스템 연동 (세션 동기화)
