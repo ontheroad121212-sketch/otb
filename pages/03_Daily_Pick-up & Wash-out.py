@@ -26,13 +26,11 @@ st.set_page_config(page_title="ARI Final Integrity", layout="wide", initial_side
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; padding-bottom: 5rem; }
-    div[data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 900; color: #0f172a; }
-    div[data-testid="stMetricLabel"] { font-size: 15px !important; font-weight: 700; color: #64748b; }
-    button[data-baseweb="tab"] { font-size: 16px !important; font-weight: 700; }
+    div[data-testid="stMetricValue"] { font-size: 20px !important; font-weight: 900; color: #0f172a; }
+    div[data-testid="stMetricLabel"] { font-size: 14px !important; font-weight: 700; color: #64748b; }
     [data-testid="stDataFrame"] table tr:last-child td {
         font-weight: 900 !important; background-color: #fff9c4 !important; border-top: 2px solid #000000 !important;
     }
-    div.stButton > button:first-child { border-color: #ff4b4b; color: #ff4b4b; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,53 +48,65 @@ db = firestore.client()
 COLLECTION_NAME = "revenue_integrity_history"
 
 # ==============================================================================
-# 3. 데이터 유틸리티
+# 3. 데이터 유틸리티 (위치 기반 매핑)
 # ==============================================================================
 
 def clean_num(val):
+    """문자열을 숫자로 변환 (쉼표, 원화기호 등 제거)"""
     try:
         if pd.isna(val) or val == '': return 0
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').strip()
         return float(s)
     except: return 0
 
-def save_to_db(df, data_type='Reservation'):
-    if df.empty: return False
+def clean_numeric_columns(df):
+    target_cols = ['RN', 'Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time', 'ADR_Room', 'ADR_Total']
+    for col in target_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
+    return df
+
+def save_to_firestore_split_by_date(df, is_otb=False):
     try:
-        if 'Snapshot_Date' not in df.columns: df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
-        dates = df['Snapshot_Date'].unique()
-        for d in dates:
-            sub = df[df['Snapshot_Date'] == d].copy()
-            if sub.empty: continue
+        if df.empty: return False
+        
+        if 'Snapshot_Date' not in df.columns:
+            df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
+            
+        unique_dates = df['Snapshot_Date'].unique()
+        
+        for s_date in unique_dates:
+            date_df = df[df['Snapshot_Date'] == s_date].copy()
+            if date_df.empty: continue
             
             # 날짜 객체 문자열 변환
-            for c in sub.select_dtypes(include=['datetime64[ns]']).columns:
-                sub[c] = sub[c].astype(str)
-                
-            recs = sub.to_dict(orient='records')
+            for col in date_df.select_dtypes(include=['datetime64[ns]']).columns:
+                date_df[col] = date_df[col].astype(str)
+
+            records = date_df.to_dict(orient='records')
+            data_type = 'OTB' if is_otb else 'Reservation'
             
-            # 문서 ID 중복 방지 (타입 포함)
-            did = f"{d}_{data_type}_{int(time.time()*1000)}"
+            # 예약/취소는 상태값까지 ID에 포함
+            st_tag = ""
+            if not is_otb and 'Status' in date_df.columns:
+                st_tag = f"_{date_df['Status'].iloc[0]}"
             
-            db.collection(COLLECTION_NAME).document(did).set({
-                'data': recs, 'uploaded_at': datetime.now(), 'snapshot_date': d, 'data_type': data_type
+            doc_id = f"{s_date}_{data_type}{st_tag}_{int(time.time()*1000)}"
+            db.collection(COLLECTION_NAME).document(doc_id).set({
+                'data': records, 'uploaded_at': datetime.now(), 'snapshot_date': s_date, 'data_type': data_type
             })
         return True
     except Exception as e: st.error(f"저장 실패: {e}"); return False
 
 @st.cache_data(ttl=0)
-def load_db():
+def load_data_from_firestore():
     try:
         docs = db.collection(COLLECTION_NAME).stream(); res = []
         for d in docs:
             dd = d.to_dict()
             snap = dd.get('snapshot_date', '')
-            dtype = dd.get('data_type', 'Reservation') # 기본값
-            
-            # 구버전 데이터 호환
-            if dtype == 'Reservation' and len(dd['data']) > 0 and 'OTB' in str(dd['data'][0].get('Segment', '')):
-                dtype = 'OTB'
-
+            dtype = dd.get('data_type', 'Reservation')
+            if dtype == 'Reservation' and len(dd['data'])>0 and 'OTB' in str(dd['data'][0].get('Segment','')): dtype = 'OTB'
             for r in dd['data']:
                 if 'Snapshot_Date' not in r: r['Snapshot_Date'] = snap
                 r['Data_Type'] = dtype
@@ -104,14 +114,7 @@ def load_db():
         return res
     except: return []
 
-def delete_all():
-    try:
-        docs = db.collection(COLLECTION_NAME).stream(); c=0
-        for d in docs: d.reference.delete(); c+=1
-        return c
-    except: return 0
-
-def delete_otb():
+def delete_otb_data_only():
     try:
         docs = db.collection(COLLECTION_NAME).stream(); c=0
         for d in docs:
@@ -121,12 +124,18 @@ def delete_otb():
         return c
     except: return 0
 
+def delete_all_records():
+    try:
+        docs = db.collection(COLLECTION_NAME).stream(); c=0
+        for d in docs: d.reference.delete(); c+=1
+        return c
+    except: return 0
+
 # ==============================================================================
-# 4. 파일 처리 (컬럼 위치 기반 정밀 타격)
+# 4. 파일 처리 로직 (정밀 타격)
 # ==============================================================================
 
-def process_res_file(file):
-    """예약 리스트 처리 (AE=예약일)"""
+def process_reservation_file(file):
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=2, encoding='cp949')
@@ -134,10 +143,9 @@ def process_res_file(file):
         else: df_raw = pd.read_excel(file, header=2)
             
         if len(df_raw.columns) <= 30:
-            st.error("🚨 컬럼 수 부족 (최소 31개 필요)"); return pd.DataFrame()
+            st.error("🚨 예약 파일 컬럼 부족. AE열(30번)까지 필요합니다."); return pd.DataFrame()
 
         df = pd.DataFrame()
-        # [절대 위치 매핑]
         df['Status'] = df_raw.iloc[:, 1] # B
         df['Res_No'] = df_raw.iloc[:, 2] # C
         df['Guest_Name'] = df_raw.iloc[:, 5] # F
@@ -160,13 +168,10 @@ def process_res_file(file):
         df['RN'] = df['Rooms'] * df['Nights']
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         
-        # 매출 보정 (Total이 0이면 Room으로)
+        # 매출 보정
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # Snapshot
         df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
-        
-        # 파생 변수
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_Date'].dt.strftime('%Y-%m')
         df['Day_Type'] = df['CheckIn'].dt.weekday.apply(lambda x: 'Weekend' if x>=4 else 'Weekday')
@@ -176,20 +181,16 @@ def process_res_file(file):
             if 'KOR' in val: return 'KOR'
             if any(x in val for x in ['CHN','HKG','TWN']): return 'CHN'
             if 'JPN' in val: return 'JPN'
-            if any(x in val for x in ['USA','CAN']): return 'AME'
             return 'OTH'
         df['Nat_Group'] = df['Nat_Orig'].apply(classify_nat)
         
         raw_str = df_raw.astype(str).agg(''.join, axis=1).str.upper()
         df['Breakfast'] = np.where(raw_str.str.contains('BF'), 'Included', 'Not Included')
 
-        # [중요] 예약 리스트에서 온 데이터는 무조건 'BookedFile' 타입으로 지정 (나중에 합칠 때 구분용)
-        # 하지만 DB 구조상 'Reservation'으로 통일하고, 나중에 로직에서 처리
         return df
     except Exception as e: st.error(f"예약 오류: {e}"); return pd.DataFrame()
 
-def process_cancel_file(file):
-    """취소 리스트 처리 (AA=예약일, AB=취소일)"""
+def process_cancellation_file(file):
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=2, encoding='cp949')
@@ -197,7 +198,7 @@ def process_cancel_file(file):
         else: df_raw = pd.read_excel(file, header=2)
             
         if len(df_raw.columns) <= 27:
-            st.error("🚨 취소 파일 컬럼 부족"); return pd.DataFrame()
+            st.error("🚨 취소 파일 컬럼 부족. AB열(27번)까지 필요합니다."); return pd.DataFrame()
 
         df = pd.DataFrame()
         df['Status'] = df_raw.iloc[:, 1] # B
@@ -224,9 +225,7 @@ def process_cancel_file(file):
         
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # Snapshot Date = 취소일
         df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
-        
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_Date'].dt.strftime('%Y-%m')
         df['Day_Type'] = df['CheckIn'].dt.weekday.apply(lambda x: 'Weekend' if x>=4 else 'Weekday')
@@ -277,15 +276,20 @@ def process_otb(file):
     except: return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI
+# 5. UI 헬퍼
 # ==============================================================================
-def add_total(df, key):
+
+def add_total_with_adr(df, group_col_name="구분"):
     if df.empty: return df
     num = df.select_dtypes(include=[np.number]).fillna(0)
     row = {c: "" for c in df.columns}; row.update(num.sum().to_dict())
-    row[key] = "TOTAL"
+    row[group_col_name if group_col_name in df.columns else df.columns[0]] = "TOTAL"
+    
+    # Total 행 ADR 재계산
     if row.get('RN', 0) > 0:
         if 'Room_Revenue' in row: row['ADR_Room'] = row['Room_Revenue'] / row['RN']
+        if 'Total_Revenue' in row: row['ADR_Total'] = row['Total_Revenue'] / row['RN']
+    
     return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
 
 def show_styled(df):
@@ -293,44 +297,63 @@ def show_styled(df):
     cols = df.select_dtypes(include=[np.number]).columns
     st.dataframe(df.style.format({c: "{:,.0f}" for c in cols}).apply(lambda r: ['background-color: #fff9c4; font-weight: bold; border-top: 2px solid black']*len(r) if str(r[0])=="TOTAL" else ['']*len(r), axis=1), hide_index=True, use_container_width=True)
 
+def group_and_show(df, group_col):
+    if df.empty: return
+    # 1. 그룹핑 및 합계
+    agg = df.groupby(group_col).agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
+    # 2. ADR 계산
+    agg['ADR_Room'] = np.where(agg['RN']>0, agg['Room_Revenue']/agg['RN'], 0)
+    agg['ADR_Total'] = np.where(agg['RN']>0, agg['Total_Revenue']/agg['RN'], 0)
+    # 3. 토탈행 추가 및 표시
+    show_styled(add_total_with_adr(agg, group_col))
+    return agg # 차트용 리턴
+
 def render_tab(df, k):
     if df.empty: st.info("데이터 없음"); return
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs(["📊 세그먼트", "📅 Pacing", "🏢 거래처", "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일", "🌐 국적", "🍳 조식"])
+    
     with t1:
-        s = df.groupby('Segment').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index()
+        s = group_and_show(df, 'Segment')
         c1,c2 = st.columns(2)
-        c1.plotly_chart(px.pie(s, values='Room_Revenue', names='Segment'), use_container_width=True, key=f"{k}_p")
-        c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue'), use_container_width=True, key=f"{k}_b")
-        show_styled(add_total(s, 'Segment'))
+        if not s.empty:
+            c1.plotly_chart(px.pie(s, values='Room_Revenue', names='Segment'), use_container_width=True, key=f"{k}_p")
+            c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue'), use_container_width=True, key=f"{k}_b")
+    
     with t2:
         p = df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum').fillna(0)
         st.plotly_chart(px.imshow(p, text_auto=True), use_container_width=True, key=f"{k}_pace")
-    with t3: show_styled(add_total(df.groupby('Account').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index().sort_values('RN', ascending=False).head(50), 'Account'))
+    
+    with t3:
+        # 거래처는 상위 50개만
+        agg = df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
+        agg['ADR_Room'] = np.where(agg['RN']>0, agg['Room_Revenue']/agg['RN'], 0)
+        agg['ADR_Total'] = np.where(agg['RN']>0, agg['Total_Revenue']/agg['RN'], 0)
+        show_styled(add_total_with_adr(agg.sort_values('RN', ascending=False).head(50), 'Account'))
+    
     with t4:
         df['LT_G'] = pd.cut(df['Lead_Time'], bins=[-1,0,3,7,14,30,60,90,999], labels=['0','1-3','4-7','8-14','15-30','31-60','61-90','90+'])
-        l = df.groupby('LT_G', observed=True).agg({'RN':'sum','Room_Revenue':'sum'}).reset_index()
-        st.plotly_chart(px.bar(l, x='LT_G', y='RN'), use_container_width=True, key=f"{k}_lt")
-        show_styled(add_total(l, 'LT_G'))
-    with t5: show_styled(add_total(df.groupby('Room_Type').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Room_Type'))
-    with t6:
-        w = df.groupby('Day_Type').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index()
-        st.plotly_chart(px.bar(w, x='Day_Type', y='Room_Revenue'), use_container_width=True, key=f"{k}_w")
-    with t7: show_styled(add_total(df.groupby('Nat_Group').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Nat_Group'))
-    with t8:
-        b = df.groupby('Breakfast').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index()
-        st.plotly_chart(px.pie(b, values='RN', names='Breakfast'), use_container_width=True, key=f"{k}_bf")
-        show_styled(add_total(b, 'Breakfast'))
+        l = group_and_show(df, 'LT_G')
+        if not l.empty: st.plotly_chart(px.bar(l, x='LT_G', y='RN'), use_container_width=True, key=f"{k}_lt")
+    
+    with t5: group_and_show(df, 'Room_Type')
+    with t6: 
+        w = group_and_show(df, 'Day_Type')
+        if not w.empty: st.plotly_chart(px.bar(w, x='Day_Type', y='Room_Revenue'), use_container_width=True, key=f"{k}_w")
+    with t7: group_and_show(df, 'Nat_Group')
+    with t8: 
+        b = group_and_show(df, 'Breakfast')
+        if not b.empty: st.plotly_chart(px.pie(b, values='RN', names='Breakfast'), use_container_width=True, key=f"{k}_bf")
 
 # ==============================================================================
 # MAIN
 # ==============================================================================
 try:
     st.title("🏛️ 앰버 호텔 경영 리포트 (Final Integrity)")
-    raw = load_db()
+    raw = load_data_from_firestore()
     if raw: df_all = pd.DataFrame(raw)
     else: df_all = pd.DataFrame(columns=['Snapshot_Date','Data_Type'])
     
-    # 숫자형 변환 (필수)
+    # 숫자형 변환
     for c in ['RN','Room_Revenue','Total_Revenue','Rooms','Nights','Lead_Time']:
         if c in df_all.columns: df_all[c] = pd.to_numeric(df_all[c], errors='coerce').fillna(0)
 
@@ -343,8 +366,8 @@ try:
 
     with st.sidebar:
         st.header("설정")
-        if st.button("🗑️ OTB 초기화"): d=delete_otb(); st.warning(f"{d}건 삭제"); time.sleep(1); st.rerun()
-        if st.button("🚨 전체 초기화"): d=delete_all(); st.warning(f"{d}건 삭제"); time.sleep(1); st.rerun()
+        if st.button("🗑️ OTB 초기화"): d=delete_otb_data_only(); st.warning(f"{d}건 삭제"); time.sleep(1); st.rerun()
+        if st.button("🚨 전체 초기화"): d=delete_all_records(); st.warning(f"{d}건 삭제"); time.sleep(1); st.rerun()
         
         st.divider()
         sel_res = st.selectbox("📌 예약/취소 조회", res_dates) if res_dates else None
@@ -354,11 +377,9 @@ try:
         st.write("※ 파일명 날짜 / 컬럼 위치 기준")
         f1 = st.file_uploader("예약 리스트 (AE=예약일)", type=['xlsx','csv'])
         if f1 and st.button("예약 저장"):
-            # 예약 리스트는 'Reservation' 타입으로 저장
             if save_to_db(process_res_file(f1), 'Reservation'): st.rerun()
         f2 = st.file_uploader("취소 리스트 (AB=취소일)", type=['xlsx','csv'])
         if f2 and st.button("취소 저장"):
-            # 취소 리스트는 'Cancellation' 타입으로 저장하여 구분
             if save_to_db(process_cancel_file(f2), 'Cancellation'): st.rerun()
         f3 = st.file_uploader("OTB 파일 (파일명 날짜)", type=['xlsx','csv'], accept_multiple_files=True)
         if f3 and st.button("OTB 저장"):
@@ -367,21 +388,19 @@ try:
 
     # 데이터 로드
     if sel_res and not df_all.empty:
-        # 1. 예약 데이터: Data_Type이 'Reservation'이고 Snapshot_Date가 선택된 날짜인 것
+        # 예약리스트에서 온 데이터
         df_bk_raw = df_all[(df_all['Snapshot_Date']==sel_res) & (df_all['Data_Type']=='Reservation')].copy()
         
-        # [핵심] 예약 리스트에 있는 RC도 예약으로 간주 (사용자 요청)
-        # 하지만 0원은 제외
+        # 0원 예약 분리 (Total_Revenue > 0 인것만 유효 예약으로 인정)
         df_bk = df_bk_raw[df_bk_raw['Total_Revenue'] > 0]
         df_zero = df_bk_raw[df_bk_raw['Total_Revenue'] <= 0]
         
-        # 2. 취소 데이터: Data_Type이 'Cancellation'이고 Snapshot_Date가 선택된 날짜인 것
+        # 취소리스트에서 온 데이터
         df_cn = df_all[(df_all['Snapshot_Date']==sel_res) & (df_all['Data_Type']=='Cancellation')].copy()
         
-        # 만약 'Cancellation' 타입이 없다면(구버전), Reservation 내의 RC를 취소로 봅니다 (fallback)
+        # 만약 Cancellation 타입이 없으면(구버전), Reservation 내의 RC를 취소로 (Fallback)
         if df_cn.empty and not df_bk_raw.empty:
              df_cn = df_bk_raw[df_bk_raw['Status'] == 'RC']
-             # 예약 리스트에서 RC는 예약으로도 잡혀야 하므로 df_bk에서 빼지 않음 (사용자 요청: "예약리스트의 RC는 예약")
         
         df_tot = pd.concat([df_bk, df_cn])
     else:
@@ -398,32 +417,35 @@ try:
         st.header(f"👑 GM 요약 ({sel_res})")
         if df_bk.empty and df_cn.empty: st.info("데이터 없음")
         else:
-            b_rn, b_rev = df_bk['RN'].sum(), df_bk['Room_Revenue'].sum()
-            c_rn, c_rev = df_cn['RN'].sum(), df_cn['Room_Revenue'].sum()
+            # 예약 지표
+            b_rn, b_rev, b_tot = df_bk['RN'].sum(), df_bk['Room_Revenue'].sum(), df_bk['Total_Revenue'].sum()
+            c_rn, c_rev, c_tot = df_cn['RN'].sum(), df_cn['Room_Revenue'].sum(), df_cn['Total_Revenue'].sum()
+            
             b_los = b_rn/len(df_bk) if len(df_bk)>0 else 0
             c_los = c_rn/len(df_cn) if len(df_cn)>0 else 0
             
-            # 예약 리스트 내 RC 건수 확인
             rc_in_bk = len(df_bk[df_bk['Status']=='RC'])
             
             st.markdown("#### ✅ 예약 (Reservation List)")
-            c = st.columns(5)
+            c = st.columns(6)
             c[0].metric("RN", f"{b_rn:,.0f}")
-            c[1].metric("매출", f"{b_rev:,.0f}")
-            c[2].metric("ADR", f"{b_rev/b_rn if b_rn>0 else 0:,.0f}")
-            c[3].metric("LOS", f"{b_los:.1f}박")
-            c[4].metric("건수", f"{len(df_bk):,.0f}", delta=f"이 중 RC: {rc_in_bk}건", delta_color="inverse")
+            c[1].metric("객실료", f"{b_rev:,.0f}")
+            c[2].metric("총매출", f"{b_tot:,.0f}")
+            c[3].metric("ADR(Room)", f"{b_rev/b_rn if b_rn>0 else 0:,.0f}")
+            c[4].metric("ADR(Total)", f"{b_tot/b_rn if b_rn>0 else 0:,.0f}")
+            c[5].metric("건수", f"{len(df_bk):,.0f}", delta=f"이중 RC: {rc_in_bk}")
             
             st.markdown("#### ❌ 취소 (Cancellation List)")
-            c = st.columns(5)
+            c = st.columns(6)
             c[0].metric("RN", f"{c_rn:,.0f}")
-            c[1].metric("매출", f"{c_rev:,.0f}")
-            c[2].metric("ADR", f"{c_rev/c_rn if c_rn>0 else 0:,.0f}")
-            c[3].metric("LOS", f"{c_los:.1f}박")
-            c[4].metric("건수", f"{len(df_cn):,.0f}")
-            st.divider()
+            c[1].metric("객실료", f"{c_rev:,.0f}")
+            c[2].metric("총매출", f"{c_tot:,.0f}")
+            c[3].metric("ADR(Room)", f"{c_rev/c_rn if c_rn>0 else 0:,.0f}")
+            c[4].metric("ADR(Total)", f"{c_tot/c_rn if c_rn>0 else 0:,.0f}")
+            c[5].metric("건수", f"{len(df_cn):,.0f}")
             
-            if not df_bk.empty: show_styled(add_total(df_bk.groupby('Segment').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Segment'))
+            st.divider()
+            if not df_bk.empty: group_and_show(df_bk, 'Segment')
             
             c1, c2 = st.columns(2)
             with c1:
