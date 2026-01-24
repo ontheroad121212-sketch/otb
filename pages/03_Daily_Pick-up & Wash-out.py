@@ -96,7 +96,7 @@ def delete_otb_data_only():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 (CSV 인코딩 + 리드타임 강제 추출)
+# 4. 파일 처리 (CSV cp949 인코딩 & 리드타임 좌표 추출)
 # ==============================================================================
 
 def normalize_columns(df):
@@ -125,26 +125,14 @@ def process_data(file, status, force_otb=False):
     try:
         is_otb = force_otb or "Sales on the Book" in file.name
         
-        # ---------------------------------------------------------
-        # 1. 파일 읽기 (CSV cp949 인코딩 필수 적용)
-        # ---------------------------------------------------------
+        # 1. 파일 읽기 (CSV 한글 깨짐 방지 cp949)
         if file.name.endswith('.csv'):
-            try: 
-                # 한글 윈도우 엑셀 CSV는 보통 cp949
-                if is_otb: df_raw = pd.read_csv(file, header=None, encoding='cp949')
-                else: df_raw = pd.read_csv(file, header=2, encoding='cp949') 
-            except: 
-                # 실패시 utf-8 시도
-                if is_otb: df_raw = pd.read_csv(file, header=None)
-                else: df_raw = pd.read_csv(file, header=2)
+            try: df_raw = pd.read_csv(file, header=None, encoding='cp949')
+            except: df_raw = pd.read_csv(file, header=None) # utf-8 fallback
         else:
-            # 엑셀 파일
-            if is_otb: df_raw = pd.read_excel(file, header=None)
-            else: df_raw = pd.read_excel(file, header=2)
+            df_raw = pd.read_excel(file, header=None)
 
-        # ---------------------------------------------------------
-        # [Case A] OTB 처리
-        # ---------------------------------------------------------
+        # [A] OTB 처리
         if is_otb:
             target_date = datetime.now()
             for r in range(min(15, len(df_raw))):
@@ -163,35 +151,49 @@ def process_data(file, status, force_otb=False):
                 'Guest_Name': 'OTB_DATA', 'Segment': 'OTB', 'Status': 'Booked'
             }])
         
-        # ---------------------------------------------------------
-        # [Case B] 예약/취소 처리 (리드타임 강제 추출)
-        # ---------------------------------------------------------
+        # [B] 예약/취소 리스트 처리 (리드타임 해결)
         else:
-            # [핵심] 리드타임 열 찾아서 데이터 미리 백업
-            # 인코딩이 제대로 되었다면 '리드타임' 글자가 깨지지 않음
-            lead_time_series = None
-            for col in df_raw.columns:
-                c_str = str(col).strip()
-                if '리드' in c_str or 'Lead' in c_str or 'LT' in c_str:
-                    lead_time_series = df_raw[col]
-                    break
+            # 1. 헤더 행 찾기 ('리드타임' 글자가 있는 줄)
+            header_idx = -1
+            lt_col_idx = -1
             
-            # 조식 전수조사
-            bf_series = df_raw.apply(lambda r: 'Included (조식포함)' if 'BF' in "".join(r.astype(str).values).upper() else 'Not Included (불포함)', axis=1)
+            # 상위 10줄을 뒤져서 '리드타임'이 있는 행을 찾음
+            for i, row in df_raw.head(10).iterrows():
+                row_vals = row.astype(str).tolist()
+                for j, val in enumerate(row_vals):
+                    if '리드타임' in val or 'Lead' in val or 'LT' in val:
+                        header_idx = i
+                        lt_col_idx = j
+                        break
+                if header_idx != -1: break
             
-            # 컬럼 매핑
-            df = normalize_columns(df_raw).copy()
+            # 못 찾았으면 기본값 3행(Index 2)
+            if header_idx == -1: header_idx = 2
             
-            # [핵심] 리드타임 값 강제 주입
-            if lead_time_series is not None:
-                df['Lead_Time'] = pd.to_numeric(lead_time_series.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            # 2. 데이터프레임 재구성
+            df_data = df_raw.iloc[header_idx+1:].reset_index(drop=True)
+            df_data.columns = df_raw.iloc[header_idx].astype(str).values
+            
+            # 3. [핵심] 리드타임 데이터 별도 추출 (인덱스로 바로 접근)
+            if lt_col_idx != -1:
+                # df_raw에서 직접 데이터를 가져옴 (헤더 다음 행부터)
+                lead_time_raw = df_raw.iloc[header_idx+1:, lt_col_idx]
+                lead_time_vals = pd.to_numeric(lead_time_raw.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             else:
-                df['Lead_Time'] = 0
-                
+                lead_time_vals = 0
+            
+            # 4. 조식 전수조사
+            bf_series = df_data.apply(lambda r: 'Included (조식포함)' if 'BF' in "".join(r.astype(str).values).upper() else 'Not Included (불포함)', axis=1)
+            
+            # 5. 컬럼 매핑
+            df = normalize_columns(df_data).copy()
+            
+            # 6. [핵심] 데이터 강제 주입
+            df['Lead_Time'] = lead_time_vals.values if hasattr(lead_time_vals, 'values') else lead_time_vals
             df['Breakfast'] = bf_series
             df['Status'] = status
             
-            # 숫자/날짜 정리
+            # 7. 나머지 정리
             for c in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights']:
                 if c in df.columns: df[c] = pd.to_numeric(df[c].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
             
@@ -244,10 +246,11 @@ def render_tabs(df, key):
         a = df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index().sort_values('RN', ascending=False).head(50)
         style_df(add_total(a, 'Account'))
     with t4:
+        # 리드타임 차트
         bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]; labels = ['0일', '1-3일', '4-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+']
         df['LT_G'] = pd.cut(df['Lead_Time'], bins=bins, labels=labels)
         l = df.groupby('LT_G', observed=True).agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
-        st.plotly_chart(px.bar(l, x='LT_G', y='RN'), use_container_width=True, key=f"{key}_lt")
+        st.plotly_chart(px.bar(l, x='LT_G', y='RN', title="리드타임별 건수"), use_container_width=True, key=f"{key}_lt")
         style_df(add_total(l, 'LT_G'))
     with t5: style_df(add_total(df.groupby('Room_Type').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index(), 'Room_Type'))
     with t6:
@@ -273,7 +276,7 @@ try:
         st.header("⚙️ 시스템 설정")
         if st.button("🗑️ OTB 데이터만 초기화"):
             c = delete_otb_data_only(); st.warning(f"OTB {c}건 삭제 완료"); time.sleep(1); st.cache_data.clear(); st.rerun()
-        sel_date = st.selectbox("기준일 (Snapshot)", dates, index=0) if dates else None
+        sel_date = st.selectbox("기준일", dates, index=0) if dates else None
         st.markdown("---")
         st.header("📤 데이터 업로드")
         f1 = st.file_uploader("예약 리스트", type=['xlsx','csv'], key="uf1")
@@ -297,9 +300,9 @@ try:
         
         with tabs[0]:
             st.header(f"👑 GM 요약 ({sel_date})")
-            # 지표 계산
             b_rn, b_rev = df_bk['RN'].sum(), df_bk['Room_Revenue'].sum()
             c_rn, c_rev = df_cn['RN'].sum(), df_cn['Room_Revenue'].sum()
+            # LOS 계산 (취소 포함)
             b_los = (b_rn / len(df_bk)) if len(df_bk) > 0 else 0
             c_los = (c_rn / len(df_cn)) if len(df_cn) > 0 else 0
             
@@ -308,7 +311,6 @@ try:
             
             st.markdown("#### ❌ 금일 취소")
             cc = st.columns(5); cc[0].metric("RN", f"{c_rn:,.0f}"); cc[1].metric("매출", f"{c_rev:,.0f}"); cc[2].metric("ADR", f"{c_rev/c_rn if c_rn>0 else 0:,.0f}"); cc[3].metric("LOS", f"{c_los:.1f}박"); cc[4].metric("건수", f"{len(df_cn):,.0f}")
-            
             st.divider(); style_df(add_total(df_bk.groupby('Segment').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Segment'))
             
         with tabs[1]: render_tabs(df_bk, "bk")
@@ -321,7 +323,7 @@ try:
                 fin = pd.merge(pd.DataFrame({'M':range(1,13)}), df_otb.groupby('M').agg({'Room_Revenue':'sum'}).reset_index(), on='M', how='left').fillna(0)
                 fin['Budget'] = fin['M'].map(BUDGET_DATA).fillna(0)
                 fig = go.Figure()
-                fig.add_trace(go.Bar(x=fin['M'], y=fin['Room_Revenue'], name='OTB', text=(fin['Room_Revenue']/fin['Budget']*100).apply(lambda x: f"{x:.1f}%" if x>0 else ""), textposition='outside'))
+                fig.add_trace(go.Bar(x=fin['M'], y=fin['Room_Revenue'], name='OTB', text=(fin['Room_Revenue']/fin['Budget']*100).apply(lambda x: f"{x:.1f}%"), textposition='outside'))
                 fig.add_trace(go.Scatter(x=fin['M'], y=fin['Budget'], name='Budget', line=dict(color='red', dash='dot')))
                 st.plotly_chart(fig, use_container_width=True)
                 
