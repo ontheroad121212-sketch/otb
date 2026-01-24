@@ -737,7 +737,7 @@ with tabs[7]:
     s_raw_a = df_raw[(df_raw['입실일자'].dt.date >= sd_a[0]) & (df_raw['입실일자'].dt.date <= sd_a[1])].copy()
     s_raw_b = df_raw[(df_raw['입실일자'].dt.date >= sd_b[0]) & (df_raw['입실일자'].dt.date <= sd_b[1])].copy()
     
-    st_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "🛡️ 정밀 취소 예측", "📉 가격 민감도", "📅 히트맵", "⏳ 취소 시점"])
+    st_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "📉 가격 민감도", "📅 히트맵", "⏳ 취소 시점"])
     
     # 1. 황금 ADR
     with st_tabs[0]:
@@ -773,43 +773,8 @@ with tabs[7]:
                                  title="국적별 수익성"), use_container_width=True)
         else: st.warning("데이터 부족")
 
-    # 3. 정밀 취소 예측 (TypeError 수정 완료)
-    with st_tabs[2]:
-        st.write("### 🛡️ 리드타임 가중치 적용 정밀 취소 예측")
-        
-        # [1] 전체 데이터로 구간별 취소율 학습
-        train_df = df_raw.copy()
-        train_df['LeadTime'] = train_df['LeadTime'].fillna(0)
-        bins = [-1, 3, 7, 30, 90, 9999]
-        labels = ['0-3일(임박)', '4-7일', '8-30일', '31-90일', '90일+']
-        train_df['LT_Bin'] = pd.cut(train_df['LeadTime'], bins=bins, labels=labels)
-        train_df['is_cancelled'] = train_df['상태'].isin(def_exc)
-        
-        # 가중치 계산 (학습)
-        cxl_probs = train_df.groupby('LT_Bin', observed=True)['is_cancelled'].mean().to_dict()
-        
-        # [2] B기간 예약에 대입 (예측)
-        current_bookings = s_clean_b.copy()
-        if not current_bookings.empty:
-            current_bookings['LT_Bin'] = pd.cut(current_bookings['LeadTime'], bins=bins, labels=labels).astype(str) # [해결!] 문자열로 변환
-            current_bookings['Cancel_Prob'] = current_bookings['LT_Bin'].map(cxl_probs).fillna(0)
-            current_bookings['Expected_Cancel_RN'] = current_bookings['RoomNights'] * current_bookings['Cancel_Prob']
-            
-            total_otb_rn = current_bookings['RoomNights'].sum()
-            total_risk_rn = int(current_bookings['Expected_Cancel_RN'].sum())
-            net_forecast_rn = total_otb_rn - total_risk_rn
-            
-            col_p1, col_p2, col_p3 = st.columns(3)
-            col_p1.metric("현재 장부상 룸나잇 (OTB)", f"{total_otb_rn:,.0f}박")
-            col_p2.metric("예상 취소 리스크 (Risk)", f"-{total_risk_rn:,.0f}박", f"가중 취소율 {(total_risk_rn/total_otb_rn*100) if total_otb_rn>0 else 0:.1f}%")
-            col_p3.metric("최종 실투숙 예측 (Net)", f"{net_forecast_rn:,.0f}박")
-            
-            st.plotly_chart(px.bar(current_bookings.groupby('LT_Bin', observed=True)['Expected_Cancel_RN'].sum().reset_index(), 
-                              x='LT_Bin', y='Expected_Cancel_RN', title="구간별 예상 취소량"), use_container_width=True)
-        else: st.warning("데이터 부족")
-
     # 4. 가격 민감도
-    with st_tabs[3]:
+    with st_tabs[2]:
         st.write("### 📉 시기별 가격 저항선 변화 (OCC vs ADR)")
         def prepare_sens(d, label):
             if d.empty: return pd.DataFrame()
@@ -825,7 +790,7 @@ with tabs[7]:
         else: st.warning("데이터 부족")
 
     # 5. 히트맵
-    with st_tabs[4]:
+    with st_tabs[3]:
         st.write("### 📅 요일별/월별 평균 매출 히트맵")
         all_rev = pd.concat([s_clean_a, s_clean_b])['RoomRevenue'] if not s_clean_a.empty or not s_clean_b.empty else [0, 1000000]
         zmin, zmax = min(all_rev), max(all_rev)
@@ -842,7 +807,7 @@ with tabs[7]:
         with c_h2: st.plotly_chart(plot_heatmap(s_clean_b, "B기간 매출 패턴", zmin, zmax), use_container_width=True)
 
     # 6. 취소 시점
-    with st_tabs[5]:
+    with st_tabs[4]:
         st.write("### ⏳ 예약 취소 시점 분포")
         ra = s_raw_a[s_raw_a['상태'].isin(def_exc)]; rb = s_raw_b[s_raw_b['상태'].isin(def_exc)]
         fig_c = go.Figure()
