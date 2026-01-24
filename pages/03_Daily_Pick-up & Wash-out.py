@@ -318,43 +318,57 @@ def render_tab(df, k):
             c1.plotly_chart(px.pie(s, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True, key=f"{k}_p")
             c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True, key=f"{k}_b")
     
-    with t2:
-        # [핀셋 조정] 예약 상세 페이싱 데이터 집계 정밀화
-        # 1. 원본 데이터 복사 및 정렬 (날짜 순서 보장)
-        pacing_df = df.copy()
-        pacing_df = pacing_df.sort_values(['Booking_Month', 'Stay_Month'])
+    with t2: # [예약 상세 전용] Pacing 고도화 로직
+        st.subheader("📅 Booking Pacing Matrix (예약 생성월 vs 실제 투숙월)")
         
-        # 2. 피벗 테이블 생성 (sum 집계 시 fillna(0)로 구멍 차단)
-        p = pacing_df.pivot_table(
+        # 1. 시각화용 데이터 독립 추출 (데이터 훼손 방지)
+        p_df = df.copy()
+        
+        # 2. 날짜 형식 강제 통일 및 정렬 (가장 중요)
+        p_df['Booking_Month'] = p_df['Booking_Month'].astype(str)
+        p_df['Stay_Month'] = p_df['Stay_Month'].astype(str)
+        p_df = p_df.sort_values(['Booking_Month', 'Stay_Month'])
+        
+        # 3. 피벗 테이블 생성 (값 누락 방지를 위해 fillna(0))
+        p_table = p_df.pivot_table(
             index='Booking_Month', 
             columns='Stay_Month', 
             values='RN', 
             aggfunc='sum'
         ).fillna(0)
         
-        st.subheader("📅 Booking Pacing Matrix (예약월 vs 투숙월)")
-        
-        # 히트맵 시각화
-        st.plotly_chart(px.imshow(
-            p, 
-            text_auto='.0f', 
-            aspect="auto", 
-            color_continuous_scale="Blues",
-            labels=dict(x="투숙월 (Stay Month)", y="예약 생성월 (Booking Month)", color="RN")
-        ), use_container_width=True, key=f"{k}_pace_img")
-        
-        # 
-        
-        # 3. 월별 예약 생성 추이 차트 고도화
-        trend = pacing_df.groupby('Booking_Month')['RN'].sum().reset_index()
-        st.plotly_chart(px.bar(
-            trend, 
-            x='Booking_Month', 
-            y='RN', 
-            title="월별 신규 예약 생성 추이 (RN 기준)",
-            text_auto='.0f',
-            color_discrete_sequence=['#1f77b4']
-        ), use_container_width=True, key=f"{k}_tr_chart")
+        # 4. 히트맵 시각화 (인덱스/컬럼 순서 유지)
+        if not p_table.empty:
+            fig_pacing = px.imshow(
+                p_table,
+                text_auto='.0f',
+                aspect="auto",
+                color_continuous_scale="Blues",
+                labels=dict(x="투숙월 (Stay Month)", y="예약 생성월 (Booking Month)", color="RN"),
+                template="plotly_white"
+            )
+            fig_pacing.update_layout(xaxis_nticks=len(p_table.columns))
+            st.plotly_chart(fig_pacing, use_container_width=True, key=f"{k}_pace_fixed")
+            
+            
+            
+            # 5. [추가] 예약 유입 트렌드 시각화
+            st.markdown("---")
+            st.subheader("📈 신규 예약 생성 추이 (Monthly Booking Intake)")
+            trend_data = p_df.groupby('Booking_Month')['RN'].sum().reset_index()
+            fig_trend = px.bar(
+                trend_data, 
+                x='Booking_Month', 
+                y='RN',
+                text_auto='.0f',
+                title="해당 기준일 데이터 내 월별 예약 생성량",
+                color_discrete_sequence=['#3366CC']
+            )
+            st.plotly_chart(fig_trend, use_container_width=True, key=f"{k}_intake_chart")
+            
+            
+        else:
+            st.warning("페이싱 분석을 위한 유효한 데이터(RN)가 없습니다.")
     
     with t3:
         agg = df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
