@@ -67,6 +67,7 @@ def clean_numeric_columns(df):
     ]
     for col in target_cols:
         if col in df.columns:
+            # 쉼표, 원화기호 등 제거 후 숫자로 변환
             df[col] = pd.to_numeric(
                 df[col].astype(str).str.replace(',', '').str.replace('nan', '0').str.replace('₩', ''), 
                 errors='coerce'
@@ -146,9 +147,8 @@ def normalize_and_map_columns(df):
         'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
         'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
-        'Nat_Orig': ['nation', 'country', 'nat', '국적'],
-        # Lead_Time은 별도 로직으로 처리
-        'Lead_Time': ['lead', '리드', 'lt']
+        'Nat_Orig': ['nation', 'country', 'nat', '국적']
+        # Lead_Time은 여기서 처리하지 않고 process_data에서 별도로 챙깁니다.
     }
     for col in df.columns:
         clean = str(col).lower().replace(" ", "").replace("_", "")
@@ -169,7 +169,7 @@ def process_data(uploaded_file, status, force_otb=False):
         if is_otb:
             if uploaded_file.name.endswith('.csv'):
                 try: df_raw = pd.read_csv(uploaded_file, header=None, encoding='cp949')
-                except: df_raw = pd.read_csv(uploaded_file, header=None) # utf-8 fallback
+                except: df_raw = pd.read_csv(uploaded_file, header=None)
             else:
                 df_raw = pd.read_excel(uploaded_file, header=None)
 
@@ -184,6 +184,7 @@ def process_data(uploaded_file, status, force_otb=False):
 
             df_clean = df_raw.dropna(how='all').dropna(axis=1, how='all')
             try:
+                # 마지막 행, 마지막 열 셀 값 추출
                 raw_val = str(df_clean.iloc[-1, -1])
                 clean_val = raw_val.replace(',', '').replace('nan', '0').split('.')[0]
                 total_rev = int(clean_val)
@@ -198,46 +199,45 @@ def process_data(uploaded_file, status, force_otb=False):
             }])
             
         # ---------------------------------------------------------
-        # Case B: 예약/취소 리스트 (리드타임 강제 추출 & 조식 전수조사)
+        # Case B: 예약/취소 리스트 (리드타임 보존 로직 강화)
         # ---------------------------------------------------------
         else:
             # 1. 파일 읽기 (3행 헤더 고정, 인코딩 처리)
             if uploaded_file.name.endswith('.csv'):
                 try: df_raw = pd.read_csv(uploaded_file, header=2, encoding='cp949')
-                except: df_raw = pd.read_csv(uploaded_file, header=2)
+                except: df_raw = pd.read_csv(uploaded_file, header=2) # cp949 실패 시 utf-8 시도
             else:
                 df_raw = pd.read_excel(uploaded_file, header=2)
 
-            # 2. [핵심] 리드타임 열 인덱스 찾기 및 데이터 백업
-            lt_col_index = -1
-            for idx, col in enumerate(df_raw.columns):
+            # 2. [충돌 해결의 핵심] 리드타임 데이터 '선점' (Normalization 전에 확보)
+            # 데이터프레임의 모든 컬럼 이름을 훑어서 '리드' 글자가 들어간 컬럼을 찾음
+            lt_series = None
+            for col in df_raw.columns:
                 c_str = str(col).strip().upper()
                 if '리드' in c_str or 'LEAD' in c_str or 'LT' == c_str:
-                    lt_col_index = idx
+                    lt_series = df_raw[col] # 컬럼 통째로 저장
                     break
             
-            if lt_col_index != -1:
-                lead_time_series = pd.to_numeric(df_raw.iloc[:, lt_col_index].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-            else:
-                lead_time_series = 0
-
             # 3. 조식 전수조사
             def scan_row_for_breakfast(row):
                 row_string = "".join(row.astype(str).values).upper()
                 return 'Included (조식포함)' if 'BF' in row_string else 'Not Included (불포함)'
-            
             breakfast_col = df_raw.apply(scan_row_for_breakfast, axis=1)
             
-            # 4. 컬럼 매핑
+            # 4. 컬럼 매핑 (이 과정에서 기존 리드타임 컬럼은 사라짐 -> 위에서 확보한 것 사용)
             df = normalize_and_map_columns(df_raw).copy()
             
-            # 5. [핵심] 리드타임 값 강제 주입
-            df['Lead_Time'] = lead_time_series
+            # 5. [데이터 복구] 확보해둔 리드타임 데이터 강제 주입
+            if lt_series is not None:
+                # 쉼표 등 제거 후 숫자로 변환
+                df['Lead_Time'] = pd.to_numeric(lt_series.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            else:
+                df['Lead_Time'] = 0 # 정말로 없으면 0
             
             # 6. 조식 컬럼 주입
             df['Breakfast'] = breakfast_col
             
-            # 7. 데이터 정리
+            # 7. 나머지 데이터 정리
             for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
