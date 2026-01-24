@@ -67,7 +67,6 @@ def clean_numeric_columns(df):
     ]
     for col in target_cols:
         if col in df.columns:
-            # 쉼표, 원화기호, 공백 제거 후 숫자로 강제 변환
             df[col] = pd.to_numeric(
                 df[col].astype(str).str.replace(',', '').str.replace('nan', '0').str.replace('₩', '').str.strip(), 
                 errors='coerce'
@@ -82,12 +81,11 @@ def clean_numeric_columns(df):
 
 def save_to_firestore_split_by_date(df, is_otb=False):
     """
-    [핵심] 데이터를 날짜별로 쪼개서 저장 & OTB/Reservation 타입 구분 저장
+    통데이터(여러 날짜가 섞인 데이터)를 날짜별로 쪼개서 파이어베이스에 저장
     """
     try:
         if df.empty: return False
         
-        # Snapshot_Date가 없으면 오늘 날짜(fallback)
         if 'Snapshot_Date' not in df.columns:
             df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
             
@@ -109,11 +107,11 @@ def save_to_firestore_split_by_date(df, is_otb=False):
                 'data': records,
                 'uploaded_at': datetime.now(),
                 'snapshot_date': s_date,
-                'data_type': data_type  # 필터링을 위한 핵심 필드
+                'data_type': data_type
             })
         return True
     except Exception as e:
-        st.error(f"❌ 데이터 저장 오류: {e}")
+        st.error(f"❌ 데이터 분할 저장 오류: {e}")
         return False
 
 @st.cache_data(ttl=0)
@@ -155,7 +153,6 @@ def delete_otb_data_only():
         cnt = 0
         for doc in docs:
             d = doc.to_dict()
-            # data_type이 OTB이거나, 내용물에 OTB가 있는 경우 삭제
             if d.get('data_type') == 'OTB':
                 doc.reference.delete(); cnt += 1
                 continue
@@ -186,7 +183,7 @@ def normalize_and_map_columns(df):
         'Nat_Orig': ['nation', 'country', 'nat', '국적']
     }
     
-    # [핵심] 제외 단어 설정 (오인 사격 방지)
+    # 제외 단어 설정 (오인 사격 방지)
     exclusions = {
         'Rooms': ['revenue', 'rate', 'type', '금액', '료', '번호', 'id', 'pax'],
         'Nights': ['date', '일자', 'time', '시각']
@@ -206,49 +203,48 @@ def normalize_and_map_columns(df):
 
 def process_data(uploaded_file, status):
     try:
+        # 1. 파일 읽기
         if uploaded_file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(uploaded_file, header=2, encoding='cp949')
             except: df_raw = pd.read_csv(uploaded_file, header=2)
         else:
             df_raw = pd.read_excel(uploaded_file, header=2)
 
-        # 1. 조식 전수조사
+        # 2. 조식 전수조사
         def scan_bf(row):
             return 'Included (조식포함)' if 'BF' in "".join(row.astype(str).values).upper() else 'Not Included (불포함)'
         breakfast_col = df_raw.apply(scan_bf, axis=1)
 
-        # 2. 컬럼 매핑
+        # 3. 컬럼 매핑
         df = normalize_and_map_columns(df_raw).copy()
         df['Breakfast'] = breakfast_col
         df['Status'] = status
 
-        # 3. 날짜 타입 강제 변환
+        # 4. 날짜 타입 강제 변환
         for d_col in ['CheckIn', 'Booking_Date', 'Cancel_Date']:
             if d_col in df.columns:
                 df[d_col] = pd.to_datetime(df[d_col].astype(str).str.replace('.', '-'), errors='coerce')
 
-        # 4. [핵심] 리드타임 파이썬 직접 계산
+        # 5. 리드타임 파이썬 직접 계산
         if 'CheckIn' in df.columns and 'Booking_Date' in df.columns:
             df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         else:
             df['Lead_Time'] = 0
 
-        # 5. [핵심] Snapshot_Date 생성 (통데이터 분할의 기준)
-        # 예약일/취소일을 기준으로 날짜를 쪼갭니다.
+        # 6. Snapshot_Date 생성
         target_date_col = 'Booking_Date' if status == 'Booked' else 'Cancel_Date'
         if target_date_col in df.columns:
             df['Snapshot_Date'] = df[target_date_col].dt.strftime('%Y-%m-%d')
-            # 날짜 없는 데이터는 방어적으로 오늘 날짜 처리 (거의 없음)
             df['Snapshot_Date'] = df['Snapshot_Date'].fillna(datetime.now().strftime('%Y-%m-%d'))
         else:
             df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
 
-        # 6. 숫자 정리
+        # 7. 숫자 정리
         df['Rooms_Clean'] = pd.to_numeric(df.get('Rooms', 0), errors='coerce').fillna(0)
         df['Nights_Clean'] = pd.to_numeric(df.get('Nights', 1), errors='coerce').fillna(1)
         df['RN'] = df['Rooms_Clean'] * df['Nights_Clean']
         
-        # 매출 정리 (0원 데이터 살리기 위해)
+        # 매출 데이터 0원 예약 체크를 위해 원본 유지하되, null만 0으로
         df['Total_Revenue'] = np.where(pd.to_numeric(df.get('Total_Revenue', 0), errors='coerce').fillna(0) == 0, 
                                      pd.to_numeric(df.get('Room_Revenue', 0), errors='coerce').fillna(0), 
                                      pd.to_numeric(df.get('Total_Revenue', 0), errors='coerce').fillna(0))
@@ -263,7 +259,7 @@ def process_data(uploaded_file, status):
         else:
             df['Booking_Month'] = df.get('Stay_Month', '')
 
-        # 7. 국적 상세 분류
+        # 8. 국적 상세 분류
         def classify_nat(row):
             name = str(row.get('Guest_Name',''))
             orig = str(row.get('Nat_Orig', '')).upper()
@@ -300,7 +296,6 @@ def process_otb(uploaded_file):
         
         # OTB 데이터의 기준일은 보통 '해당 데이터의 생성일'이 없으므로
         # 업로드한 날짜 또는 특정 월의 1일로 지정해야 함.
-        # 여기서는 파일 내 월의 1일로 지정하여 월별 관리가 되도록 함.
         snapshot_date = target_month_str 
 
         # 총 매출 추출
@@ -340,7 +335,7 @@ def add_total_row(df, group_col_name="구분"):
 
 def show_dataframe_with_style(df):
     if df.empty:
-        st.info("데이터가 없습니다."); return
+        st.info("해당 날짜에 데이터가 없습니다."); return
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     styler = df.style.format({col: "{:,.0f}" for col in numeric_cols})
     if 'Budget_Achiev' in df.columns: styler = styler.format({'Budget_Achiev': "{:.1f}%"})
@@ -423,9 +418,14 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
 try:
     st.title("🏛️ 앰버 호텔 경영 리포트 (Final Integrity)")
     raw_data = load_data_from_firestore()
-    df_all = pd.DataFrame(raw_data) if raw_data else pd.DataFrame()
     
-    # [핵심] 예약 날짜와 OTB 날짜 분리
+    # [방어 로직] 데이터가 하나도 없을 때 빈 DataFrame 생성
+    if raw_data:
+        df_all = pd.DataFrame(raw_data)
+    else:
+        df_all = pd.DataFrame(columns=['Snapshot_Date', 'Data_Type', 'Status', 'Total_Revenue', 'Room_Revenue', 'RN', 'Segment', 'Account', 'Room_Type', 'Nat_Group', 'Breakfast', 'Lead_Time', 'CheckIn', 'Booking_Date', 'Cancel_Date', 'Stay_Month', 'Booking_Month', 'Day_Type'])
+
+    # 데이터 분리 (예약/취소 vs OTB)
     res_dates = sorted(df_all[df_all['Data_Type'] == 'Reservation']['Snapshot_Date'].unique(), reverse=True)
     otb_dates = sorted(df_all[df_all['Data_Type'] == 'OTB']['Snapshot_Date'].unique(), reverse=True)
 
@@ -439,7 +439,6 @@ try:
             cnt = delete_all_records(); st.warning(f"{cnt}개 데이터 삭제됨"); time.sleep(1); st.cache_data.clear(); st.rerun()
             
         st.markdown("---")
-        # 날짜 선택기 분리
         selected_res_date = st.selectbox("📌 예약/취소 조회 기준일", res_dates, index=0) if res_dates else None
         selected_otb_date = st.selectbox("📈 OTB 조회 기준일", otb_dates, index=0) if otb_dates else None
         
@@ -447,7 +446,6 @@ try:
         st.header("📤 데이터 업로드")
         f1 = st.file_uploader("예약 리스트 (통데이터 가능)", type=['xlsx','csv'], key="f1")
         if f1 and st.button("예약 저장"):
-            # is_otb=False
             if save_to_firestore_split_by_date(process_data(f1, "Booked"), is_otb=False): st.cache_data.clear(); st.rerun()
             
         f2 = st.file_uploader("취소 리스트 (통데이터 가능)", type=['xlsx','csv'], key="f2")
@@ -456,11 +454,10 @@ try:
             
         f3_list = st.file_uploader("OTB 파일", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
         if f3_list and st.button("OTB 저장"):
-            # OTB는 is_otb=True로 저장
             all_otb = [process_otb(f) for f in f3_list]
             if all_otb and save_to_firestore_split_by_date(pd.concat(all_otb, ignore_index=True), is_otb=True): st.cache_data.clear(); st.rerun()
 
-    # 1. 예약 데이터 로드 (선택된 예약 날짜 기준)
+    # 1. 예약/취소 데이터 준비
     if selected_res_date and not df_all.empty:
         df_res = clean_numeric_columns(df_all[(df_all['Snapshot_Date'] == selected_res_date) & (df_all['Data_Type'] == 'Reservation')].copy())
         
@@ -471,13 +468,13 @@ try:
     else:
         df_paid_bk, df_zero_bk, df_list_cn, df_total_paid = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    # 2. OTB 데이터 로드 (선택된 OTB 날짜 기준)
+    # 2. OTB 데이터 준비
     if selected_otb_date and not df_all.empty:
         df_otb = clean_numeric_columns(df_all[(df_all['Snapshot_Date'] == selected_otb_date) & (df_all['Data_Type'] == 'OTB')].copy())
     else:
         df_otb = pd.DataFrame()
 
-    # 3. 메인 탭
+    # 3. 메인 화면 출력
     tabs = st.tabs(["👑 GM 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"])
 
     with tabs[0]:
@@ -519,9 +516,9 @@ try:
                     fig_gm_bar = px.bar(comb_m, x='Stay_Month', y='RN', color='Type', barmode='group', title="월별 예약/취소 추이")
                     st.plotly_chart(fig_gm_bar, use_container_width=True, key="gm_bar")
 
-    with tabs[1]: render_analysis_tab(df_paid_bk, "유료 예약", "bk_u", "Blues")
-    with tabs[2]: render_analysis_tab(df_list_cn, "취소 데이터", "cn_u", "Reds")
-    with tabs[3]: render_analysis_tab(df_total_paid, "종합 합계", "tot_u", "Greens")
+    with tabs[1]: render_analysis_tab(df_paid_bk, "bk_u", "Blues")
+    with tabs[2]: render_analysis_tab(df_list_cn, "cn_u", "Reds")
+    with tabs[3]: render_analysis_tab(df_total_paid, "tot_u", "Greens")
     with tabs[4]: 
         st.subheader(f"🆓 0원 예약 (총 {len(df_zero_bk)}건)")
         if not df_zero_bk.empty:
@@ -558,7 +555,7 @@ except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
 
 # ==============================================================================
-# Forecasting 시스템 연동
+# Forecasting 시스템 연동 (세션 데이터 전송)
 # ==============================================================================
 try:
     save_month = datetime.now().month
