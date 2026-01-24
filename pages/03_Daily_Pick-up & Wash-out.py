@@ -63,7 +63,7 @@ def clean_numeric_columns(df):
     target_cols = [
         'RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total', 
         'Lead_Time', 'OTB_Rev', 'Budget_Rev', 'Budget_Achiev', 'OTB_RN', 
-        'OTB_ADR', 'Actual_Rev', 'Actual_RN', 'Rooms', 'Nights'
+        'Actual_Rev', 'Actual_RN', 'Rooms', 'Nights'
     ]
     for col in target_cols:
         if col in df.columns:
@@ -79,20 +79,20 @@ def clean_numeric_columns(df):
             df['ADR_Total'] = np.where(df['RN'] > 0, df['Total_Revenue'] / df['RN'], 0)
     return df
 
-def save_to_firestore_split_by_date(df):
+def save_to_firestore_by_date(df):
     try:
         if df.empty: return False
-        
-        # [핵심] 통데이터 날짜별 분리 저장 로직
-        # 데이터 내의 'Snapshot_Date'별로 그룹화하여 날짜별로 각각 별도의 문서로 저장합니다.
+        # [핵심] 며칠치 데이터를 올려도 날짜별로 쪼개서 별도 문서로 저장
         unique_dates = df['Snapshot_Date'].unique()
-        
         for s_date in unique_dates:
             date_df = df[df['Snapshot_Date'] == s_date].copy()
             records = date_df.fillna(0).astype(str).to_dict(orient='records')
             
-            # 파이어베이스에 날짜별로 문서 생성
-            db.collection(COLLECTION_NAME).add({
+            # 문서 ID에 날짜와 Status를 포함시켜 덮어쓰기 방지
+            status_tag = date_df['Status'].iloc[0] if 'Status' in date_df.columns else "Data"
+            doc_id = f"{s_date}_{status_tag}_{int(time.time())}"
+            
+            db.collection(COLLECTION_NAME).document(doc_id).set({
                 'data': records,
                 'uploaded_at': datetime.now(),
                 'snapshot_date': s_date
@@ -121,7 +121,7 @@ def load_data_from_firestore():
         st.error(f"❌ 데이터 로드 오류: {e}")
         return []
 
-def delete_all_data():
+def delete_all_records():
     try:
         docs = db.collection(COLLECTION_NAME).stream()
         cnt = 0
@@ -130,11 +130,11 @@ def delete_all_data():
             cnt += 1
         return cnt
     except Exception as e:
-        st.error(f"초기화 오류: {e}")
+        st.error(f"삭제 오류: {e}")
         return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (날짜 강제 형변환 + 리드타임 자동 계산)
+# 4. 엑셀/CSV 파일 처리 로직 (날짜 분류 및 리드타임 직접 계산)
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -149,7 +149,7 @@ def normalize_and_map_columns(df):
         'Room_Revenue': ['객실료', '매출', 'room_rev'],
         'Total_Revenue': ['총금액', '합계', 'total'],
         'Segment': ['세그먼트', 'segment'],
-        'Account': ['거래처', '에이전시', 'source', 'account'],
+        'Account': ['거래처', '에이전시', 'source'],
         'Room_Type': ['객실타입', '룸타입', 'type']
     }
     for col in df.columns:
@@ -162,50 +162,50 @@ def normalize_and_map_columns(df):
 
 def process_data(uploaded_file, status):
     try:
-        # CSV 인코딩 cp949 적용 및 헤더 3행(Index 2) 고정
+        # 1. 파일 읽기 (3행 헤더 고정)
         if uploaded_file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(uploaded_file, header=2, encoding='cp949')
             except: df_raw = pd.read_csv(uploaded_file, header=2)
         else:
             df_raw = pd.read_excel(uploaded_file, header=2)
 
-        # 1. 조식 전수조사 (BF 스캔)
+        # 2. 조식 전수조사
         def scan_bf(row):
             return 'Included (조식포함)' if 'BF' in "".join(row.astype(str).values).upper() else 'Not Included (불포함)'
         breakfast_col = df_raw.apply(scan_bf, axis=1)
 
-        # 2. 컬럼 매핑
+        # 3. 컬럼 매핑
         df = normalize_and_map_columns(df_raw).copy()
         df['Breakfast'] = breakfast_col
         df['Status'] = status
 
-        # 3. [핵심] 날짜 타입 강제 변환 (리드타임 계산 에러 방지)
-        # 엑셀의 . 형식을 - 형식으로 바꾸어 계산 가능하게 만듭니다.
+        # 4. 날짜 강제 변환 (리드타임 계산 에러 방지용 최적화)
         for c in ['CheckIn', 'Booking_Date', 'Cancel_Date']:
             if c in df.columns:
-                df[c] = pd.to_datetime(df[c].astype(str).str.replace('.', '-'), errors='coerce')
+                # 점(.)을 대시(-)로 바꾸고 날짜형식으로 변환 후 시간 제거
+                df[c] = pd.to_datetime(df[c].astype(str).str.replace('.', '-'), errors='coerce').dt.date
 
-        # 4. [핵심] 리드타임(LT) 파이썬 직접 계산 (입실일 - 예약일)
+        # 5. [핵심] 리드타임(LT) 파이썬 직접 계산
         if 'CheckIn' in df.columns and 'Booking_Date' in df.columns:
-            df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
+            # 날짜 객체끼리의 뺄셈으로 정확한 일수 계산
+            df['Lead_Time'] = df.apply(lambda r: (r['CheckIn'] - r['Booking_Date']).days if pd.notnull(r['CheckIn']) and pd.notnull(r['Booking_Date']) else 0, axis=1)
         else:
             df['Lead_Time'] = 0
 
-        # 5. [핵심] 통데이터 날짜 분류 (Snapshot_Date 생성)
-        # 예약 데이터는 '예약일' 기준, 취소 데이터는 '취소일' 기준으로 조회되게 만듭니다.
-        if status == "Booked":
-            df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d')
+        # 6. [핵심] 통데이터 날짜 분류 (Snapshot_Date 생성)
+        # 예약 데이터는 행별 '예약일' 기준, 취소 데이터는 행별 '취소일' 기준
+        if status == "Booked" and 'Booking_Date' in df.columns:
+            df['Snapshot_Date'] = df['Booking_Date'].apply(lambda x: str(x) if pd.notnull(x) else datetime.now().strftime('%Y-%m-%d'))
+        elif status == "Cancelled" and 'Cancel_Date' in df.columns:
+            df['Snapshot_Date'] = df['Cancel_Date'].apply(lambda x: str(x) if pd.notnull(x) else datetime.now().strftime('%Y-%m-%d'))
         else:
-            df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d')
-        
-        # 날짜 누락 데이터 방어
-        df['Snapshot_Date'] = df['Snapshot_Date'].fillna(datetime.now().strftime('%Y-%m-%d'))
+            df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
 
-        # 6. 나머지 데이터 정리
+        # 7. 숫자 정리
         df['RN'] = pd.to_numeric(df.get('Rooms', 0), errors='coerce').fillna(0) * pd.to_numeric(df.get('Nights', 1).replace(0,1), errors='coerce').fillna(1)
-        df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
-        df['Booking_Month'] = df['Booking_Date'].dt.strftime('%Y-%m')
-        df['Day_Type'] = df['CheckIn'].dt.weekday.apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
+        df['Stay_Month'] = df['CheckIn'].apply(lambda x: x.strftime('%Y-%m') if pd.notnull(x) else "")
+        df['Booking_Month'] = df['Booking_Date'].apply(lambda x: x.strftime('%Y-%m') if pd.notnull(x) else "")
+        df['Day_Type'] = df['CheckIn'].apply(lambda x: 'Weekend' if pd.notnull(x) and x.weekday() >= 4 else 'Weekday')
         
         def classify_nat(row):
             if re.search('[가-힣]', str(row.get('Guest_Name',''))): return 'KOR'
@@ -226,7 +226,7 @@ def process_otb(uploaded_file):
     except: return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 렌더링 헬퍼 함수들
+# 5. UI 렌더링 헬퍼 함수들 (무삭제 유지)
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
@@ -252,30 +252,39 @@ def render_analysis_tabs(df, key_prefix):
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs(["📊 세그먼트", "📅 Pacing", "🏢 거래처", "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일", "🌐 국적", "🍳 조식"])
     
     with t1:
+        st.subheader("📊 세그먼트 분석")
         s = df.groupby('Segment').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
         c1, c2 = st.columns(2)
         c1.plotly_chart(px.pie(s, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True, key=f"{key_prefix}_pie")
         c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue', title="매출 규모"), use_container_width=True, key=f"{key_prefix}_bar")
         show_df_styled(add_total_row(s, 'Segment'))
     with t2:
+        st.subheader("📅 예약월 vs 투숙월 Pacing")
         piv = df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum').fillna(0)
         st.plotly_chart(px.imshow(piv, text_auto="d", aspect="auto", color_continuous_scale="Blues"), use_container_width=True, key=f"{key_prefix}_pace")
     with t3:
+        st.subheader("🏢 거래처별 실적 (Top 50)")
         a = df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index().sort_values('RN', ascending=False).head(50)
         show_df_styled(add_total_row(a, 'Account'))
     with t4:
-        st.subheader("⏳ 리드타임 (파이썬 직접 계산)")
+        st.subheader("⏳ 리드타임 분석 (파이썬 계산)")
         bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]; labels = ['0일', '1-3일', '4-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+']
         df['LT_G'] = pd.cut(df['Lead_Time'], bins=bins, labels=labels)
         l = df.groupby('LT_G', observed=True).agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
-        st.plotly_chart(px.bar(l, x='LT_G', y='RN', title="리드타임별 박수"), use_container_width=True, key=f"{key_prefix}_lt")
+        st.plotly_chart(px.bar(l, x='LT_G', y='RN', title="리드타임 구간별 박수"), use_container_width=True, key=f"{key_prefix}_lt")
         show_df_styled(add_total_row(l, 'LT_G'))
-    with t5: show_df_styled(add_total_row(df.groupby('Room_Type').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Room_Type'))
+    with t5:
+        st.subheader("🛏️ 객실 타입별 선호도")
+        show_df_styled(add_total_row(df.groupby('Room_Type').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Room_Type'))
     with t6:
+        st.subheader("🗓️ 요일별 패턴 (평일 vs 주말)")
         w = df.groupby('Day_Type').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index()
         st.plotly_chart(px.bar(w, x='Day_Type', y='Room_Revenue'), use_container_width=True, key=f"{key_prefix}_wd")
-    with t7: show_df_styled(add_total_row(df.groupby('Nat_Group').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Nat_Group'))
+    with t7:
+        st.subheader("🌐 국적 비중")
+        show_df_styled(add_total_row(df.groupby('Nat_Group').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Nat_Group'))
     with t8:
+        st.subheader("🍳 조식 포함 여부 (BF 스캔)")
         if 'Breakfast' in df.columns:
             b = df.groupby('Breakfast').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index()
             c1, c2 = st.columns(2)
@@ -293,24 +302,24 @@ try:
 
     with st.sidebar:
         st.header("⚙️ 시스템 설정")
-        if st.button("🚨 모든 실적 데이터 초기화"):
-            cnt = delete_all_data(); st.warning(f"{cnt}개 데이터 삭제됨"); time.sleep(1); st.cache_data.clear(); st.rerun()
+        if st.button("🚨 모든 데이터 초기화 (신중히)"):
+            cnt = delete_all_records(); st.warning(f"{cnt}개 데이터 삭제됨"); time.sleep(1); st.cache_data.clear(); st.rerun()
             
-        selected_date = st.selectbox("조회 기준일 (실제 데이터 발생일)", available_dates, index=0) if available_dates else None
+        selected_date = st.selectbox("조회 기준일 (데이터 실제 발생일)", available_dates, index=0) if available_dates else None
         st.markdown("---")
         st.header("📤 데이터 업로드")
         f1 = st.file_uploader("예약 리스트 (통데이터 가능)", type=['xlsx','csv'], key="f1")
-        if f1 and st.button("예약 데이터 저장"):
-            if save_to_firestore_split_by_date(process_data(f1, "Booked")): st.cache_data.clear(); st.rerun()
+        if f1 and st.button("예약 저장"):
+            if save_to_firestore_by_date(process_data(f1, "Booked")): st.cache_data.clear(); st.rerun()
             
         f2 = st.file_uploader("취소 리스트 (통데이터 가능)", type=['xlsx','csv'], key="f2")
-        if f2 and st.button("취소 데이터 저장"):
-            if save_to_firestore_split_by_date(process_data(f2, "Cancelled")): st.cache_data.clear(); st.rerun()
+        if f2 and st.button("취소 저장"):
+            if save_to_firestore_by_date(process_data(f2, "Cancelled")): st.cache_data.clear(); st.rerun()
             
-        f3_list = st.file_uploader("OTB 통합 업로드", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
+        f3_list = st.file_uploader("OTB 파일", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
         if f3_list and st.button("OTB 저장"):
             all_otb = [process_otb(f) for f in f3_list]
-            if all_otb and save_to_firestore_split_by_date(pd.concat(all_otb, ignore_index=True)): st.cache_data.clear(); st.rerun()
+            if all_otb and save_to_firestore_by_date(pd.concat(all_otb, ignore_index=True)): st.cache_data.clear(); st.rerun()
 
     if selected_date and not df_all.empty:
         df = clean_numeric_columns(df_all[df_all['Snapshot_Date'] == selected_date].copy())
@@ -320,7 +329,6 @@ try:
         df_cn = df_list[df_list['Status'] == 'Cancelled']
 
         tabs = st.tabs(["👑 GM 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🎯 OTB 현황"])
-
         with tabs[0]:
             st.header(f"👑 총지배인 요약 ({selected_date} 실적)")
             b_rn, b_rev = df_bk['RN'].sum(), df_bk['Room_Revenue'].sum()
@@ -328,33 +336,23 @@ try:
             b_los = b_rn / len(df_bk) if not df_bk.empty else 0
             c_los = c_rn / len(df_cn) if not df_cn.empty else 0
             
-            st.markdown("#### ✅ 예약")
-            c = st.columns(5)
-            c[0].metric("RN", f"{b_rn:,.0f}"); c[1].metric("매출", f"{b_rev:,.0f}")
-            c[2].metric("ADR", f"{b_rev/b_rn if b_rn>0 else 0:,.0f}")
-            c[3].metric("LOS", f"{b_los:.1f}박"); c[4].metric("건수", f"{len(df_bk):,.0f}")
+            st.markdown("#### ✅ 예약 실적")
+            c = st.columns(5); c[0].metric("RN", f"{b_rn:,.0f}"); c[1].metric("매출", f"{b_rev:,.0f}"); c[2].metric("ADR", f"{b_rev/b_rn if b_rn>0 else 0:,.0f}"); c[3].metric("LOS", f"{b_los:.1f}박"); c[4].metric("건수", f"{len(df_bk):,.0f}")
+            st.markdown("#### ❌ 취소 실적")
+            cc = st.columns(5); cc[0].metric("RN", f"{c_rn:,.0f}"); cc[1].metric("매출", f"{c_rev:,.0f}"); cc[2].metric("ADR", f"{c_rev/c_rn if c_rn>0 else 0:,.0f}"); cc[3].metric("LOS", f"{c_los:.1f}박"); cc[4].metric("건수", f"{len(df_cn):,.0f}")
+            st.divider(); show_df_styled(add_total_row(df_bk.groupby('Segment').agg({'RN':'sum','Room_Revenue':'sum'}).reset_index(), 'Segment'))
             
-            st.markdown("#### ❌ 취소")
-            cc = st.columns(5)
-            cc[0].metric("RN", f"{c_rn:,.0f}"); cc[1].metric("매출", f"{c_rev:,.0f}")
-            cc[2].metric("ADR", f"{c_rev/c_rn if c_rn>0 else 0:,.0f}")
-            cc[3].metric("LOS", f"{c_los:.1f}박"); cc[4].metric("건수", f"{len(df_cn):,.0f}")
-            st.divider()
-            if not df_bk.empty: show_df_styled(add_total_row(df_bk.groupby('Segment').agg({'RN': 'sum','Room_Revenue': 'sum'}).reset_index(), 'Segment')) 
-
-        with tabs[1]: render_analysis_tabs(df_bk, "booked")
-        with tabs[2]: render_analysis_tabs(df_cn, "cancelled")
-        with tabs[3]: render_analysis_tabs(pd.concat([df_bk, df_cn]), "total")
+        with tabs[1]: render_analysis_tabs(df_bk, "bk")
+        with tabs[2]: render_analysis_tabs(df_cn, "cn")
+        with tabs[3]: render_analysis_tabs(pd.concat([df_bk, df_cn]), "tot")
         with tabs[4]:
             if not df_otb.empty:
                 df_otb['M'] = pd.to_datetime(df_otb['CheckIn']).dt.month
-                otb_res = df_otb.groupby('M').agg({'Room_Revenue':'sum'}).reset_index()
-                fin = pd.merge(pd.DataFrame({'M': range(1, 13)}), otb_res, on='M', how='left').fillna(0)
+                fin = pd.merge(pd.DataFrame({'M': range(1, 13)}), df_otb.groupby('M').agg({'Room_Revenue':'sum'}).reset_index(), on='M', how='left').fillna(0)
                 fin['Budget'] = fin['M'].map(BUDGET_DATA).fillna(0)
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=fin['M'], y=fin['Room_Revenue'], name='OTB', text=(fin['Room_Revenue']/fin['Budget']*100).apply(lambda x: f"{x:.1f}%" if x>0 else ""), textposition='outside'))
                 fig.add_trace(go.Scatter(x=fin['M'], y=fin['Budget'], name='Budget', line=dict(color='red', dash='dot')))
                 st.plotly_chart(fig, use_container_width=True)
-    else: st.info("👈 파일을 업로드하고 '저장' 버튼을 누르십시오.")
-except Exception as e:
-    st.error(f"🚨 시스템 오류: {e}")
+    else: st.info("👈 사이드바에서 파일을 업로드하고 '저장'을 눌러주세요.")
+except Exception as e: st.error(f"🚨 오류: {e}")
