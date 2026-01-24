@@ -424,6 +424,29 @@ try:
                 fig.add_trace(go.Bar(x=fin['M'], y=fin['Room_Revenue'], name='OTB', text=(fin['Room_Revenue']/fin['Budget']*100).apply(lambda x: f"{x:.1f}%" if x>0 else ""), textposition='outside'))
                 fig.add_trace(go.Scatter(x=fin['M'], y=fin['Budget'], name='Budget', line=dict(color='red', dash='dot')))
                 st.plotly_chart(fig, use_container_width=True)
+
+        with main_tab5:
+            st.header("🎯 OTB 현황 (Budget vs OTB)")
+            if df_otb.empty: st.warning("⚠️ OTB 데이터가 없습니다.")
+            else:
+                base = df_otb.copy(); base['M'] = pd.to_datetime(base['CheckIn']).dt.month
+                grp_otb = base.groupby('M').agg({'Room_Revenue':'sum'}).reset_index()
+                fin = pd.merge(pd.DataFrame({'M': range(1, 13)}), grp_otb, on='M', how='left').fillna(0)
+                fin['Budget'] = fin['M'].map(BUDGET_DATA).fillna(0)
+                fin['OTB'] = fin['Room_Revenue']
+                fin['Rate'] = np.where(fin['Budget'] > 0, (fin['OTB'] / fin['Budget']) * 100, 0)
+                fin['Name'] = fin['M'].astype(str) + "월"
+                fig_otb = go.Figure()
+                fig_otb.add_trace(go.Bar(x=fin['Name'], y=fin['OTB'], name='OTB (현재)', marker_color='#2E86C1', text=fin['Rate'].apply(lambda x: f"{x:.1f}%"), textposition='outside'))
+                fig_otb.add_trace(go.Scatter(x=fin['Name'], y=fin['Budget'], name='Budget (목표)', line=dict(color='red', dash='dot', width=3)))
+                fig_otb.update_layout(height=550, yaxis_title="매출 (KRW)", margin=dict(t=50))
+                st.plotly_chart(fig_otb, use_container_width=True, key="otb_main_chart")
+                res_dict = {}
+                tb, to = fin['Budget'].sum(), fin['OTB'].sum()
+                for _, r in fin.iterrows(): res_dict[r['Name']] = [f"{r['Budget']:,.0f}", f"{r['OTB']:,.0f}", f"{r['Rate']:.1f}%"]
+                res_dict['합계 (Total)'] = [f"{tb:,.0f}", f"{to:,.0f}", f"{(to/tb*100 if tb>0 else 0):.1f}%"]
+                st.dataframe(pd.DataFrame(res_dict, index=['Budget (목표)', 'OTB (현재)', '달성률 (%)']).style.apply(lambda s: ['background-color: #fff9c4; font-weight: bold; border-left: 2px solid black; color: black'] * len(s) if s.name == '합계 (Total)' else [''] * len(s), axis=0), use_container_width=True)
+
     else: st.info("👈 왼쪽 사이드바에서 파일을 업로드하고 '저장' 버튼을 눌러주세요.")
 except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
