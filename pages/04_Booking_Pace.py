@@ -9,9 +9,9 @@ import time
 import os
 
 # -----------------------------------------------------------------------------
-# 1. Firebase 접속 및 초기 설정 (가장 안정적인 방식 유지)
+# 1. Firebase 접속 및 초기 설정
 # -----------------------------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Hotel Strategy Dashboard", page_icon="🏨")
+st.set_page_config(layout="wide", page_title="Amber Pure Hill Dashboard", page_icon="🏨")
 
 def init_firebase_direct():
     if not firebase_admin._apps:
@@ -32,7 +32,7 @@ def init_firebase_direct():
 db, db_status = init_firebase_direct()
 
 # -----------------------------------------------------------------------------
-# 2. 데이터 고속 로딩(Parquet) 및 스냅샷 관리 (신규 추가 로직)
+# 2. 데이터 고속 로딩(Parquet) 및 스냅샷 관리
 # -----------------------------------------------------------------------------
 CACHE_FILE = "local_booking_cache.parquet"
 
@@ -80,7 +80,6 @@ def upload_to_firestore(df_new):
     bar.empty()
     msg.success(f"✅ {total}건 업데이트 완료! (버전: {upload_time})")
     
-    # 업로드 성공 시 로컬 캐시 삭제하여 새로고침 유도
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     st.cache_data.clear()
@@ -110,7 +109,7 @@ def delete_all_data():
 
 @st.cache_data(ttl=3600)
 def load_data_with_snapshot_cache():
-    # 1. 로컬 캐시 파일이 있으면 즉시 로드 (광속 로딩)
+    # 1. 로컬 캐시 파일이 있으면 즉시 로드
     if os.path.exists(CACHE_FILE):
         try:
             df = pd.read_parquet(CACHE_FILE)
@@ -140,66 +139,18 @@ def load_data_with_snapshot_cache():
         df['Week'] = df['입실일자'].dt.isocalendar().week.fillna(0).astype(int)
         df['DayOfWeek'] = df['입실일자'].dt.day_name()
         
-        # Snapshot 컬럼 보정
         if 'Snapshot' not in df.columns:
             df['Snapshot'] = "이전 데이터"
             
-        # 3. 로컬 파일로 저장 (다음 로딩부터 빨라짐)
+        # 3. 로컬 파일로 저장
         df.to_parquet(CACHE_FILE)
         return df, "Firestore (실시간)"
     except:
         return pd.DataFrame(), "조회 에러"
 
-def load_historical_patterns():
-    db = firestore.client()
-    # 4만 건의 예약 데이터를 가져옴
-    docs = db.collection("reservations").stream() 
-    
-    data = []
-    for doc in docs:
-        data.append(doc.to_dict())
-    
-    if not data:
-        return {}, 0, pd.DataFrame()
-        
-    df = pd.DataFrame(data)
-    
-    # [수정 포인트 1] 실제 존재하는 컬럼명 찾기 (대소문자/언더바 대응)
-    cols = df.columns.tolist()
-    
-    # 체크인 날짜 필드 찾기
-    ci_col = next((c for c in cols if c.lower() in ['check_in', 'checkin', 'arrivaldate']), None)
-    # 예약 생성 날짜 필드 찾기
-    bd_col = next((c for c in cols if c.lower() in ['booking_date', 'bookingdate', 'created_at']), None)
-    # 고객 식별 필드 찾기
-    cust_col = next((c for c in cols if c.lower() in ['customer_id', 'phone', 'email', 'guestname']), None)
-
-    # 필드가 하나라도 없으면 에러 대신 기본값 반환
-    if not ci_col or not bd_col:
-        return {}, 0, df
-
-    # [수정 포인트 2] 찾은 컬럼명으로 데이터 타입 변환
-    df['check_in'] = pd.to_datetime(df[ci_col], errors='coerce')
-    df['booking_date'] = pd.to_datetime(df[bd_col], errors='coerce')
-    
-    # 결측치 제거
-    df = df.dropna(subset=['check_in', 'booking_date'])
-
-    # [3] 요일별 예약 발생 패턴 (요일 지수)
-    df['dow'] = df['booking_date'].dt.dayofweek
-    dow_counts = df['dow'].value_counts(normalize=True) * 7
-    
-    # [4] 재방문율 통계
-    repeat_rate = 0
-    if cust_col:
-        repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100
-    
-    return dow_counts.to_dict(), repeat_rate, df
-
 # -----------------------------------------------------------------------------
-# 3. 사이드바 (시스템 관리 및 필터)
+# 3. 사이드바 및 필터 (취소 정밀 필터 적용)
 # -----------------------------------------------------------------------------
-# 데이터를 먼저 불러옵니다.
 df_raw, load_source = load_data_with_snapshot_cache()
 
 with st.sidebar:
@@ -207,13 +158,9 @@ with st.sidebar:
     st.write(f"**DB 상태:** {db_status}")
     st.caption(f"로드 소스: {load_source}")
     
-    if db is None:
-        st.error("❌ Firebase 연결 실패! Secrets 설정을 확인하세요.")
-        st.stop()
-
     with st.expander("📤 데이터 업로드", expanded=True):
         st.info("💡 4만 건 이상 대용량은 1만 건씩 나눠 올리기를 권장합니다.")
-        up_files = st.file_uploader("엑셀/CSV 파일 (여러 개 선택 가능)", accept_multiple_files=True)
+        up_files = st.file_uploader("엑셀/CSV 파일", accept_multiple_files=True)
         
         if up_files:
             if st.button("🚀 DB 업데이트 시작", key="btn_upload"):
@@ -238,7 +185,6 @@ with st.sidebar:
     with st.expander("⚠️ 데이터 초기화"):
         st.warning("경고: 모든 데이터가 파이어베이스에서 영구 삭제됩니다.")
         pw = st.text_input("확인 메시지 ('초기화' 입력)")
-        
         if st.button("🗑️ 전체 데이터 삭제", key="btn_delete"):
             if pw == "초기화":
                 with st.spinner("🚀 고속 삭제 모드 가동 중..."):
@@ -256,32 +202,26 @@ with st.sidebar:
     st.markdown("**🔍 데이터 버전(Snapshot) 선택**")
     if not df_raw.empty:
         snapshot_options = sorted(df_raw['Snapshot'].unique(), reverse=True)
-        selected_snapshot = st.selectbox("조회할 업로드 시점 선택", snapshot_options)
+        selected_snapshot = st.selectbox("조회할 데이터 버전", snapshot_options)
         df = df_raw[df_raw['Snapshot'] == selected_snapshot]
     else:
         df = df_raw
 
     st.markdown("**🚫 필터 설정**")
-    df_clean = df.copy()
-
-    if not df.empty:
-        if '상태' in df.columns:
-            all_sts = df['상태'].unique().astype(str)
-            cancel_k = ['취소', 'CXL', 'CANCEL', 'NO', 'NOSHOW', 'RC', 'RX']
-            def_exc = [s for s in all_sts if any(x in s.upper() for x in cancel_k)]
-            
-            exc_sts = st.multiselect(
-                "제외할 상태 (취소 등)", 
-                options=all_sts, 
-                default=def_exc,
-                help="체크된 상태는 매출 분석에서 제외됩니다."
-            )
-            df_clean = df[~df['상태'].isin(exc_sts)]
-        else:
-            st.warning("⚠️ 데이터에 '상태' 컬럼이 없습니다.")
-            df_clean = df
-    else:
-        df_clean = df
+    # [정밀 취소 키워드 정의]
+    cancel_k = ['취소', 'CXL', 'CANCEL', 'NO', 'NOSHOW', 'RC', 'RX']
+    all_sts = df['상태'].unique().astype(str) if '상태' in df.columns else []
+    # 해당 키워드가 포함된 모든 상태 자동 감지
+    def_exc = [s for s in all_sts if any(x in s.upper() for x in cancel_k)]
+    
+    exc_sts = st.multiselect(
+        "분석 제외 상태 (취소/RC/RX 등)", 
+        options=all_sts, 
+        default=def_exc,
+        help="체크된 상태는 매출 및 ADR 분석에서 제외됩니다."
+    )
+    # [중요] 여기서 1차로 취소가 걸러진 df_clean 생성
+    df_clean = df[~df['상태'].isin(exc_sts)] if '상태' in df.columns else df
 
 # -----------------------------------------------------------------------------
 # 4. 메인 화면 출력
@@ -289,7 +229,7 @@ with st.sidebar:
 
 if df_clean.empty:
     st.title("🏨 Hotel Strategy Dashboard")
-    st.info("👋 환영합니다! 아직 데이터가 로드되지 않았습니다. 사이드바에서 업로드해주세요.")
+    st.info("👋 환영합니다! 데이터가 없습니다. 사이드바에서 업로드해주세요.")
     st.stop()
 
 st.title("🏨 Hotel Strategy Dashboard")
@@ -424,11 +364,12 @@ if target_df.empty:
     st.warning(f"⚠️ 선택하신 기간({chart_sub})에 해당하는 데이터가 없습니다. 필터를 확인해주세요.")
     st.stop()
 
-# --- 시각화 탭 생성 (추가 탭 포함) ---
-# [변경사항] 탭 개수를 6개에서 8개로 늘림
+# -----------------------------------------------------------------------------
+# 5. 시각화 탭 (통합: 0~5 기본, 6~7 신규)
+# -----------------------------------------------------------------------------
 tabs = st.tabs(["💰 매출", "💳 ADR", "⏳ 리드타임", "📅 요일", "🌏 국적/객실", "🔁 로열티(재방문)", "🚀 RM 분석", "🎯 수익 전략"])
 
-# [TAB 1] Revenue
+# [TAB 0] Revenue
 with tabs[0]:
     st.subheader(f"매출 페이스: {chart_sub}")
     def get_pace(d):
@@ -444,7 +385,7 @@ with tabs[0]:
     fig.update_layout(xaxis={'autorange': 'reversed'}, xaxis_title="D-Day", yaxis_title="누적 매출", height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-# [TAB 2] ADR
+# [TAB 1] ADR
 with tabs[1]:
     st.subheader(f"ADR(객단가) 추이")
     def get_adr(d):
@@ -459,7 +400,7 @@ with tabs[1]:
     fig2.update_layout(xaxis={'autorange': 'reversed'}, height=500)
     st.plotly_chart(fig2, use_container_width=True)
 
-# [TAB 3] Lead Time
+# [TAB 2] Lead Time
 with tabs[2]:
     st.subheader("예약 리드타임 분포")
     bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]
@@ -472,7 +413,7 @@ with tabs[2]:
     fig3 = px.bar(pd.concat([tg, rg]), x='Group', y='총금액', color='Type', barmode='group', color_discrete_map={'Target':'#0052cc','Ref':'#bababa'})
     st.plotly_chart(fig3, use_container_width=True)
 
-# [TAB 4] Day of Week
+# [TAB 3] Day of Week
 with tabs[3]:
     st.subheader("요일별 매출 퍼포먼스")
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -483,7 +424,7 @@ with tabs[3]:
     fig4.add_trace(go.Scatter(x=rd['DayOfWeek'], y=rd['총금액'], name='Ref', line=dict(color='gray', dash='dot')))
     st.plotly_chart(fig4, use_container_width=True)
 
-# [TAB 5] Demographics
+# [TAB 4] Demographics
 with tabs[4]:
     st.subheader("국적 및 객실 타입 분석")
     c1, c2 = st.columns(2)
@@ -498,38 +439,32 @@ with tabs[4]:
         fig6 = px.bar(pd.concat([rt_t, rt_r])[pd.concat([rt_t, rt_r])['객실타입'].isin(top)], x='객실타입', y='총금액', color='Type', barmode='group')
         st.plotly_chart(fig6, use_container_width=True)
 
-# [TAB 6] Guest Loyalty (Smart Logic)
+# [TAB 5] Guest Loyalty (Smart Logic) - 에러 수정 완료
 with tabs[5]:
     st.header("🔁 고객 로열티 심층 리포트 (VIP & N차 분석)")
     
-    # [1] 컬럼 자동 감지
     name_cols = ['고객명', '예약자', '성함', '고객성함', 'Guest Name', 'Name', '예약자명', '한글성명', '고객']
     phone_cols = ['휴대폰', '전화번호', '연락처', 'Mobile', 'Phone', '핸드폰', '휴대전화']
     
-    found_name = next((c for c in name_cols if c in df_clean.columns), None)
-    found_phone = next((c for c in phone_cols if c in df_clean.columns), None)
+    f_name = next((c for c in name_cols if c in df_clean.columns), None)
+    f_phone = next((c for c in phone_cols if c in df_clean.columns), None)
 
-    if not found_name:
+    if not f_name:
         st.warning(f"⚠️ '고객명' 컬럼을 찾을 수 없어 분석을 시작할 수 없습니다.")
     else:
-        # --- [2] 데이터 전처리 (직원 및 특정 인물 제외 로직 - 사장님 요청) ---
         exclude_names = ['허성문', '이민우', 'WANG ZHANJUN']
         df_l = df_clean.copy()
-        df_l = df_l[~df_l[found_name].astype(str).str.contains('|'.join(exclude_names), na=False)]
+        df_l = df_l[~df_l[f_name].astype(str).str.contains('|'.join(exclude_names), na=False)]
+        df_l = df_l.sort_values([f_name, '입실일자'])
         
-        df_l = df_l.sort_values([found_name, '입실일자'])
-        
-        # 식별키 생성
-        if found_phone:
-            df_l['GuestKey'] = df_l[found_name].astype(str) + "_" + df_l[found_phone].astype(str).str[-4:]
+        if f_phone:
+            df_l['GuestKey'] = df_l[f_name].astype(str) + "_" + df_l[f_phone].astype(str).str[-4:]
         else:
-            df_l['GuestKey'] = df_l[found_name].astype(str)
+            df_l['GuestKey'] = df_l[f_name].astype(str)
 
-        # 방문 주기(Interval) 계산
         df_l['PrevVisit'] = df_l.groupby('GuestKey')['입실일자'].shift(1)
         df_l['DaysSinceLastVisit'] = (df_l['입실일자'] - df_l['PrevVisit']).dt.days
 
-        # 전체 기간 기준 고객별 통계 (N차 세분화)
         guest_stats = df_l.groupby('GuestKey').agg({
             '예약번호': 'count',
             '총금액': 'sum',
@@ -537,7 +472,6 @@ with tabs[5]:
         }).reset_index()
         guest_stats.columns = ['GuestKey', 'TotalVisits', 'TotalRev', 'TotalRooms']
 
-        # 등급 세분화 로직
         def segment_visit(n):
             if n == 1: return "1회 (신규)"
             elif n == 2: return "2회 (리피터)"
@@ -546,21 +480,16 @@ with tabs[5]:
             else: return "5회 이상 (VVIP)"
         guest_stats['CustomerGrade'] = guest_stats['TotalVisits'].apply(segment_visit)
 
-        # 현재 선택된 타겟 기간 데이터와 병합 (직원 제외 필터 동일 적용)
-        target_filtered = target_df[~target_df[found_name].astype(str).str.contains('|'.join(exclude_names), na=False)]
+        target_filtered = target_df[~target_df[f_name].astype(str).str.contains('|'.join(exclude_names), na=False)]
         df_target_loyalty = df_l[df_l['예약번호'].isin(target_filtered['예약번호'])].copy()
         df_target_loyalty = pd.merge(df_target_loyalty, guest_stats[['GuestKey', 'TotalVisits', 'CustomerGrade']], on='GuestKey', how='left')
         df_target_loyalty['GuestType'] = df_target_loyalty['TotalVisits'].apply(lambda x: '첫 방문 (New)' if x <= 1 else '재방문 (Return)')
 
-        # --- [3] 추가 기능: 전체 기간 누적 통계 비교 (신규 추가) ---
         st.subheader("📊 기간별 재방문율 비교 (타겟 vs 전체)")
-        
-        # 전체 통계
         total_u = guest_stats['GuestKey'].nunique()
         total_r = guest_stats[guest_stats['TotalVisits'] > 1]['GuestKey'].nunique()
         total_rate = (total_r / total_u * 100) if total_u > 0 else 0
         
-        # 타겟 통계
         target_u = df_target_loyalty['GuestKey'].nunique()
         target_r = df_target_loyalty[df_target_loyalty['TotalVisits'] > 1]['GuestKey'].nunique()
         target_rate = (target_r / target_u * 100) if target_u > 0 else 0
@@ -573,12 +502,11 @@ with tabs[5]:
         
         st.divider()
 
-        # --- [4] 시각화 1단계: 구성비 및 등급 (기존 유지) ---
         st.subheader("1️⃣ 고객 구성 및 등급별 분포")
         c1, c2 = st.columns(2)
         grade_order = ["1회 (신규)", "2회 (리피터)", "3회 (단골)", "4회 (충성)", "5회 이상 (VVIP)"]
         
-        # [🔥 에러 수정 완료] value_counts() 컬럼명 강제 지정
+        # [수정] Plotly 컬럼 에러 방지
         grade_counts = df_target_loyalty.groupby('CustomerGrade').size().reindex(grade_order).fillna(0).reset_index(name='Count')
         
         with c1:
@@ -588,7 +516,6 @@ with tabs[5]:
 
         st.divider()
 
-        # --- [5] 시각화 2단계: 주기 및 전환 분석 (심층 인사이트 유지) ---
         st.subheader("2️⃣ 심층 인사이트: 방문 주기 및 채널 전환")
         col_in1, col_in2 = st.columns(2)
         with col_in1:
@@ -611,7 +538,6 @@ with tabs[5]:
 
         st.divider()
 
-        # --- [6] 시각화 3단계: 수익 기여도 (수익성 유지) ---
         st.subheader("3️⃣ 수익 기여도 분석")
         col_rev1, col_rev2 = st.columns(2)
         with col_rev1:
@@ -625,7 +551,6 @@ with tabs[5]:
 
         st.divider()
 
-        # --- [7] VVIP 및 재방문 명단 추출 (명단 유지) ---
         st.subheader("4️⃣ 마케팅 타겟 고객 리스트")
         list_tab1, list_tab2 = st.tabs(["💎 VVIP (5회 이상)", "⭐ 단골 (2회~4회)"])
         with list_tab1:
@@ -641,9 +566,11 @@ with tabs[5]:
                 st.dataframe(regular_list, use_container_width=True)
                 st.download_button("📥 단골 리스트 다운로드", data=regular_list.to_csv(index=False).encode('utf-8-sig'), file_name="Regular_Guest_List.csv")
 
-# [TAB 7] 🚀 수익 관리 (RM 정밀 분석 & 핀셋 필터) - 신규 추가 기능
+# [TAB 6] 🚀 수익 관리 (RM 정밀 분석 & 핀셋 필터) - ADR 60만원 오류 수정본
 with tabs[6]:
     st.header("🚀 수익 관리(RM) 기간별 정밀 분석")
+    st.info("💡 RC, RX 등 취소 건을 철저히 제외한 **순수 투숙(Net)** 기준 분석입니다.")
+    
     rm_mode = st.radio("분석 기준 선택", ["📅 입실일자 기준", "📝 예약일자 기준"], horizontal=True, key="rm_filter_main")
     d_col = '입실일자' if "입실일자" in rm_mode else '예약일자'
     
@@ -651,60 +578,111 @@ with tabs[6]:
     with rm_c1: d_a = st.date_input("기준 기간 (Period A)", [datetime(2025,1,1), datetime(2025,1,31)], key="da_rm_f")
     with rm_c2: d_b = st.date_input("비교 기간 (Period B)", [datetime(2026,1,1), datetime(2026,1,24)], key="db_rm_f")
     
-    df_a_rm = df_raw[(df_raw[d_col].dt.date >= d_a[0]) & (df_raw[d_col].dt.date <= d_a[1])].copy()
-    df_b_rm = df_raw[(df_raw[d_col].dt.date >= d_b[0]) & (df_raw[d_col].dt.date <= d_b[1])].copy()
+    # 1단계: 날짜로 먼저 자름
+    df_a_raw = df_raw[(df_raw[d_col].dt.date >= d_a[0]) & (df_raw[d_col].dt.date <= d_a[1])].copy()
+    df_b_raw = df_raw[(df_raw[d_col].dt.date >= d_b[0]) & (df_raw[d_col].dt.date <= d_b[1])].copy()
     
-    if not df_a_rm.empty and not df_b_rm.empty:
-        sub_rm = st.tabs(["📊 KPI", "📈 Pace", "📉 Wash-out", "⏳ 패턴"])
-        with sub_rm[0]: # KPI 요약
-            r_a, r_b = df_a_rm['총금액'].sum(), df_b_rm['총금액'].sum()
-            rms_a, rms_b = df_a_rm['객실수'].sum(), df_b_rm['객실수'].sum()
+    # 2단계: ADR/매출 계산용 '유효(Valid)' 데이터셋 생성 (취소 제외)
+    # [정밀 포인트] def_exc 리스트에 RC, RX가 포함되어 있음
+    df_a_valid = df_a_raw[~df_a_raw['상태'].isin(def_exc)]
+    df_b_valid = df_b_raw[~df_b_raw['상태'].isin(def_exc)]
+    
+    if not df_a_valid.empty and not df_b_valid.empty:
+        sub_rm = st.tabs(["📊 KPI (Net)", "📈 Pace", "📉 Wash-out", "⏳ 패턴", "🌏 국적/채널", "🚀 픽업"])
+        
+        with sub_rm[0]: # KPI 요약 (취소 제외한 순수 데이터 기준)
+            # 순수 매출 및 객실수 계산
+            r_a, r_b = df_a_valid['총금액'].sum(), df_b_valid['총금액'].sum()
+            rms_a, rms_b = df_a_valid['객실수'].sum(), df_b_valid['객실수'].sum()
+            
+            # ADR 계산 시 분모가 0이 되는 것을 방지
+            adr_a = r_a / rms_a if rms_a > 0 else 0
+            adr_b = r_b / rms_b if rms_b > 0 else 0
+            
             k1, k2, k3 = st.columns(3)
-            k1.metric("매출", f"{r_b/10000:,.0f}만", f"{(r_b-r_a)/10000:,.0f}만")
-            k2.metric("객실수", f"{rms_b:,}실", f"{rms_b-rms_a:,}실")
-            k3.metric("ADR", f"{r_b/rms_b:,.0f}원", f"{(r_b/rms_b)-(r_a/rms_a):,.0f}원")
-        with sub_rm[1]: # Pace
-            p_a = df_a_rm.groupby(d_col)['객실수'].sum().sort_index().cumsum()
-            p_b = df_b_rm.groupby(d_col)['객실수'].sum().sort_index().cumsum()
-            st.plotly_chart(go.Figure(data=[go.Scatter(y=p_a.values, name="A"), go.Scatter(y=p_b.values, name="B")]), use_container_width=True)
-        with sub_rm[2]: # Wash-out
-            df_b_rm['is_cxl'] = df_b_rm['상태'].isin(def_exc) if '상태' in df_b_rm.columns else False
-            cxl = df_b_rm.groupby('거래처')['is_cxl'].mean() * 100
+            k1.metric("순수 매출 (Net)", f"{r_b/10000:,.0f}만", f"{(r_b-r_a)/10000:,.0f}만")
+            k2.metric("실제 객실수 (Net)", f"{rms_b:,}실", f"{rms_b-rms_a:,}실")
+            k3.metric("평균 단가 (ADR)", f"{adr_b:,.0f}원", f"{adr_b-adr_a:,.0f}원")
+            
+        with sub_rm[1]: # Pace (취소 제외)
+            p_a = df_a_valid.groupby(d_col)['객실수'].sum().sort_index().cumsum()
+            p_b = df_b_valid.groupby(d_col)['객실수'].sum().sort_index().cumsum()
+            st.plotly_chart(go.Figure(data=[go.Scatter(y=p_a.values, name="A (Net)"), go.Scatter(y=p_b.values, name="B (Net)")]), use_container_width=True)
+            
+        with sub_rm[2]: # Wash-out (여기서는 전체 데이터에서 취소 비중을 봐야 함)
+            # 전체 모수(df_b_raw)에서 취소(def_exc 포함) 여부 마킹
+            df_b_raw['is_cxl'] = df_b_raw['상태'].isin(def_exc)
+            cxl = df_b_raw.groupby('거래처')['is_cxl'].mean() * 100
             st.plotly_chart(px.bar(cxl.reset_index(), x='거래처', y='is_cxl', title="거래처별 취소율(%)"), use_container_width=True)
-        with sub_rm[3]: # 패턴
-            lt_c = pd.concat([df_a_rm.assign(P='A'), df_b_rm.assign(P='B')])
-            st.plotly_chart(px.box(lt_c, x='P', y='LeadTime', color='P', title="Lead Time 변동"), use_container_width=True)
+            
+        with sub_rm[3]: # 패턴 (유효 데이터 기준)
+            lt_c = pd.concat([df_a_valid.assign(P='A'), df_b_valid.assign(P='B')])
+            st.plotly_chart(px.box(lt_c, x='P', y='LeadTime', color='P', title="Lead Time 변동 (Net 기준)"), use_container_width=True)
 
-# [TAB 8] 🎯 수익 전략 (Strategy) - 신규 추가 기능
+        with sub_rm[4]: # 국적/채널
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(px.pie(df_b_valid.groupby('국적')['총금액'].sum().reset_index().head(7), values='총금액', names='국적', title="현재 국적 비중"), use_container_width=True)
+            acc_a = df_a_valid['거래처'].value_counts(normalize=True).head(7).reset_index().assign(P='A')
+            acc_b = df_b_valid['거래처'].value_counts(normalize=True).head(7).reset_index().assign(P='B')
+            c2.plotly_chart(px.line(pd.concat([acc_a, acc_b]), x='index', y='거래처', color='P', markers=True, title="Account Share Shift"), use_container_width=True)
+
+        with sub_rm[5]: # 픽업 (Net Change)
+            pickup_a = df_a_valid.groupby(d_col)['객실수'].sum()
+            pickup_b = df_b_valid.groupby(d_col)['객실수'].sum()
+            diff = (pickup_b - pickup_a).fillna(pickup_b).reset_index(name='Pickup')
+            st.plotly_chart(px.bar(diff, x=d_col, y='Pickup', color='Pickup', title="기간별 예약 증감 (Net)"), use_container_width=True)
+
+# [TAB 7] 🎯 수익 전략 (Golden ADR 등 - 정밀 필터링 적용)
 with tabs[7]:
-    st.header("🎯 데이터 기반 수익 전략")
+    st.header("🎯 수익 극대화 전략 (Strategy)")
     s_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "🛡️ 취소 예측"])
+    
+    # [정밀 포인트] df_clean은 이미 사이드바에서 취소가 걸러진 데이터임
+    # 따라서 df_clean을 쓰면 RC, RX가 포함되지 않은 순수 ADR이 계산됨
+    
     with s_tabs[0]:
+        # 입실일자별 유효 객실수와 매출 합계
         df_g = df_clean.groupby('입실일자').agg({'총금액':'sum','객실수':'sum'}).reset_index()
-        df_g['ADR'] = df_g['총금액']/df_g['객실수']
+        # ADR 재계산 (취소된 매출 0원 데이터가 섞이지 않음)
+        df_g = df_g[df_g['객실수'] > 0] # 0인 경우 제외
+        df_g['ADR'] = df_g['총금액'] / df_g['객실수']
         # [수정] trendline 제거하여 에러 방지
-        st.plotly_chart(px.scatter(df_g, x='ADR', y='총금액', size='객실수', title="가격 대비 매출 상관관계"), use_container_width=True)
+        st.plotly_chart(px.scatter(df_g, x='ADR', y='총금액', size='객실수', title="가격(ADR) 대비 매출 상관관계 (Net 기준)"), use_container_width=True)
+        
     with s_tabs[1]:
+        # 국적별 분석도 df_clean 사용
         nat_p = df_clean.groupby('국적').agg({'총금액':'mean','LeadTime':'mean','객실수':'sum','예약번호':'count'}).reset_index()
-        st.plotly_chart(px.scatter(nat_p[nat_p['예약번호']>5], x='LeadTime', y='총금액', size='객실수', text='국적', title="국적별 수익성 vs 리드타임"), use_container_width=True)
+        st.plotly_chart(px.scatter(nat_p[nat_p['예약번호']>5], x='LeadTime', y='총금액', size='객실수', text='국적', title="국적별 수익성"), use_container_width=True)
+        
     with s_tabs[2]:
-        df_raw['is_cxl_hist'] = df_raw['상태'].isin(def_exc) if '상태' in df_raw.columns else False
+        # 취소 예측은 '전체 데이터(df_raw)'에서 패턴을 찾아야 함
+        df_raw['is_cxl_hist'] = df_raw['상태'].isin(def_exc)
         cxl_rate_hist = df_raw['is_cxl_hist'].mean()
-        st.metric("현재 OTB 실제 투숙(Net) 예측", f"{int(target_df['객실수'].sum()*(1-cxl_rate_hist))}실", f"취소예측: {int(target_df['객실수'].sum()*cxl_rate_hist)}실")
+        
+        # 현재 타겟(OTB)에 적용
+        # 현재 OTB는 '아직 취소 안 된' 것들이므로 잠재적 취소를 뺀 Net 예측
+        current_otb = target_df['객실수'].sum()
+        net_predict = int(current_otb * (1 - cxl_rate_hist))
+        
+        st.metric("현재 OTB 기준 실투숙 예측", f"{net_predict}실", f"예상 취소: {int(current_otb * cxl_rate_hist)}실")
 
 # -----------------------------------------------------------------------------
-# 6. 포캐스팅 시스템 연동 (세션 동기화) - 신규 추가 기능
+# 6. 포캐스팅 시스템 연동
 # -----------------------------------------------------------------------------
-st.divider()
 try:
     df_raw['dow_idx'] = df_raw['예약일자'].dt.dayofweek
     st.session_state["historical_dow"] = (df_raw['dow_idx'].value_counts(normalize=True)*7).to_dict()
-    if found_name:
-        st.session_state["repeat_rate"] = (df_raw[found_name].value_counts()>1).mean()*100
+    if f_n:
+        st.session_state["repeat_rate"] = (df_raw[f_n].value_counts()>1).mean()*100
+    
+    # 저장할 월 데이터 (타겟 데이터 기준)
     s_m = df_clean['입실일자'].iloc[0].month if not df_clean.empty else datetime.now().month
     st.session_state[f"sob_{s_m}"] = len(df_clean)
+    
     st.toast("✅ 포캐스팅 데이터 동기화 완료")
 except: pass
 
+st.divider()
 with st.expander("🕵️‍♂️ 데이터 검증 (Raw Data)"):
-    st.dataframe(df_view.head(100))
+    st.write("▼ 현재 필터링된 데이터 (취소 제외됨)")
+    st.dataframe(df_view.head(50))
