@@ -130,7 +130,7 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 및 매핑 로직
+# 4. 엑셀/CSV 파일 처리 (3행 헤더 고정 & 리드타임 핀셋 추출)
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -147,8 +147,8 @@ def normalize_and_map_columns(df):
         'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
         'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
-        'Nat_Orig': ['nation', 'country', 'nat', '국적']
-        # Lead_Time은 process_data에서 별도로 처리함
+        'Nat_Orig': ['nation', 'country', 'nat', '국적'],
+        'Lead_Time': ['lead', '리드', 'lt']
     }
     for col in df.columns:
         clean = str(col).lower().replace(" ", "").replace("_", "")
@@ -199,22 +199,22 @@ def process_data(uploaded_file, status, force_otb=False):
             }])
             
         # ---------------------------------------------------------
-        # Case B: 예약/취소 리스트 (3행 헤더 및 리드타임 핀셋 추출)
+        # Case B: 예약/취소 리스트 (3행 헤더 고정 & 리드타임 핀셋)
         # ---------------------------------------------------------
         else:
-            # 1. 엑셀 3행(Index 2)을 헤더로 읽기
+            # 1. 무조건 3행(Index 2)을 헤더로 읽습니다.
             if uploaded_file.name.endswith('.csv'):
                 try: df_raw = pd.read_csv(uploaded_file, header=2)
                 except: df_raw = pd.read_csv(uploaded_file, header=2, encoding='cp949')
             else:
                 df_raw = pd.read_excel(uploaded_file, header=2)
 
-            # 2. [핵심] 리드타임 데이터 '미리' 추출 (매핑으로 사라지기 전)
+            # 2. [핵심] 리드타임 열 찾아서 미리 백업 (매핑 중 유실 방지)
             lead_time_series = None
             for col in df_raw.columns:
-                c_str = str(col).upper().replace(" ", "").replace("_", "").replace("/", "")
-                # 'LEAD', '리드', 'LT'가 포함된 컬럼을 찾아서 값을 저장
-                if 'LEAD' in c_str or '리드' in c_str or 'LT' in c_str:
+                c_str = str(col).strip()
+                # '리드타임'이라는 글자가 포함된 컬럼을 찾음
+                if '리드타임' in c_str or 'Lead' in c_str or 'LT' in c_str:
                     lead_time_series = df_raw[col]
                     break
             
@@ -255,7 +255,9 @@ def process_data(uploaded_file, status, force_otb=False):
             
             def classify_nat(row):
                 name = str(row.get('Guest_Name',''))
+                orig = str(row.get('Nat_Orig', '')).upper()
                 if re.search('[가-힣]', name): return 'KOR'
+                if any(x in orig for x in ['CHN', 'HKG', 'TWN', 'MAC']): return 'CHN'
                 return 'OTH'
             df['Nat_Group'] = df.apply(classify_nat, axis=1)
             
@@ -266,7 +268,7 @@ def process_data(uploaded_file, status, force_otb=False):
         return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 렌더링 헬퍼 함수들
+# 5. UI 렌더링 헬퍼 함수들 (전체 기능 유지)
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
@@ -326,7 +328,8 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
         show_dataframe_with_style(add_total_row(acc_stats.sort_values('RN', ascending=False).head(50), 'Account'))
     
     with t4:
-        st.subheader("⏳ 리드타임 (엑셀 3행 기준)")
+        st.subheader("⏳ 리드타임 (리드타임 컬럼값 기준)")
+        # 0보다 큰 리드타임만 분석 대상으로 삼거나 전체 포함
         bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]; labels = ['0일', '1-3일', '4-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+']
         temp_df = target_df.copy(); temp_df['Lead_Group'] = pd.cut(temp_df['Lead_Time'], bins=bins, labels=labels)
         lead_stats = temp_df.groupby('Lead_Group', observed=True).agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
@@ -346,6 +349,7 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
         c1.plotly_chart(fig_wd_bar, use_container_width=True, key=f"{unique_key}_day_bar")
         fig_wd_pie = px.pie(wd_stats, values='RN', names='Day_Type')
         c2.plotly_chart(fig_wd_pie, use_container_width=True, key=f"{unique_key}_day_pie")
+        show_dataframe_with_style(add_total_row(wd_stats, 'Day_Type'))
     
     with t7:
         st.subheader("🌐 국적별 분포")
@@ -361,7 +365,7 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
     with t8:
         st.subheader("🍳 조식 포함 여부 분석")
         if 'Breakfast' in target_df.columns:
-            bf_stats = target_df.groupby('Breakfast').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
+            bf_stats = target_df.groupby('Breakfast').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
             c1, c2 = st.columns(2)
             fig_bf_pie = px.pie(bf_stats, values='RN', names='Breakfast', title="조식 포함 비율 (RN)")
             c1.plotly_chart(fig_bf_pie, use_container_width=True, key=f"{unique_key}_bf_pie")
@@ -432,14 +436,14 @@ try:
             c1,c2,c3,c4,c5 = st.columns(5)
             c1.metric("예약 RN", f"{bk_rn:,.0f}"); c2.metric("예약 매출", f"{bk_rev:,.0f}")
             c3.metric("예약 ADR", f"{bk_rev/bk_rn if bk_rn > 0 else 0:,.0f}")
-            c4.metric("LOS", f"{bk_los:.1f}박")
+            c4.metric("LOS (평균투숙)", f"{bk_los:.1f}박")
             c5.metric("예약 건수", f"{bk_cnt:,.0f}")
             
             st.markdown("#### ❌ 금일 취소")
             c1,c2,c3,c4,c5 = st.columns(5)
             c1.metric("취소 RN", f"{cn_rn:,.0f}"); c2.metric("취소 매출", f"{cn_rev:,.0f}")
             c3.metric("취소 ADR", f"{cn_rev/cn_rn if cn_rn > 0 else 0:,.0f}")
-            c4.metric("LOS", f"{cn_los:.1f}박")
+            c4.metric("LOS (평균투숙)", f"{cn_los:.1f}박")
             c5.metric("취소 건수", f"{cn_cnt:,.0f}")
             st.divider()
             if not df_paid_bk.empty:
