@@ -212,6 +212,22 @@ with st.sidebar:
     else:
         df = df_raw
 
+    if '국적' in df.columns:
+        # 1. 대문자 변환 및 공백 제거
+        df['국적'] = df['국적'].astype(str).str.upper().str.strip()
+        # 2. 주요 국적 코드 매핑 (차이나 90% 오류 방지용)
+        nat_map = {
+            'KOREA': 'KOR', 'SOUTH KOREA': 'KOR', 'REPUBLIC OF KOREA': 'KOR', 'KR': 'KOR',
+            'CHINA': 'CHN', 'CN': 'CHN',
+            'JAPAN': 'JPN', 'JP': 'JPN',
+            'USA': 'USA', 'US': 'USA', 'UNITED STATES': 'USA',
+            'NAN': 'Unknown', 'NULL': 'Unknown', 'NONE': 'Unknown'
+        }
+        df['국적'] = df['국적'].replace(nat_map)
+        
+    if '거래처' in df.columns:
+        df['거래처'] = df['거래처'].astype(str).str.strip()
+
     st.markdown("**🚫 필터 설정**")
     # [정밀 취소 키워드 정의 - 사장님 요청]
     cancel_k = ['취소', 'CXL', 'CANCEL', 'NO', 'NOSHOW', 'RC', 'RX']
@@ -594,10 +610,10 @@ with tabs[5]:
                 st.dataframe(regular_list, use_container_width=True)
                 st.download_button("📥 단골 리스트 다운로드", data=regular_list.to_csv(index=False).encode('utf-8-sig'), file_name="Regular_Guest_List.csv")
 
-# [TAB 6] 🚀 수익 관리 (RM 정밀 분석 & 핀셋 필터) - (정밀 ADR/RoomNights/매출이원화)
+# [TAB 6] 🚀 수익 관리 (RM 정밀 분석 & 핀셋 필터) - 비교 기능 강화판
 with tabs[6]:
     st.header("🚀 수익 관리(RM) 기간별 정밀 분석")
-    st.info("💡 ADR = 객실료(Room Revenue) / 룸나잇(Room Nights) [취소 제외 Net 기준]")
+    st.info("💡 모든 지표는 A기간(과거/기준) vs B기간(현재/비교)으로 대조됩니다.")
     
     rm_mode = st.radio("분석 기준 선택", ["📅 입실일자 기준", "📝 예약일자 기준"], horizontal=True, key="rm_filter_main")
     d_col = '입실일자' if "입실일자" in rm_mode else '예약일자'
@@ -606,69 +622,103 @@ with tabs[6]:
     with rm_c1: d_a = st.date_input("기준 기간 (Period A)", [datetime(2025,1,1), datetime(2025,1,31)], key="da_rm_f")
     with rm_c2: d_b = st.date_input("비교 기간 (Period B)", [datetime(2026,1,1), datetime(2026,1,24)], key="db_rm_f")
     
-    # 1. 날짜로 먼저 자름
+    # 1. 날짜 필터링 (Raw Data)
     df_a_raw = df_raw[(df_raw[d_col].dt.date >= d_a[0]) & (df_raw[d_col].dt.date <= d_a[1])].copy()
     df_b_raw = df_raw[(df_raw[d_col].dt.date >= d_b[0]) & (df_raw[d_col].dt.date <= d_b[1])].copy()
     
-    # 2. 유효 데이터 (취소 제외)
+    # 2. 유효 데이터 (취소 제외 Net Data)
     df_a_valid = df_a_raw[~df_a_raw['상태'].isin(def_exc)]
     df_b_valid = df_b_raw[~df_b_raw['상태'].isin(def_exc)]
     
     if not df_a_valid.empty and not df_b_valid.empty:
-        sub_rm = st.tabs(["📊 KPI (Net)", "📈 Pace", "📉 Wash-out", "⏳ 패턴", "🌏 국적/채널", "🚀 픽업"])
+        sub_rm = st.tabs(["📊 KPI (Net)", "📈 Pace 비교", "📉 Wash-out 비교", "🌏 국적/채널 비교", "🚀 픽업 상세"])
         
-        with sub_rm[0]: # KPI (룸나잇, 객실매출 반영)
-            # A기간
-            rev_a_tot = df_a_valid['총금액'].sum()
-            rev_a_room = df_a_valid['RoomRevenue'].sum()
-            rn_a = df_a_valid['RoomNights'].sum()
-            adr_a = rev_a_room / rn_a if rn_a > 0 else 0
-            
-            # B기간
-            rev_b_tot = df_b_valid['총금액'].sum()
-            rev_b_room = df_b_valid['RoomRevenue'].sum()
-            rn_b = df_b_valid['RoomNights'].sum()
-            adr_b = rev_b_room / rn_b if rn_b > 0 else 0
+        # 1) KPI 요약
+        with sub_rm[0]:
+            rev_a, rev_b = df_a_valid['RoomRevenue'].sum(), df_b_valid['RoomRevenue'].sum()
+            rn_a, rn_b = df_a_valid['RoomNights'].sum(), df_b_valid['RoomNights'].sum()
+            adr_a = rev_a / rn_a if rn_a > 0 else 0
+            adr_b = rev_b / rn_b if rn_b > 0 else 0
             
             k1, k2, k3, k4 = st.columns(4)
-            k1.metric("총 매출 (Total)", f"{rev_b_tot/10000:,.0f}만", f"{(rev_b_tot-rev_a_tot)/10000:,.0f}만")
-            k2.metric("객실 매출 (Room)", f"{rev_b_room/10000:,.0f}만", f"{(rev_b_room-rev_a_room)/10000:,.0f}만")
-            k3.metric("룸나잇 (RN)", f"{rn_b:,.0f}박", f"{rn_b-rn_a:,.0f}박")
-            k4.metric("ADR (객실/RN)", f"{adr_b:,.0f}원", f"{adr_b-adr_a:,.0f}원")
-            
-        with sub_rm[1]: # Pace (룸나잇 기준 시각화)
+            k1.metric("객실 매출", f"{rev_b/10000:,.0f}만", f"{(rev_b-rev_a)/10000:,.0f}만")
+            k2.metric("룸나잇 (RN)", f"{rn_b:,.0f}박", f"{rn_b-rn_a:,.0f}박")
+            k3.metric("ADR", f"{adr_b:,.0f}원", f"{adr_b-adr_a:,.0f}원")
+            # Occupancy (가동률) - 전체 객실수 60실 가정 (필요시 수정)
+            days = (d_b[1] - d_b[0]).days + 1
+            occ = (rn_b / (60 * days)) * 100
+            k4.metric("기간 추정 OCC", f"{occ:.1f}%", "60객실 기준")
+
+        # 2) Pace (예약 속도) 비교
+        with sub_rm[1]:
             p_a = df_a_valid.groupby(d_col)['RoomNights'].sum().sort_index().cumsum()
             p_b = df_b_valid.groupby(d_col)['RoomNights'].sum().sort_index().cumsum()
-            st.plotly_chart(go.Figure(data=[go.Scatter(y=p_a.values, name="A (RN)"), go.Scatter(y=p_b.values, name="B (RN)")]), use_container_width=True)
             
-        with sub_rm[2]: # Wash-out (전체 모수 대비 취소율)
+            fig_pace = go.Figure()
+            fig_pace.add_trace(go.Scatter(y=p_a.values, name="A기간 (기준)", line=dict(color='gray', dash='dot')))
+            fig_pace.add_trace(go.Scatter(y=p_b.values, name="B기간 (현재)", line=dict(color='blue', width=3)))
+            fig_pace.update_layout(title="기간별 누적 예약(Room Nights) 속도 비교")
+            st.plotly_chart(fig_pace, use_container_width=True)
+
+        # 3) Wash-out (취소율) 비교 - [수정] A/B 비교 Bar Chart
+        with sub_rm[2]:
+            st.subheader("거래처별 취소율(%) 비교")
+            # A기간 취소율
+            df_a_raw['is_cxl'] = df_a_raw['상태'].isin(def_exc)
+            cxl_a = df_a_raw.groupby('거래처')['is_cxl'].mean().reset_index(name='취소율')
+            cxl_a['기간'] = 'A기간'
+            
+            # B기간 취소율
             df_b_raw['is_cxl'] = df_b_raw['상태'].isin(def_exc)
-            cxl = df_b_raw.groupby('거래처')['is_cxl'].mean() * 100
-            st.plotly_chart(px.bar(cxl.reset_index(), x='거래처', y='is_cxl', title="거래처별 취소율(%)"), use_container_width=True)
+            cxl_b = df_b_raw.groupby('거래처')['is_cxl'].mean().reset_index(name='취소율')
+            cxl_b['기간'] = 'B기간'
             
-        with sub_rm[3]: 
-            lt_c = pd.concat([df_a_valid.assign(P='A'), df_b_valid.assign(P='B')])
-            st.plotly_chart(px.box(lt_c, x='P', y='LeadTime', color='P', title="Lead Time 변동 (Net)"), use_container_width=True)
+            # 합치기
+            cxl_comp = pd.concat([cxl_a, cxl_b])
+            cxl_comp['취소율'] = cxl_comp['취소율'] * 100
+            
+            # 상위 거래처만 필터링 (너무 많으면 복잡하므로)
+            top_acc = df_b_raw['거래처'].value_counts().head(10).index
+            cxl_comp = cxl_comp[cxl_comp['거래처'].isin(top_acc)]
+            
+            st.plotly_chart(px.bar(cxl_comp, x='거래처', y='취소율', color='기간', barmode='group', title="주요 거래처 취소율 변동 비교"), use_container_width=True)
 
-        with sub_rm[4]: # 국적/채널 - [ValueError 수정]
-            c1, c2 = st.columns(2)
-            c1.plotly_chart(px.pie(df_b_valid.groupby('국적')['총금액'].sum().reset_index().head(7), values='총금액', names='국적', title="현재 국적 비중"), use_container_width=True)
+        # 4) 국적/채널 믹스 비교 - [수정] A/B 비교 Bar Chart
+        with sub_rm[3]:
+            col_nat, col_chn = st.columns(2)
             
-            # [수정] value_counts 후 컬럼명 지정으로 에러 방지
-            acc_a = df_a_valid['거래처'].value_counts(normalize=True).head(7).reset_index()
-            acc_a.columns = ['거래처', '점유율']
-            acc_a['P'] = 'A'
-            acc_b = df_b_valid['거래처'].value_counts(normalize=True).head(7).reset_index()
-            acc_b.columns = ['거래처', '점유율']
-            acc_b['P'] = 'B'
-            
-            c2.plotly_chart(px.line(pd.concat([acc_a, acc_b]), x='거래처', y='점유율', color='P', markers=True, title="Channel Share Shift"), use_container_width=True)
+            with col_nat:
+                st.markdown("**🌏 국적 점유율 (RN 기준)**")
+                nat_a = df_a_valid['국적'].value_counts(normalize=True).reset_index()
+                nat_a.columns = ['국적', '비중']; nat_a['기간'] = 'A기간'
+                
+                nat_b = df_b_valid['국적'].value_counts(normalize=True).reset_index()
+                nat_b.columns = ['국적', '비중']; nat_b['기간'] = 'B기간'
+                
+                nat_comp = pd.concat([nat_a.head(5), nat_b.head(5)])
+                st.plotly_chart(px.bar(nat_comp, x='국적', y='비중', color='기간', barmode='group'), use_container_width=True)
 
-        with sub_rm[5]: # 픽업 (Net Change)
-            pickup_a = df_a_valid.groupby(d_col)['RoomNights'].sum()
-            pickup_b = df_b_valid.groupby(d_col)['RoomNights'].sum()
-            diff = (pickup_b - pickup_a).fillna(pickup_b).reset_index(name='Pickup')
-            st.plotly_chart(px.bar(diff, x=d_col, y='Pickup', color='Pickup', title="기간별 룸나잇 증감 (Net)"), use_container_width=True)
+            with col_chn:
+                st.markdown("**🏦 채널 점유율 (RN 기준)**")
+                ch_a = df_a_valid['거래처'].value_counts(normalize=True).reset_index()
+                ch_a.columns = ['거래처', '비중']; ch_a['기간'] = 'A기간'
+                
+                ch_b = df_b_valid['거래처'].value_counts(normalize=True).reset_index()
+                ch_b.columns = ['거래처', '비중']; ch_b['기간'] = 'B기간'
+                
+                ch_comp = pd.concat([ch_a.head(5), ch_b.head(5)])
+                st.plotly_chart(px.bar(ch_comp, x='거래처', y='비중', color='기간', barmode='group'), use_container_width=True)
+
+        # 5) 픽업 (Net Change) - 유지
+        with sub_rm[4]:
+            st.subheader("기간별 생산성 차이 (Pickup)")
+            pk_a = df_a_valid.groupby(d_col)['RoomNights'].sum()
+            pk_b = df_b_valid.groupby(d_col)['RoomNights'].sum()
+            
+            # 인덱스(날짜)가 달라서 단순 빼기가 안될 수 있음 -> 날짜 상관없이 'D-Day' 흐름이나 총량 비교가 나음
+            # 여기서는 B기간의 일자별 생산량만 보여주는게 더 직관적일 수 있음 (사장님 취향 반영)
+            st.write("▼ B기간(비교 기간) 일자별 룸나잇 생산 현황")
+            st.plotly_chart(px.bar(pk_b.reset_index(), x=d_col, y='RoomNights', color='RoomNights'), use_container_width=True)
 
 # [TAB 7] 🎯 수익 전략 (Strategy) - [정밀 계산 적용]
 with tabs[7]:
