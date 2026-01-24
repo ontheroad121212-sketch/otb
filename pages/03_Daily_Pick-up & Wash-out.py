@@ -146,7 +146,7 @@ def delete_all_records():
         return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (리드타임 강제 계산 & OTB/국적 이식)
+# 4. 파일 처리 로직 (리드타임 강제 계산 + 국적 상세 + OTB)
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -382,7 +382,6 @@ try:
             
         f3_list = st.file_uploader("OTB 파일", type=['xlsx','csv'], key="f3", accept_multiple_files=True)
         if f3_list and st.button("OTB 저장"):
-            # OTB는 보통 당일 기준이므로 일반 저장 (혹은 날짜별 로직 추가 가능)
             all_otb = [process_otb(f) for f in f3_list]
             if all_otb and save_to_firestore_split_by_date(pd.concat(all_otb, ignore_index=True)): st.cache_data.clear(); st.rerun()
 
@@ -438,15 +437,3 @@ try:
     else: st.info("👈 왼쪽 사이드바에서 파일을 업로드하고 '저장' 버튼을 눌러주세요.")
 except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
-
-# ==============================================================================
-# Forecasting 시스템 연동 로직 (복구 완료)
-# ==============================================================================
-try:
-    save_month = datetime.now().month
-    if 'sob_curr' in locals() and sob_curr is not None:
-        st.session_state[f"sob_{save_month}"] = sob_curr
-        if 'df_curr' in locals() and 'df_prev' in locals():
-            st.session_state[f"pace_{save_month}"] = len(df_curr) - len(df_prev)
-        st.success(f"✅ {save_month}월 데이터가 포캐스팅 시스템으로 전송되었습니다.")
-except: pass
