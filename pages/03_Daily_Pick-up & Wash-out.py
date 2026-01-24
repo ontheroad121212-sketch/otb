@@ -49,7 +49,7 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(dict(st.secrets["firebase"]))
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"🔥 데이터베이스 연결 실패: {e}")
+        st.error(f"🔥 DB 연결 실패: {e}")
         st.stop()
 
 db = firestore.client()
@@ -63,11 +63,10 @@ def clean_numeric_columns(df):
     target_cols = [
         'RN', 'Room_Revenue', 'Total_Revenue', 'ADR_Room', 'ADR_Total', 
         'Lead_Time', 'OTB_Rev', 'Budget_Rev', 'Budget_Achiev', 'OTB_RN', 
-        'Actual_Rev', 'Actual_RN', 'Rooms', 'Nights'
+        'OTB_ADR', 'Actual_Rev', 'Actual_RN', 'Rooms', 'Nights'
     ]
     for col in target_cols:
         if col in df.columns:
-            # 원화기호, 쉼표 등 제거 후 숫자로 변환
             df[col] = pd.to_numeric(
                 df[col].astype(str).str.replace(',', '').str.replace('nan', '0').str.replace('₩', ''), 
                 errors='coerce'
@@ -130,7 +129,7 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (리드타임 강제 추출 필살기 적용)
+# 4. 엑셀/CSV 파일 처리 및 매핑 로직
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -159,27 +158,26 @@ def normalize_and_map_columns(df):
 
 def process_data(uploaded_file, status, force_otb=False):
     try:
-        is_filename_otb = "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
-        is_otb = force_otb or is_filename_otb
+        is_otb = force_otb or "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
         
-        # [1] 원본 파일 로드 (CSV cp949 인코딩 강제 적용)
-        if uploaded_file.name.endswith('.csv'):
-            try: df_raw = pd.read_csv(uploaded_file, header=None, encoding='cp949')
-            except: df_raw = pd.read_csv(uploaded_file, header=None) 
-        else:
-            df_raw = pd.read_excel(uploaded_file, header=None)
-
         # ---------------------------------------------------------
-        # Case A: OTB (매출 요약) - 리드타임 0 고정
+        # Case A: OTB 데이터 처리
         # ---------------------------------------------------------
         if is_otb:
-            target_month_date = datetime.now()
+            if uploaded_file.name.endswith('.csv'):
+                try: df_raw = pd.read_csv(uploaded_file, header=None, encoding='cp949')
+                except: df_raw = pd.read_csv(uploaded_file, header=None)
+            else:
+                df_raw = pd.read_excel(uploaded_file, header=None)
+
+            target_month_date = None
             date_pattern = re.compile(r'20\d{2}-(\d{2})')
             for r in range(min(15, len(df_raw))):
                 row_str = " ".join(df_raw.iloc[r].astype(str).values)
                 match = date_pattern.search(row_str)
                 if match:
                     target_month_date = pd.to_datetime(f"2026-{match.group(1)}-01"); break
+            if not target_month_date: target_month_date = datetime.now()
 
             df_clean = df_raw.dropna(how='all').dropna(axis=1, how='all')
             try:
@@ -190,7 +188,7 @@ def process_data(uploaded_file, status, force_otb=False):
             
             return pd.DataFrame([{
                 'CheckIn': target_month_date.strftime('%Y-%m-%d'),
-                'Room_Revenue': total_rev, 'Total_Revenue': total_rev, 'RN': 0,
+                'Room_Revenue': total_rev, 'Total_Revenue': total_rev, 'RN': 0, 
                 'Guest_Name': 'OTB_DATA', 'Segment': 'OTB', 'Account': 'OTB_Summary',
                 'Room_Type': 'ROH', 'Nat_Orig': 'KR', 'Booking_Date': target_month_date.strftime('%Y-%m-%d'),
                 'Lead_Time': 0, 'Breakfast': 'Unknown', 'Status': 'Booked'
@@ -200,36 +198,35 @@ def process_data(uploaded_file, status, force_otb=False):
         # Case B: 예약/취소 리스트 (리드타임 핀셋 추출 핵심 구간)
         # ---------------------------------------------------------
         else:
-            # [2] 3행(Index 2)을 헤더로 하여 데이터 분리
-            header_row = df_raw.iloc[2].astype(str).tolist()
-            df_data = df_raw.iloc[3:].reset_index(drop=True)
-            df_data.columns = header_row
+            if uploaded_file.name.endswith('.csv'):
+                try: df_raw = pd.read_csv(uploaded_file, header=2, encoding='cp949')
+                except: df_raw = pd.read_csv(uploaded_file, header=2)
+            else:
+                df_raw = pd.read_excel(uploaded_file, header=2)
 
-            # [3] 리드타임 데이터 "미리" 뜯어내기 (매핑 중 유실 방지)
-            lead_time_backup = None
-            for idx, col in enumerate(df_data.columns):
-                c_str = str(col).strip()
-                # '리드타임' 글자가 포함된 컬럼을 찾으면 바로 보관
-                if '리드' in c_str or 'Lead' in c_str.capitalize() or 'LT' in c_str.upper():
-                    lead_time_backup = df_data.iloc[:, idx]
+            # [핵심] 리드타임 열 인덱스(위치) 직접 찾아서 데이터 선점
+            lead_time_data = None
+            for idx, col in enumerate(df_raw.columns):
+                c_name = str(col).strip().upper()
+                if '리드' in c_name or 'LEAD' in c_name or 'LT' == c_name:
+                    lead_time_data = pd.to_numeric(df_raw.iloc[:, idx].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
                     break
             
-            # [4] 조식 전수조사 (줄 전체 스캔)
-            breakfast_col = df_data.apply(lambda r: 'Included (조식포함)' if 'BF' in "".join(r.astype(str).values).upper() else 'Not Included (불포함)', axis=1)
+            # 조식 전수조사
+            def scan_row_for_breakfast(row):
+                row_string = "".join(row.astype(str).values).upper()
+                return 'Included (조식포함)' if 'BF' in row_string else 'Not Included (불포함)'
+            breakfast_col = df_raw.apply(scan_row_for_breakfast, axis=1)
             
-            # [5] 컬럼 이름 표준화 (normalize)
-            df = normalize_and_map_columns(df_data).copy()
+            # 컬럼 매핑 (이 과정에서 리드타임이 유실될 수 있으나 아래에서 강제 주입함)
+            df = normalize_and_map_columns(df_raw).copy()
             
-            # [6] 보관했던 리드타임 데이터 강제 주입
-            if lead_time_backup is not None:
-                df['Lead_Time'] = pd.to_numeric(lead_time_backup.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-            else:
-                df['Lead_Time'] = 0 # 만약 정말 못찾았다면 0
-            
+            # [핵심] 선점 확보한 리드타임 값 강제 주입
+            df['Lead_Time'] = lead_time_data if lead_time_data is not None else 0
             df['Breakfast'] = breakfast_col
             df['Status'] = status
             
-            # 나머지 데이터 정리
+            # 숫자 및 날짜 처리
             for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
@@ -309,7 +306,7 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
         show_dataframe_with_style(add_total_row(acc_stats, 'Account'))
     
     with t4:
-        st.subheader("⏳ 리드타임 분석 (사용자 엑셀값)")
+        st.subheader("⏳ 리드타임 분석 (사용자 계산값)")
         bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]; labels = ['0일', '1-3일', '4-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+']
         temp_df = target_df.copy(); temp_df['Lead_Group'] = pd.cut(temp_df['Lead_Time'], bins=bins, labels=labels)
         lead_stats = temp_df.groupby('Lead_Group', observed=True).agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
@@ -396,7 +393,6 @@ try:
             st.header(f"👑 총지배인(GM) 요약 리포트 ({selected_date})")
             bk_rn, bk_rev = df_paid_bk['RN'].sum(), df_paid_bk['Room_Revenue'].sum()
             cn_rn, cn_rev = df_list_cn['RN'].sum(), df_list_cn['Room_Revenue'].sum()
-            # LOS 계산 (취소 포함)
             bk_cnt = len(df_paid_bk); bk_los = (bk_rn / bk_cnt) if bk_cnt > 0 else 0
             cn_cnt = len(df_list_cn); cn_los = (cn_rn / cn_cnt) if cn_cnt > 0 else 0
             
@@ -458,3 +454,20 @@ try:
     else: st.info("👈 왼쪽 사이드바에서 파일을 업로드하고 '저장' 버튼을 눌러주세요.")
 except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
+
+# ==============================================================================
+# 02_Room OTB Status.py 하단 로직 (유지)
+# ==============================================================================
+try:
+    if 'current_month' in locals(): save_month = current_month
+    elif 'month' in locals(): save_month = month
+    elif 'df_curr' in locals() and df_curr is not None: save_month = df_curr['Date'].iloc[0].month
+    else: save_month = datetime.now().month
+except Exception:
+    save_month = datetime.now().month
+
+if 'sob_curr' in locals() and sob_curr is not None:
+    st.session_state[f"sob_{save_month}"] = sob_curr
+    if 'df_curr' in locals() and 'df_prev' in locals():
+        st.session_state[f"pace_{save_month}"] = len(df_curr) - len(df_prev)
+    st.success(f"✅ {save_month}월 데이터가 포캐스팅 시스템으로 전송되었습니다.")
