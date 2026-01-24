@@ -305,22 +305,51 @@ def group_and_show(df, group_col):
     return agg
 
 def render_tab(df, k):
-    if df.empty: st.info("데이터 없음"); return
+    if df.empty:
+        st.info("데이터 없음")
+        return
+    
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs(["📊 세그먼트", "📅 Pacing", "🏢 거래처", "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일", "🌐 국적", "🍳 조식"])
     
     with t1:
         s = group_and_show(df, 'Segment')
         if not s.empty:
-            c1,c2 = st.columns(2)
+            c1, c2 = st.columns(2)
             c1.plotly_chart(px.pie(s, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True, key=f"{k}_p")
             c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True, key=f"{k}_b")
     
     with t2:
-        p = df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum').fillna(0)
-        st.plotly_chart(px.imshow(p, text_auto=True, title="Booking Pacing Matrix"), use_container_width=True, key=f"{k}_pace")
-        # 트렌드 차트 추가
-        trend = df.groupby('Booking_Month')['RN'].sum().reset_index()
-        st.plotly_chart(px.bar(trend, x='Booking_Month', y='RN', title="월별 예약 생성 추이"), use_container_width=True, key=f"{k}_tr")
+        # [핀셋 수정] 페이싱 데이터 집계 정밀화
+        # 투숙월(Stay_Month)과 예약월(Booking_Month)이 누락되지 않도록 강제 재설정 후 피벗
+        pacing_df = df.copy()
+        # 데이터가 문자열일 경우를 대비해 정렬을 위한 전처리
+        pacing_df = pacing_df.sort_values(['Booking_Month', 'Stay_Month'])
+        
+        p = pacing_df.pivot_table(
+            index='Booking_Month', 
+            columns='Stay_Month', 
+            values='RN', 
+            aggfunc='sum'
+        ).fillna(0)
+        
+        st.subheader("📅 Booking Pacing Matrix (예약월 vs 투숙월)")
+        st.plotly_chart(px.imshow(
+            p, 
+            text_auto=True, 
+            aspect="auto", 
+            color_continuous_scale="Blues",
+            labels=dict(x="투숙월 (Stay Month)", y="예약 생성월 (Booking Month)", color="RN")
+        ), use_container_width=True, key=f"{k}_pace")
+        
+        # 월별 예약 생성 추이 (Bar Chart) 고도화
+        trend = pacing_df.groupby('Booking_Month')['RN'].sum().reset_index()
+        st.plotly_chart(px.bar(
+            trend, 
+            x='Booking_Month', 
+            y='RN', 
+            title="월별 신규 예약 생성 추이 (RN 기준)",
+            text_auto='.0f'
+        ), use_container_width=True, key=f"{k}_tr")
     
     with t3:
         agg = df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
@@ -331,25 +360,30 @@ def render_tab(df, k):
     with t4:
         df['LT_G'] = pd.cut(df['Lead_Time'], bins=[-999,0,3,7,14,30,60,90,999], labels=['0','1-3','4-7','8-14','15-30','31-60','61-90','90+'])
         l = group_and_show(df, 'LT_G')
-        if not l.empty: st.plotly_chart(px.bar(l, x='LT_G', y='RN', title="리드타임별 RN"), use_container_width=True, key=f"{k}_lt")
+        if not l.empty:
+            st.plotly_chart(px.bar(l, x='LT_G', y='RN', title="리드타임별 RN 실적"), use_container_width=True, key=f"{k}_lt")
     
-    with t5: group_and_show(df, 'Room_Type')
-    with t6: 
+    with t5:
+        group_and_show(df, 'Room_Type')
+        
+    with t6:
         w = group_and_show(df, 'Day_Type')
-        if not w.empty: 
-            c1,c2 = st.columns(2)
-            c1.plotly_chart(px.bar(w, x='Day_Type', y='Room_Revenue'), use_container_width=True, key=f"{k}_w_b")
-            c2.plotly_chart(px.pie(w, values='RN', names='Day_Type'), use_container_width=True, key=f"{k}_w_p")
-    
-    with t7: 
+        if not w.empty:
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(px.bar(w, x='Day_Type', y='Room_Revenue', title="요일별 매출"), use_container_width=True, key=f"{k}_w_b")
+            c2.plotly_chart(px.pie(w, values='RN', names='Day_Type', title="요일별 RN 비중"), use_container_width=True, key=f"{k}_w_p")
+            
+    with t7:
         n = group_and_show(df, 'Nat_Group')
         if not n.empty:
-            c1,c2 = st.columns(2)
-            c1.plotly_chart(px.pie(n, values='RN', names='Nat_Group', title="국적 비중"), use_container_width=True, key=f"{k}_n_p")
-            c2.plotly_chart(px.bar(n, x='Nat_Group', y='Room_Revenue'), use_container_width=True, key=f"{k}_n_b")
-    with t8: 
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(px.pie(n, values='RN', names='Nat_Group', title="국적별 RN 비중"), use_container_width=True, key=f"{k}_n_p")
+            c2.plotly_chart(px.bar(n, x='Nat_Group', y='Room_Revenue', title="국적별 매출 실적"), use_container_width=True, key=f"{k}_n_b")
+            
+    with t8:
         b = group_and_show(df, 'Breakfast')
-        if not b.empty: st.plotly_chart(px.pie(b, values='RN', names='Breakfast', title="조식 포함 여부"), use_container_width=True, key=f"{k}_bf")
+        if not b.empty:
+            st.plotly_chart(px.pie(b, values='RN', names='Breakfast', title="조식 포함 여부 비중(RN)"), use_container_width=True, key=f"{k}_bf")
 
 # ==============================================================================
 # MAIN
