@@ -318,65 +318,33 @@ def render_tab(df, k):
             c1.plotly_chart(px.pie(s, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True, key=f"{k}_p")
             c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True, key=f"{k}_b")
     
-    with t2: # [예약 상세 페이싱 완벽 복구]
-        st.subheader("📅 Booking Pacing Matrix (예약 생성월 vs 실제 투숙월)")
+    with t2: # [수정됨] Pacing 고도화: 예약 유입에 따른 '투숙월별' 분포 확인
+        # 1. Booking Pacing Matrix (히트맵)
+        # 예약 생성월(Booking)과 투숙월(Stay)의 관계를 보여줌
+        p = df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum').fillna(0)
+        st.plotly_chart(px.imshow(p, text_auto=True, title="Booking Pacing Matrix (Booking vs Stay)", color_continuous_scale="Blues"), use_container_width=True, key=f"{k}_pace")
         
-        # 1. 시각화 전용 복사본 생성 및 문자열 강제 변환
-        p_df = df.copy()
-        p_df['Booking_Month'] = p_df['Booking_Month'].astype(str).str.strip()
-        p_df['Stay_Month'] = p_df['Stay_Month'].astype(str).str.strip()
+        # 2. [핵심 수정] 투숙월별 예약 분포 (Stay Month Distribution)
+        # 기존 코드에서 Booking_Month로 되어있던 x축을 'Stay_Month'로 변경하여
+        # "1월 23일에 들어온 예약들이 언제 투숙하는지"를 보여줌
+        st.markdown("---")
+        st.subheader(f"📊 선택된 예약일({sel_res if 'sel_res' in locals() else '조회일'}) 기준 투숙월별 예약 분포")
         
-        # 2. 피벗 테이블 생성 (RN 합계)
-        p_table = p_df.pivot_table(
-            index='Booking_Month', 
-            columns='Stay_Month', 
-            values='RN', 
-            aggfunc='sum'
-        ).fillna(0)
+        stay_dist = df.groupby('Stay_Month')['RN'].sum().reset_index()
         
-        # 3. 데이터가 있는지 최종 확인 후 시각화
-        if not p_table.empty and p_table.sum().sum() > 0:
-            # 히트맵 그리기
-            fig_pacing = go.Figure(data=go.Heatmap(
-                z=p_table.values,
-                x=p_table.columns.tolist(),
-                y=p_table.index.tolist(),
-                colorscale='Blues',
-                text=p_table.values,
-                texttemplate="%{text:.0f}",
-                textfont={"size":12},
-                hoverinfo='z'
-            ))
-            
-            fig_pacing.update_layout(
-                xaxis_title="투숙월 (Stay Month)",
-                yaxis_title="예약 생성월 (Booking Month)",
-                xaxis={'type': 'category'}, # 축 형식을 카테고리로 강제 지정 (중요)
-                yaxis={'type': 'category'},
-                height=500
-            )
-            
-            st.plotly_chart(fig_pacing, use_container_width=True, key=f"{k}_pace_final")
-            
-            
-
-            # 4. 월별 신규 예약 생성 추이 차트
-            st.markdown("---")
-            st.subheader("📈 신규 예약 생성 추이 (Monthly Booking Intake)")
-            trend_data = p_df.groupby('Booking_Month')['RN'].sum().reset_index()
-            fig_trend = px.bar(
-                trend_data, 
-                x='Booking_Month', 
-                y='RN',
+        # 차트 그리기
+        if not stay_dist.empty:
+            fig_stay = px.bar(
+                stay_dist, 
+                x='Stay_Month', 
+                y='RN', 
                 text_auto='.0f',
-                color_discrete_sequence=['#3366CC']
+                title="투숙월별 RN 분포 (Stay Month Distribution)",
+                color_discrete_sequence=['#FF6666'] # 색상 차별화
             )
-            fig_trend.update_xaxes(type='category')
-            st.plotly_chart(fig_trend, use_container_width=True, key=f"{k}_intake_bar")
-            
-            
+            st.plotly_chart(fig_stay, use_container_width=True, key=f"{k}_stay_dist")
         else:
-            st.warning("⚠️ 해당 날짜의 예약 데이터 중 페이싱을 구성할 RN 값이 모두 0이거나 없습니다.")
+            st.warning("표시할 투숙월 데이터가 없습니다.")
     
     with t3:
         agg = df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
