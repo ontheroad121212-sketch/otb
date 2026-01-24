@@ -28,7 +28,7 @@ BUDGET_DATA = {
 }
 
 # ==============================================================================
-# 1. 페이지 설정 및 CSS 스타일링 (원본 스타일 100% 복구)
+# 1. 페이지 설정 및 CSS 스타일링
 # ==============================================================================
 st.set_page_config(
     page_title="ARI Final Integrity", 
@@ -162,7 +162,7 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 및 매핑 로직 (조식 전수조사 & OTB 마지막 셀 로직 합체)
+# 4. 엑셀/CSV 파일 처리 및 매핑 로직
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -176,11 +176,11 @@ def normalize_and_map_columns(df):
         'Room_Revenue': ['room_rev', 'revenue', 'roomrate', '객실료', '매출'],
         'Total_Revenue': ['total', 'amount', '총금액', '합계'],
         'Segment': ['segment', '세그먼트'],
-        'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
+        'Account': ['account', 'source', 'agent', '거래처'],
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
-        'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
+        'Rate_Plan': ['rate', 'plan', '상품', '패키지'], 
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
-        'Lead_Time': ['lead', '리드', 'lt']
+        'Lead_Time': ['lead', '리드', 'lt', 'l/t']
     }
     for original_col in df.columns:
         clean_col = str(original_col).lower().replace(" ", "").replace("_", "").replace("-", "")
@@ -206,19 +206,16 @@ def process_data(uploaded_file, status, force_otb=False):
         # ---------------------------------------------------------
         if is_otb:
             target_month_date = None
-            date_pattern = re.compile(r'20\d{2}-\d{2}')
+            date_pattern = re.compile(r'20\d{2}-(\d{2})')
             for r in range(min(15, len(df_raw))):
-                row_vals = df_raw.iloc[r].astype(str).values
-                for v in row_vals:
-                    match = date_pattern.search(v)
-                    if match:
-                        target_month_date = pd.to_datetime(match.group() + "-01"); break
-                if target_month_date: break
+                row_str = " ".join(df_raw.iloc[r].astype(str).values)
+                match = date_pattern.search(row_str)
+                if match:
+                    target_month_date = pd.to_datetime(f"2026-{match.group(1)}-01"); break
             if not target_month_date: target_month_date = datetime.now()
 
             df_clean = df_raw.dropna(how='all').dropna(axis=1, how='all')
             try:
-                # 맨 마지막 줄, 마지막 칸 추출
                 raw_val = str(df_clean.iloc[-1, -1])
                 clean_val = raw_val.replace(',', '').replace('nan', '0').split('.')[0]
                 total_rev = int(clean_val)
@@ -233,59 +230,58 @@ def process_data(uploaded_file, status, force_otb=False):
             }])
             
         # ---------------------------------------------------------
-        # Case B: 예약/취소 리스트 처리 (조식 전수조사)
+        # Case B: 예약/취소 리스트 처리 (리드타임 3행 고정 추출 및 조식 전수조사)
         # ---------------------------------------------------------
         else:
-            header_idx = -1
-            keywords = ['guest', 'name', 'check', 'date', 'room', '고객', '입실', '일자']
-            for i, row in df_raw.head(20).iterrows():
-                if sum(1 for k in keywords if k in str(row.values).lower()) >= 2:
-                    header_idx = i; break
+            # 헤더 정보: 사용자 요청에 따라 3행(Index 2) 고정
+            header_idx = 2 
+            df_data = df_raw.iloc[header_idx+1:].reset_index(drop=True)
             
-            if header_idx != -1:
-                df_data = df_raw.iloc[header_idx+1:].reset_index(drop=True)
-                
-                # 조식 전수조사 판독 로직
-                def scan_row_for_breakfast(row):
-                    row_string = "".join(row.astype(str).values).upper()
-                    return 'Included (조식포함)' if 'BF' in row_string else 'Not Included (불포함)'
-                
-                breakfast_col = df_data.apply(scan_row_for_breakfast, axis=1)
-                
-                df_data.columns = [str(c).strip() for c in df_raw.iloc[header_idx].values]
-                df = normalize_and_map_columns(df_data).copy()
-                df['Breakfast'] = breakfast_col
-                
-                for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time']:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
-                
-                df['Total_Revenue'] = np.where(df['Total_Revenue'] == 0, df['Room_Revenue'], df['Total_Revenue'])
-                df['RN'] = df.get('Rooms', 0) * df.get('Nights', 1).replace(0, 1)
-                df['Status'] = status
-                df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
-                df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
-                df['Booking_dt'] = pd.to_datetime(df.get('Booking_Date', df['CheckIn']), errors='coerce')
-                df = df.dropna(subset=['CheckIn_dt'])
-                df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
-                df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
-                df['Day_of_Week'] = df['CheckIn_dt'].dt.day_name()
-                df['Day_Type'] = df['CheckIn_dt'].dt.weekday.apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
-                
-                def classify_nat(row):
-                    name = str(row.get('Guest_Name', ''))
-                    orig = str(row.get('Nat_Orig', '')).upper()
-                    if re.search('[가-힣]', name): return 'KOR'
-                    if any(x in orig for x in ['CHN', 'HKG', 'TWN', 'MAC']): return 'CHN'
-                    return 'OTH'
-                df['Nat_Group'] = df.apply(classify_nat, axis=1)
-                return clean_numeric_columns(df)
+            # 조식 전수조사 판독 로직
+            def scan_row_for_breakfast(row):
+                row_string = "".join(row.astype(str).values).upper()
+                return 'Included (조식포함)' if 'BF' in row_string else 'Not Included (불포함)'
+            
+            breakfast_col = df_data.apply(scan_row_for_breakfast, axis=1)
+            
+            # 헤더 이름 설정
+            df_data.columns = [str(c).strip() for c in df_raw.iloc[header_idx].values]
+            
+            # 컬럼 매핑 진행
+            df = normalize_and_map_columns(df_data).copy()
+            df['Breakfast'] = breakfast_col
+            
+            # 숫자 처리
+            for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights', 'Lead_Time']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
+            
+            df['Total_Revenue'] = np.where(df['Total_Revenue'] == 0, df['Room_Revenue'], df['Total_Revenue'])
+            df['RN'] = df.get('Rooms', 0) * df.get('Nights', 1).replace(0, 1)
+            df['Status'] = status
+            df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
+            df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
+            df['Booking_dt'] = pd.to_datetime(df.get('Booking_Date', df['CheckIn']), errors='coerce')
+            df = df.dropna(subset=['CheckIn_dt'])
+            df['Stay_Month'] = df['CheckIn_dt'].dt.strftime('%Y-%m')
+            df['Booking_Month'] = df['Booking_dt'].dt.strftime('%Y-%m')
+            df['Day_of_Week'] = df['CheckIn_dt'].dt.day_name()
+            df['Day_Type'] = df['CheckIn_dt'].dt.weekday.apply(lambda x: 'Weekend' if x >= 4 else 'Weekday')
+            
+            def classify_nat(row):
+                name = str(row.get('Guest_Name', ''))
+                orig = str(row.get('Nat_Orig', '')).upper()
+                if re.search('[가-힣]', name): return 'KOR'
+                if any(x in orig for x in ['CHN', 'HKG', 'TWN', 'MAC']): return 'CHN'
+                return 'OTH'
+            df['Nat_Group'] = df.apply(classify_nat, axis=1)
+            return clean_numeric_columns(df)
     except Exception as e:
         st.error(f"⚠️ 파일 처리 오류: {e}")
         return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 렌더링 헬퍼 함수들 (원본 기능 100% 복구)
+# 5. UI 렌더링 헬퍼 함수들
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
@@ -343,7 +339,7 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
         show_dataframe_with_style(add_total_row(acc_stats.sort_values('RN', ascending=False).head(50), 'Account'))
     
     with t4:
-        st.subheader("⏳ 리드타임 (예약일~체크인)")
+        st.subheader("⏳ 리드타임 (직접 계산 값 기준)")
         bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]; labels = ['0일', '1-3일', '4-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+']
         temp_df = target_df.copy(); temp_df['Lead_Group'] = pd.cut(temp_df['Lead_Time'], bins=bins, labels=labels)
         lead_stats = temp_df.groupby('Lead_Group').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
@@ -382,7 +378,7 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
             show_dataframe_with_style(add_total_row(bf_stats, 'Breakfast'))
 
 # ==============================================================================
-# 6. 메인 실행부 (무삭제 무편집 기능 복구)
+# 6. 메인 실행부
 # ==============================================================================
 try:
     st.title("🏛️ 앰버 호텔 경영 리포트 (Final Integrity)")
@@ -424,12 +420,11 @@ try:
         df_otb = df[df['Segment'].astype(str).str.contains('OTB')]
         df_list = df[~df['Segment'].astype(str).str.contains('OTB')]
         df_paid_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] > 0)]
-        df_zero_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] <= 0)]
         df_list_cn = df_list[df_list['Status'] == 'Cancelled']
         df_total_paid = pd.concat([df_paid_bk, df_list_cn])
 
         main_tab0, main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs([
-            "👑 총지배인(GM) 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"
+            "👑 GM 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"
         ])
 
         with main_tab0:
@@ -457,10 +452,10 @@ try:
                 comb_m = pd.concat([df_paid_bk.assign(Type='예약'), df_list_cn.assign(Type='취소')]).groupby(['Stay_Month','Type'])['RN'].sum().reset_index()
                 if not comb_m.empty: st.plotly_chart(px.bar(comb_m, x='Stay_Month', y='RN', color='Type', barmode='group', title="월별 예약/취소 추이"), use_container_width=True, key="gm_bar")
 
-        with main_tab1: render_analysis_tab(df_paid_bk, "유료 예약", "bk_u")
-        with main_tab2: render_analysis_tab(df_list_cn, "취소 데이터", "cn_u")
-        with main_tab3: render_analysis_tab(df_total_paid, "종합 합계", "tot_u")
-        with main_tab4: st.subheader(f"🆓 0원 예약 (총 {len(df_zero_bk)}건)"); st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
+        with main_tab1: render_analysis_tab(df_paid_bk, "유료 예약", "bk_u", "Blues")
+        with main_tab2: render_analysis_tab(df_list_cn, "취소 데이터", "cn_u", "Reds")
+        with main_tab3: render_analysis_tab(df_total_paid, "종합 합계", "tot_u", "Greens")
+        with main_tab4: st.subheader(f"🆓 0원 예약 (총 {len(df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] <= 0)])}건)"); st.dataframe(df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] <= 0)][['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
 
         with main_tab5:
             st.header("🎯 OTB 현황 (Budget vs OTB)")
@@ -483,39 +478,6 @@ try:
                 for _, r in fin.iterrows(): res_dict[r['Name']] = [f"{r['Budget']:,.0f}", f"{r['OTB']:,.0f}", f"{r['Rate']:.1f}%"]
                 res_dict['합계 (Total)'] = [f"{tb:,.0f}", f"{to:,.0f}", f"{(to/tb*100 if tb>0 else 0):.1f}%"]
                 st.dataframe(pd.DataFrame(res_dict, index=['Budget (목표)', 'OTB (현재)', '달성률 (%)']).style.apply(lambda s: ['background-color: #fff9c4; font-weight: bold; border-left: 2px solid black; color: black'] * len(s) if s.name == '합계 (Total)' else [''] * len(s), axis=0), use_container_width=True)
-
     else: st.info("👈 왼쪽 사이드바에서 파일을 업로드하고 '저장' 버튼을 눌러주세요.")
 except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
-
-
-# --- 02_Room OTB Status.py 하단 수정 ---
-
-# 1. 월(Month) 정보 가져오기 (가장 안전한 방법)
-# 위쪽 코드에서 'current_month'나 'month'를 정의했다면 그것을 쓰고, 
-# 없으면 데이터프레임(df_curr)에서 직접 추출합니다.
-try:
-    if 'current_month' in locals():
-        save_month = current_month
-    elif 'month' in locals():
-        save_month = month
-    elif 'df_curr' in locals() and df_curr is not None:
-        # 데이터프레임의 첫 번째 행 날짜에서 월 추출
-        save_month = df_curr['Date'].iloc[0].month
-    else:
-        # 이도 저도 안 되면 오늘 날짜 기준
-        import datetime
-        save_month = datetime.datetime.now().month
-except Exception:
-    import datetime
-    save_month = datetime.datetime.now().month
-
-# 2. 공용 게시판(session_state)에 데이터 전송
-if 'sob_curr' in locals() and sob_curr is not None:
-    st.session_state[f"sob_{save_month}"] = sob_curr
-    
-    if 'df_curr' in locals() and 'df_prev' in locals():
-        # 페이스 데이터(변화량) 저장
-        st.session_state[f"pace_{save_month}"] = len(df_curr) - len(df_prev)
-
-    st.success(f"✅ {save_month}월 데이터가 포캐스팅 시스템으로 전송되었습니다.")
