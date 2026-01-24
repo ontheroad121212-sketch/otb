@@ -146,7 +146,9 @@ def normalize_and_map_columns(df):
         'Account': ['account', 'source', 'agent', '거래처', '에이전시'],
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
         'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
-        'Nat_Orig': ['nation', 'country', 'nat', '국적']
+        'Nat_Orig': ['nation', 'country', 'nat', '국적'],
+        # Lead_Time은 별도 로직으로 처리
+        'Lead_Time': ['lead', '리드', 'lt']
     }
     for col in df.columns:
         clean = str(col).lower().replace(" ", "").replace("_", "")
@@ -158,7 +160,8 @@ def normalize_and_map_columns(df):
 
 def process_data(uploaded_file, status, force_otb=False):
     try:
-        is_otb = force_otb or "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
+        is_filename_otb = "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
+        is_otb = force_otb or is_filename_otb
         
         # ---------------------------------------------------------
         # Case A: OTB 데이터 처리
@@ -166,7 +169,7 @@ def process_data(uploaded_file, status, force_otb=False):
         if is_otb:
             if uploaded_file.name.endswith('.csv'):
                 try: df_raw = pd.read_csv(uploaded_file, header=None, encoding='cp949')
-                except: df_raw = pd.read_csv(uploaded_file, header=None)
+                except: df_raw = pd.read_csv(uploaded_file, header=None) # utf-8 fallback
             else:
                 df_raw = pd.read_excel(uploaded_file, header=None)
 
@@ -188,51 +191,60 @@ def process_data(uploaded_file, status, force_otb=False):
             
             return pd.DataFrame([{
                 'CheckIn': target_month_date.strftime('%Y-%m-%d'),
-                'Room_Revenue': total_rev, 'Total_Revenue': total_rev, 'RN': 0, 
+                'Room_Revenue': total_rev, 'Total_Revenue': total_rev, 'RN': 0,
                 'Guest_Name': 'OTB_DATA', 'Segment': 'OTB', 'Account': 'OTB_Summary',
                 'Room_Type': 'ROH', 'Nat_Orig': 'KR', 'Booking_Date': target_month_date.strftime('%Y-%m-%d'),
                 'Lead_Time': 0, 'Breakfast': 'Unknown', 'Status': 'Booked'
             }])
             
         # ---------------------------------------------------------
-        # Case B: 예약/취소 리스트 (리드타임 핀셋 추출 핵심 구간)
+        # Case B: 예약/취소 리스트 (리드타임 강제 추출 & 조식 전수조사)
         # ---------------------------------------------------------
         else:
+            # 1. 파일 읽기 (3행 헤더 고정, 인코딩 처리)
             if uploaded_file.name.endswith('.csv'):
                 try: df_raw = pd.read_csv(uploaded_file, header=2, encoding='cp949')
                 except: df_raw = pd.read_csv(uploaded_file, header=2)
             else:
                 df_raw = pd.read_excel(uploaded_file, header=2)
 
-            # [핵심] 리드타임 열 인덱스(위치) 직접 찾아서 데이터 선점
-            lead_time_data = None
+            # 2. [핵심] 리드타임 열 인덱스 찾기 및 데이터 백업
+            lt_col_index = -1
             for idx, col in enumerate(df_raw.columns):
-                c_name = str(col).strip().upper()
-                if '리드' in c_name or 'LEAD' in c_name or 'LT' == c_name:
-                    lead_time_data = pd.to_numeric(df_raw.iloc[:, idx].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                c_str = str(col).strip().upper()
+                if '리드' in c_str or 'LEAD' in c_str or 'LT' == c_str:
+                    lt_col_index = idx
                     break
             
-            # 조식 전수조사
+            if lt_col_index != -1:
+                lead_time_series = pd.to_numeric(df_raw.iloc[:, lt_col_index].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            else:
+                lead_time_series = 0
+
+            # 3. 조식 전수조사
             def scan_row_for_breakfast(row):
                 row_string = "".join(row.astype(str).values).upper()
                 return 'Included (조식포함)' if 'BF' in row_string else 'Not Included (불포함)'
+            
             breakfast_col = df_raw.apply(scan_row_for_breakfast, axis=1)
             
-            # 컬럼 매핑 (이 과정에서 리드타임이 유실될 수 있으나 아래에서 강제 주입함)
+            # 4. 컬럼 매핑
             df = normalize_and_map_columns(df_raw).copy()
             
-            # [핵심] 선점 확보한 리드타임 값 강제 주입
-            df['Lead_Time'] = lead_time_data if lead_time_data is not None else 0
-            df['Breakfast'] = breakfast_col
-            df['Status'] = status
+            # 5. [핵심] 리드타임 값 강제 주입
+            df['Lead_Time'] = lead_time_series
             
-            # 숫자 및 날짜 처리
+            # 6. 조식 컬럼 주입
+            df['Breakfast'] = breakfast_col
+            
+            # 7. 데이터 정리
             for col in ['Room_Revenue', 'Total_Revenue', 'Rooms', 'Nights']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('nan', '0'), errors='coerce').fillna(0)
             
             df['Total_Revenue'] = np.where(df.get('Total_Revenue', 0) == 0, df.get('Room_Revenue', 0), df.get('Total_Revenue', 0))
             df['RN'] = df.get('Rooms', 0) * df.get('Nights', 1).replace(0, 1)
+            df['Status'] = status
             df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
             df['CheckIn_dt'] = pd.to_datetime(df['CheckIn'], errors='coerce')
             df['Booking_dt'] = pd.to_datetime(df.get('Booking_Date', df['CheckIn']), errors='coerce')
@@ -243,7 +255,9 @@ def process_data(uploaded_file, status, force_otb=False):
             
             def classify_nat(row):
                 name = str(row.get('Guest_Name',''))
+                orig = str(row.get('Nat_Orig', '')).upper()
                 if re.search('[가-힣]', name): return 'KOR'
+                if any(x in orig for x in ['CHN', 'HKG', 'TWN', 'MAC']): return 'CHN'
                 return 'OTH'
             df['Nat_Group'] = df.apply(classify_nat, axis=1)
             return clean_numeric_columns(df)
@@ -274,6 +288,7 @@ def show_dataframe_with_style(df):
         st.write("표시할 데이터가 없습니다."); return
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     styler = df.style.format({col: "{:,.0f}" for col in numeric_cols})
+    if 'Budget_Achiev' in df.columns: styler = styler.format({'Budget_Achiev': "{:.1f}%"})
     def highlight_total(row):
         is_total = any(str(val) == "TOTAL" for val in row)
         return ['background-color: #fff9c4; font-weight: bold; color: black; border-top: 2px solid black'] * len(row) if is_total else [''] * len(row)
@@ -288,56 +303,71 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
     ])
     
     with t1:
-        st.subheader(f"📊 세그먼트 분석")
+        st.subheader(f"📊 {title_prefix} 세그먼트 분석")
         seg_stats = target_df.groupby('Segment').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
+        seg_stats['ADR_Room'] = np.where(seg_stats['RN']>0, seg_stats['Room_Revenue']/seg_stats['RN'], 0)
+        seg_stats['ADR_Total'] = np.where(seg_stats['RN']>0, seg_stats['Total_Revenue']/seg_stats['RN'], 0)
         c1, c2 = st.columns(2)
-        c1.plotly_chart(px.pie(seg_stats, values='Room_Revenue', names='Segment', title="매출 비중"), use_container_width=True, key=f"{unique_key}_seg_pie")
-        c2.plotly_chart(px.bar(seg_stats, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True, key=f"{unique_key}_seg_bar")
+        fig_pie = px.pie(seg_stats, values='Room_Revenue', names='Segment', title="매출 비중")
+        c1.plotly_chart(fig_pie, use_container_width=True, key=f"{unique_key}_seg_pie")
+        fig_bar = px.bar(seg_stats, x='Segment', y='Room_Revenue', title="세그먼트별 매출")
+        c2.plotly_chart(fig_bar, use_container_width=True, key=f"{unique_key}_seg_bar")
         show_dataframe_with_style(add_total_row(seg_stats, 'Segment'))
     
     with t2:
-        st.subheader(f"📅 Booking Pacing")
+        st.subheader(f"📅 Booking Pacing (예약 시점)")
         piv = target_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum').fillna(0)
         st.plotly_chart(px.imshow(piv, text_auto="d", aspect="auto", color_continuous_scale=color_scale), use_container_width=True, key=f"{unique_key}_pacing")
     
     with t3:
         st.subheader("🏢 상위 거래처 (Top 50)")
-        acc_stats = target_df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index().sort_values('RN', ascending=False).head(50)
-        show_dataframe_with_style(add_total_row(acc_stats, 'Account'))
+        acc_stats = target_df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
+        acc_stats['ADR_Room'] = np.where(acc_stats['RN']>0, acc_stats['Room_Revenue']/acc_stats['RN'], 0)
+        acc_stats['ADR_Total'] = np.where(acc_stats['RN']>0, acc_stats['Total_Revenue']/acc_stats['RN'], 0)
+        show_dataframe_with_style(add_total_row(acc_stats.sort_values('RN', ascending=False).head(50), 'Account'))
     
     with t4:
-        st.subheader("⏳ 리드타임 분석 (사용자 계산값)")
+        st.subheader("⏳ 리드타임 (엑셀 3행값)")
         bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]; labels = ['0일', '1-3일', '4-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+']
         temp_df = target_df.copy(); temp_df['Lead_Group'] = pd.cut(temp_df['Lead_Time'], bins=bins, labels=labels)
         lead_stats = temp_df.groupby('Lead_Group', observed=True).agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
-        st.plotly_chart(px.bar(lead_stats, x='Lead_Group', y='RN', title="리드타임별 박수"), use_container_width=True, key=f"{unique_key}_lead")
+        st.plotly_chart(px.bar(lead_stats, x='Lead_Group', y='RN', title="리드타임별 건수"), use_container_width=True, key=f"{unique_key}_lead")
         show_dataframe_with_style(add_total_row(lead_stats, 'Lead_Group'))
     
     with t5:
-        st.subheader("🛏️ 객실타입 분석")
-        rt_stats = target_df.groupby('Room_Type').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
+        st.subheader("🛏️ 객실타입 선호도")
+        rt_stats = target_df.groupby('Room_Type').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
         show_dataframe_with_style(add_total_row(rt_stats.sort_values('RN', ascending=False), 'Room_Type'))
     
     with t6:
         st.subheader("🗓️ 요일별 패턴")
-        wd_stats = target_df.groupby('Day_Type').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
+        wd_stats = target_df.groupby('Day_Type').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
         c1, c2 = st.columns(2)
-        c1.plotly_chart(px.bar(wd_stats, x='Day_Type', y='Room_Revenue'), use_container_width=True, key=f"{unique_key}_wd_bar")
-        c2.plotly_chart(px.pie(wd_stats, values='RN', names='Day_Type'), use_container_width=True, key=f"{unique_key}_wd_pie")
+        fig_wd_bar = px.bar(wd_stats, x='Day_Type', y='Room_Revenue')
+        c1.plotly_chart(fig_wd_bar, use_container_width=True, key=f"{unique_key}_wd_bar")
+        fig_wd_pie = px.pie(wd_stats, values='RN', names='Day_Type')
+        c2.plotly_chart(fig_wd_pie, use_container_width=True, key=f"{unique_key}_wd_pie")
     
     with t7:
-        st.subheader("🌐 국적 분포")
+        st.subheader("🌐 국적별 분포")
         if 'Nat_Group' in target_df.columns:
-            nat_stats = target_df.groupby('Nat_Group').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
+            nat_stats = target_df.groupby('Nat_Group').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
+            c1, c2 = st.columns(2)
+            fig_nat_pie = px.pie(nat_stats, values='RN', names='Nat_Group', title="국적 비중")
+            c1.plotly_chart(fig_nat_pie, use_container_width=True, key=f"{unique_key}_nat_pie")
+            fig_nat_bar = px.bar(nat_stats, x='Nat_Group', y='Room_Revenue')
+            c2.plotly_chart(fig_nat_bar, use_container_width=True, key=f"{unique_key}_nat_bar")
             show_dataframe_with_style(add_total_row(nat_stats, 'Nat_Group'))
             
     with t8:
-        st.subheader("🍳 조식 분석")
+        st.subheader("🍳 조식 포함 여부 분석")
         if 'Breakfast' in target_df.columns:
-            bf_stats = target_df.groupby('Breakfast').agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
+            bf_stats = target_df.groupby('Breakfast').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
             c1, c2 = st.columns(2)
-            c1.plotly_chart(px.pie(bf_stats, values='RN', names='Breakfast', title="조식 비중"), use_container_width=True, key=f"{unique_key}_bf_pie")
-            c2.plotly_chart(px.bar(bf_stats, x='Breakfast', y='Room_Revenue', title="조식 매출"), use_container_width=True, key=f"{unique_key}_bf_bar")
+            fig_bf_pie = px.pie(bf_stats, values='RN', names='Breakfast', title="조식 포함 비율 (RN)")
+            c1.plotly_chart(fig_bf_pie, use_container_width=True, key=f"{unique_key}_bf_pie")
+            fig_bf_bar = px.bar(bf_stats, x='Breakfast', y='Room_Revenue', title="조식 여부별 매출")
+            c2.plotly_chart(fig_bf_bar, use_container_width=True, key=f"{unique_key}_bf_bar")
             show_dataframe_with_style(add_total_row(bf_stats, 'Breakfast'))
 
 # ==============================================================================
@@ -350,10 +380,11 @@ try:
     available_dates = sorted(df_all['Snapshot_Date'].unique(), reverse=True) if not df_all.empty else []
 
     with st.sidebar:
-        st.header("⚙️ 시스템 설정")
+        st.header("📅 조회 설정")
         if st.button("🗑️ OTB 데이터만 초기화"):
             deleted_cnt = delete_otb_data_only()
-            st.warning(f"OTB 데이터 {deleted_cnt}건 삭제 완료!"); time.sleep(1); st.cache_data.clear(); st.rerun()
+            st.warning(f"OTB 데이터 {deleted_cnt}건 삭제 완료! 파일을 다시 업로드해주세요.")
+            time.sleep(1); st.cache_data.clear(); st.rerun()
             
         selected_date = st.selectbox("조회 기준일 (Snapshot)", available_dates, index=0) if available_dates else None
         st.markdown("---")
@@ -382,6 +413,7 @@ try:
         df_otb = df[df['Segment'].astype(str).str.contains('OTB')]
         df_list = df[~df['Segment'].astype(str).str.contains('OTB')]
         df_paid_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] > 0)]
+        df_zero_bk = df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] <= 0)]
         df_list_cn = df_list[df_list['Status'] == 'Cancelled']
         df_total_paid = pd.concat([df_paid_bk, df_list_cn])
 
@@ -393,6 +425,7 @@ try:
             st.header(f"👑 총지배인(GM) 요약 리포트 ({selected_date})")
             bk_rn, bk_rev = df_paid_bk['RN'].sum(), df_paid_bk['Room_Revenue'].sum()
             cn_rn, cn_rev = df_list_cn['RN'].sum(), df_list_cn['Room_Revenue'].sum()
+            # [추가] LOS 계산 로직 (취소 포함)
             bk_cnt = len(df_paid_bk); bk_los = (bk_rn / bk_cnt) if bk_cnt > 0 else 0
             cn_cnt = len(df_list_cn); cn_los = (cn_rn / cn_cnt) if cn_cnt > 0 else 0
             
@@ -427,7 +460,7 @@ try:
         with main_tab1: render_analysis_tab(df_paid_bk, "유료 예약", "bk_u", "Blues")
         with main_tab2: render_analysis_tab(df_list_cn, "취소 데이터", "cn_u", "Reds")
         with main_tab3: render_analysis_tab(df_total_paid, "종합 합계", "tot_u", "Greens")
-        with main_tab4: st.subheader(f"🆓 0원 예약 (총 {len(df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] <= 0)])}건)"); st.dataframe(df_list[(df_list['Status'] == 'Booked') & (df_list['Total_Revenue'] <= 0)][['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
+        with main_tab4: st.subheader(f"🆓 0원 예약 (총 {len(df_zero_bk)}건)"); st.dataframe(df_zero_bk[['Guest_Name', 'CheckIn', 'Account', 'Room_Type']], use_container_width=True)
 
         with main_tab5:
             st.header("🎯 OTB 현황 (Budget vs OTB)")
@@ -454,20 +487,3 @@ try:
     else: st.info("👈 왼쪽 사이드바에서 파일을 업로드하고 '저장' 버튼을 눌러주세요.")
 except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
-
-# ==============================================================================
-# 02_Room OTB Status.py 하단 로직 (유지)
-# ==============================================================================
-try:
-    if 'current_month' in locals(): save_month = current_month
-    elif 'month' in locals(): save_month = month
-    elif 'df_curr' in locals() and df_curr is not None: save_month = df_curr['Date'].iloc[0].month
-    else: save_month = datetime.now().month
-except Exception:
-    save_month = datetime.now().month
-
-if 'sob_curr' in locals() and sob_curr is not None:
-    st.session_state[f"sob_{save_month}"] = sob_curr
-    if 'df_curr' in locals() and 'df_prev' in locals():
-        st.session_state[f"pace_{save_month}"] = len(df_curr) - len(df_prev)
-    st.success(f"✅ {save_month}월 데이터가 포캐스팅 시스템으로 전송되었습니다.")
