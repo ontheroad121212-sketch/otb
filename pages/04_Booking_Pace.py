@@ -724,6 +724,15 @@ with tabs[6]:
 with tabs[7]:
     st.header("🎯 데이터 기반 수익 전략")
     st.info("단순 산점도를 넘어선 심층 분석: 가격 민감도(탄력성), RevPAR 히트맵, 취소 리드타임 분석")
+
+    # 전략 탭을 위한 별도 날짜 선택 (RM 탭과 공유할 수도 있으나 독립성 위해 유지)
+    sc1, sc2 = st.columns(2)
+    with sc1: sd_a = st.date_input("전략 기준 기간 (A)", [datetime(2025,1,1), datetime(2025,1,31)], key="sda")
+    with sc2: sd_b = st.date_input("전략 비교 기간 (B)", [datetime(2026,1,1), datetime(2026,1,24)], key="sdb")
+    
+    s_df_a = df_clean[(df_clean['입실일자'].dt.date >= sd_a[0]) & (df_clean['입실일자'].dt.date <= sd_a[1])]
+    s_df_b = df_clean[(df_clean['입실일자'].dt.date >= sd_b[0]) & (df_clean['입실일자'].dt.date <= sd_b[1])]
+    
     s_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "🛡️ 취소 예측", "💰 가격 민감도(Elasticity)", "📅 RevPAR 히트맵", "📉 취소 타이밍 분석"])
     
     with s_tabs[0]:
@@ -750,72 +759,49 @@ with tabs[7]:
         
         st.metric("현재 OTB 기준 실투숙 룸나잇 예측", f"{net_predict}박", f"예상 취소: {int(current_otb * cxl_rate_hist)}박")
 
-    with s_tabs[3]: # 가격 민감도 (OCC vs ADR)
-        # 일자별 OCC(객실수 합계)와 ADR(평균) 계산
-        # 전체 객실수 60개 가정 (동적으로 구할 수 없으면 고정값 사용)
-        TOTAL_ROOMS = 60 
-        daily_perf = df_clean.groupby('입실일자').agg({'객실수':'sum', 'RoomRevenue':'sum'}).reset_index()
-        daily_perf['OCC_Rate'] = (daily_perf['객실수'] / TOTAL_ROOMS) * 100
-        daily_perf['ADR'] = daily_perf['RoomRevenue'] / daily_perf['객실수']
-        # 이상치 제거 (OCC > 100 or ADR < 10000)
-        daily_perf = daily_perf[(daily_perf['OCC_Rate'] <= 110) & (daily_perf['ADR'] > 10000)]
+    with st_tabs[3]: # 가격 민감도 (A vs B Scatter)
+        def make_sensitivity(d, label):
+            g = d.groupby('입실일자').agg({'객실수':'sum', 'RoomRevenue':'sum'}).reset_index()
+            g['OCC'] = (g['객실수']/60)*100
+            g['ADR'] = g['RoomRevenue']/g['객실수']
+            g['Period'] = label
+            return g[g['ADR']>0]
         
-        st.write("### 📉 객실 점유율(OCC)에 따른 ADR 분포 (가격 민감도)")
-        st.caption("점이 오른쪽 아래로 갈수록 '싸게 많이 판 날', 왼쪽 위로 갈수록 '비싸게 적게 판 날'입니다.")
+        sens_a = make_sensitivity(s_df_a, 'A기간')
+        sens_b = make_sensitivity(s_df_b, 'B기간')
+        sens_all = pd.concat([sens_a, sens_b])
         
-        fig_elas = px.scatter(daily_perf, x='OCC_Rate', y='ADR', color='RoomRevenue', 
-                              size='객실수', title="Price Elasticity: OCC vs ADR",
-                              labels={'OCC_Rate': '점유율(%)', 'ADR': '평균단가', 'RoomRevenue': '일매출'},
-                              color_continuous_scale='Viridis')
-        # 기준선 추가 (평균)
-        fig_elas.add_hline(y=daily_perf['ADR'].mean(), line_dash="dash", annotation_text="평균 ADR")
-        fig_elas.add_vline(x=daily_perf['OCC_Rate'].mean(), line_dash="dash", annotation_text="평균 OCC")
-        st.plotly_chart(fig_elas, use_container_width=True)
-
-    with s_tabs[4]: # RevPAR 히트맵 (요일 vs 월)
-        st.write("### 📅 월별/요일별 고수익(RevPAR) 지점 포착")
-        df_clean['Month'] = df_clean['입실일자'].dt.month
-        df_clean['DayOfWeek'] = df_clean['입실일자'].dt.day_name()
+        st.write("### 📉 시기별 가격 저항선 변화 (OCC vs ADR)")
+        fig_sens = px.scatter(sens_all, x='OCC', y='ADR', color='Period', size='객실수', hover_data=['입실일자'], title="기간별 가격 민감도 이동")
+        st.plotly_chart(fig_sens, use_container_width=True)
         
-        heatmap_data = df_clean.groupby(['Month', 'DayOfWeek'])['RoomRevenue'].mean().reset_index()
-        # 요일 정렬
-        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        heatmap_data['DayOfWeek'] = pd.Categorical(heatmap_data['DayOfWeek'], categories=day_order, ordered=True)
-        heatmap_data = heatmap_data.sort_values(['Month', 'DayOfWeek'])
+    with st_tabs[4]: # 히트맵 (Side by Side)
+        c_h1, c_h2 = st.columns(2)
+        def plot_hm(d, title):
+            d['W'] = d['입실일자'].dt.day_name(); d['M'] = d['입실일자'].dt.month
+            hm = d.groupby(['M','W'])['RoomRevenue'].mean().reset_index()
+            days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+            hm['W'] = pd.Categorical(hm['W'], categories=days, ordered=True)
+            p = hm.pivot(index='W', columns='M', values='RoomRevenue')
+            return go.Figure(data=go.Heatmap(z=p.values, x=p.columns, y=p.index, colorscale='RdBu_r'), layout=dict(title=title))
+            
+        with c_h1: st.plotly_chart(plot_hm(s_df_a, "A기간 평균 일매출"), use_container_width=True)
+        with c_h2: st.plotly_chart(plot_hm(s_df_b, "B기간 평균 일매출"), use_container_width=True)
         
-        # 피벗
-        pivot_hm = heatmap_data.pivot(index='DayOfWeek', columns='Month', values='RoomRevenue')
+    with st_tabs[5]: # 취소 커브 비교
+        # 취소 데이터는 df_raw에서 가져와야 함 (df_clean은 취소 제외됨)
+        raw_a = df_raw[(df_raw['입실일자'].dt.date >= sd_a[0]) & (df_raw['입실일자'].dt.date <= sd_a[1]) & df_raw['상태'].isin(def_exc)]
+        raw_b = df_raw[(df_raw['입실일자'].dt.date >= sd_b[0]) & (df_raw['입실일자'].dt.date <= sd_b[1]) & df_raw['상태'].isin(def_exc)]
         
-        fig_hm = go.Figure(data=go.Heatmap(
-            z=pivot_hm.values,
-            x=pivot_hm.columns,
-            y=pivot_hm.index,
-            colorscale='RdBu_r',
-            texttemplate="%{z:,.0f}"
-        ))
-        fig_hm.update_layout(title="요일/월별 평균 일매출 히트맵 (붉을수록 고수익)")
-        st.plotly_chart(fig_hm, use_container_width=True)
-
-    with s_tabs[5]: # 취소 타이밍 (Lead Time of Cancellations)
-        st.write("### 📉 예약 취소 시점 분석 (Wash-out Curve)")
-        cxl_data = df_raw[df_raw['상태'].isin(def_exc)].copy()
-        
-        # 취소 리드타임 (입실일 - 취소일 or 예약일)
-        # 취소일 데이터가 없으므로 LeadTime(예약~입실)을 대용으로 사용하거나, 
-        # 만약 '취소일자'가 있다면 그걸 써야 함. 여기선 LeadTime 분포로 '언제 예약한 사람이 취소하는가'를 분석
-        
-        fig_cxl_hist = px.histogram(cxl_data, x='LeadTime', nbins=30, 
-                                    title="취소된 예약의 리드타임 분포 (언제 예약한 건이 취소되는가?)",
-                                    labels={'LeadTime': '리드타임 (일)'}, color_discrete_sequence=['#ff4b4b'])
-        st.plotly_chart(fig_cxl_hist, use_container_width=True)
-        
-        # 구간별 취소율
-        df_raw['LT_Bin'] = pd.cut(df_raw['LeadTime'], bins=[0, 7, 14, 30, 60, 90, 999], labels=['0-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+'])
-        df_raw['is_cxl'] = df_raw['상태'].isin(def_exc)
-        cxl_rate_by_lt = df_raw.groupby('LT_Bin')['is_cxl'].mean().reset_index()
-        cxl_rate_by_lt['is_cxl'] *= 100
-        
-        st.plotly_chart(px.bar(cxl_rate_by_lt, x='LT_Bin', y='is_cxl', title="리드타임 구간별 취소율 (%)", text_auto='.1f'), use_container_width=True)
+        st.write("### 📉 취소 리드타임 분포 (언제 취소하는가?)")
+        if not raw_a.empty and not raw_b.empty:
+            fig_cxl = go.Figure()
+            fig_cxl.add_trace(go.Histogram(x=raw_a['LeadTime'], name='A기간', opacity=0.5))
+            fig_cxl.add_trace(go.Histogram(x=raw_b['LeadTime'], name='B기간', opacity=0.5))
+            fig_cxl.update_layout(barmode='overlay', title="기간별 취소 건의 리드타임 비교")
+            st.plotly_chart(fig_cxl, use_container_width=True)
+        else:
+            st.warning("선택한 기간에 취소 데이터가 충분하지 않습니다.")
 
 # -----------------------------------------------------------------------------
 # 6. 포캐스팅 시스템 연동 (세션 동기화)
