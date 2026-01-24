@@ -67,7 +67,6 @@ def clean_numeric_columns(df):
     ]
     for col in target_cols:
         if col in df.columns:
-            # 쉼표, 원화기호 등 제거 후 숫자로 변환
             df[col] = pd.to_numeric(
                 df[col].astype(str).str.replace(',', '').str.replace('nan', '0').str.replace('₩', ''), 
                 errors='coerce'
@@ -130,7 +129,7 @@ def delete_otb_data_only():
         return 0
 
 # ==============================================================================
-# 4. 엑셀/CSV 파일 처리 (3행 헤더 고정 & 리드타임 핀셋 추출)
+# 4. 엑셀/CSV 파일 처리 및 매핑 로직 (리드타임 핀셋 추출)
 # ==============================================================================
 
 def normalize_and_map_columns(df):
@@ -148,6 +147,7 @@ def normalize_and_map_columns(df):
         'Room_Type': ['type', 'cat', '객실타입', '룸타입'],
         'Rate_Plan': ['rate', 'plan', '상품', '패키지', '프로모션'], 
         'Nat_Orig': ['nation', 'country', 'nat', '국적'],
+        # Lead_Time은 별도 처리하므로 여기서 제외해도 되지만 안전장치로 둠
         'Lead_Time': ['lead', '리드', 'lt']
     }
     for col in df.columns:
@@ -160,11 +160,10 @@ def normalize_and_map_columns(df):
 
 def process_data(uploaded_file, status, force_otb=False):
     try:
-        is_filename_otb = "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
-        is_otb = force_otb or is_filename_otb
+        is_otb = force_otb or "Sales on the Book" in uploaded_file.name or "영업 현황" in uploaded_file.name
         
         # ---------------------------------------------------------
-        # Case A: OTB 데이터 처리 (마지막 셀 매출 추출)
+        # Case A: OTB (세일즈 온 더 북)
         # ---------------------------------------------------------
         if is_otb:
             if uploaded_file.name.endswith('.csv'):
@@ -184,7 +183,7 @@ def process_data(uploaded_file, status, force_otb=False):
 
             df_clean = df_raw.dropna(how='all').dropna(axis=1, how='all')
             try:
-                # 마지막 행, 마지막 열 셀 값 추출
+                # 마지막 줄, 마지막 칸 추출
                 raw_val = str(df_clean.iloc[-1, -1])
                 clean_val = raw_val.replace(',', '').replace('nan', '0').split('.')[0]
                 total_rev = int(clean_val)
@@ -199,39 +198,42 @@ def process_data(uploaded_file, status, force_otb=False):
             }])
             
         # ---------------------------------------------------------
-        # Case B: 예약/취소 리스트 (3행 헤더 고정 & 리드타임 핀셋)
+        # Case B: 예약/취소 리스트 (리드타임 문제 해결)
         # ---------------------------------------------------------
         else:
-            # 1. 무조건 3행(Index 2)을 헤더로 읽습니다.
+            # 1. 파일 읽기 (3행(Index 2) 헤더 강제 지정 및 인코딩 처리)
             if uploaded_file.name.endswith('.csv'):
-                try: df_raw = pd.read_csv(uploaded_file, header=2)
-                except: df_raw = pd.read_csv(uploaded_file, header=2, encoding='cp949')
+                # CSV의 경우 한글 인코딩 문제로 헤더를 못 읽을 수 있으므로 cp949 시도
+                try: df_to_use = pd.read_csv(uploaded_file, header=2, encoding='cp949')
+                except: df_to_use = pd.read_csv(uploaded_file, header=2)
             else:
-                df_raw = pd.read_excel(uploaded_file, header=2)
+                df_to_use = pd.read_excel(uploaded_file, header=2)
 
-            # 2. [핵심] 리드타임 열 찾아서 미리 백업 (매핑 중 유실 방지)
+            # 2. [핵심] 리드타임 컬럼 '핀셋' 추출
+            # 컬럼명이 바뀌거나 사라지기 전에 원본 데이터프레임에서 직접 찾아서 저장
             lead_time_series = None
-            for col in df_raw.columns:
-                c_str = str(col).strip()
-                # '리드타임'이라는 글자가 포함된 컬럼을 찾음
-                if '리드타임' in c_str or 'Lead' in c_str or 'LT' in c_str:
-                    lead_time_series = df_raw[col]
+            for col in df_to_use.columns:
+                c_str = str(col).strip().upper() # 공백제거 및 대문자화
+                # 사용자가 말한 '리드타임'이 포함된 컬럼을 찾음
+                if '리드' in c_str or 'LEAD' in c_str or 'LT' == c_str:
+                    lead_time_series = df_to_use[col]
                     break
             
             # 3. 조식 전수조사 (BF 찾기)
             def scan_row_for_breakfast(row):
                 row_string = "".join(row.astype(str).values).upper()
                 return 'Included (조식포함)' if 'BF' in row_string else 'Not Included (불포함)'
-            
-            breakfast_col = df_raw.apply(scan_row_for_breakfast, axis=1)
+            breakfast_col = df_to_use.apply(scan_row_for_breakfast, axis=1)
             
             # 4. 컬럼 매핑
-            df = normalize_and_map_columns(df_raw).copy()
+            df = normalize_and_map_columns(df_to_use).copy()
             
-            # 5. [핵심] 찾아둔 리드타임 값 강제 주입
+            # 5. [핵심] 찾아둔 리드타임 값 강제 주입 (덮어쓰기)
             if lead_time_series is not None:
+                # 숫자로 변환 후 NaN은 0으로
                 df['Lead_Time'] = pd.to_numeric(lead_time_series.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             else:
+                # 만약 정말로 못 찾았다면 0 (하지만 위 로직에서 찾을 것임)
                 df['Lead_Time'] = 0
             
             # 6. 조식 컬럼 주입
@@ -268,7 +270,7 @@ def process_data(uploaded_file, status, force_otb=False):
         return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 렌더링 헬퍼 함수들 (전체 기능 유지)
+# 5. UI 렌더링 헬퍼 함수들
 # ==============================================================================
 
 def add_total_row(df, group_col_name="구분"):
@@ -328,8 +330,7 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
         show_dataframe_with_style(add_total_row(acc_stats.sort_values('RN', ascending=False).head(50), 'Account'))
     
     with t4:
-        st.subheader("⏳ 리드타임 (리드타임 컬럼값 기준)")
-        # 0보다 큰 리드타임만 분석 대상으로 삼거나 전체 포함
+        st.subheader("⏳ 리드타임 (엑셀 3행값)")
         bins = [-1, 0, 3, 7, 14, 30, 60, 90, 999]; labels = ['0일', '1-3일', '4-7일', '8-14일', '15-30일', '31-60일', '61-90일', '90일+']
         temp_df = target_df.copy(); temp_df['Lead_Group'] = pd.cut(temp_df['Lead_Time'], bins=bins, labels=labels)
         lead_stats = temp_df.groupby('Lead_Group', observed=True).agg({'RN': 'sum', 'Room_Revenue': 'sum'}).reset_index()
@@ -349,7 +350,6 @@ def render_analysis_tab(target_df, title_prefix, unique_key, color_scale="Blues"
         c1.plotly_chart(fig_wd_bar, use_container_width=True, key=f"{unique_key}_day_bar")
         fig_wd_pie = px.pie(wd_stats, values='RN', names='Day_Type')
         c2.plotly_chart(fig_wd_pie, use_container_width=True, key=f"{unique_key}_day_pie")
-        show_dataframe_with_style(add_total_row(wd_stats, 'Day_Type'))
     
     with t7:
         st.subheader("🌐 국적별 분포")
