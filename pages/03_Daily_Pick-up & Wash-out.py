@@ -319,12 +319,12 @@ def render_tab(df, k):
             c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True, key=f"{k}_b")
     
     with t2:
-        # [핀셋 수정] 페이싱 데이터 집계 정밀화
-        # 투숙월(Stay_Month)과 예약월(Booking_Month)이 누락되지 않도록 강제 재설정 후 피벗
+        # [핀셋 조정] 예약 상세 페이싱 데이터 집계 정밀화
+        # 1. 원본 데이터 복사 및 정렬 (날짜 순서 보장)
         pacing_df = df.copy()
-        # 데이터가 문자열일 경우를 대비해 정렬을 위한 전처리
         pacing_df = pacing_df.sort_values(['Booking_Month', 'Stay_Month'])
         
+        # 2. 피벗 테이블 생성 (sum 집계 시 fillna(0)로 구멍 차단)
         p = pacing_df.pivot_table(
             index='Booking_Month', 
             columns='Stay_Month', 
@@ -333,23 +333,28 @@ def render_tab(df, k):
         ).fillna(0)
         
         st.subheader("📅 Booking Pacing Matrix (예약월 vs 투숙월)")
+        
+        # 히트맵 시각화
         st.plotly_chart(px.imshow(
             p, 
-            text_auto=True, 
+            text_auto='.0f', 
             aspect="auto", 
             color_continuous_scale="Blues",
             labels=dict(x="투숙월 (Stay Month)", y="예약 생성월 (Booking Month)", color="RN")
-        ), use_container_width=True, key=f"{k}_pace")
+        ), use_container_width=True, key=f"{k}_pace_img")
         
-        # 월별 예약 생성 추이 (Bar Chart) 고도화
+        # 
+        
+        # 3. 월별 예약 생성 추이 차트 고도화
         trend = pacing_df.groupby('Booking_Month')['RN'].sum().reset_index()
         st.plotly_chart(px.bar(
             trend, 
             x='Booking_Month', 
             y='RN', 
             title="월별 신규 예약 생성 추이 (RN 기준)",
-            text_auto='.0f'
-        ), use_container_width=True, key=f"{k}_tr")
+            text_auto='.0f',
+            color_discrete_sequence=['#1f77b4']
+        ), use_container_width=True, key=f"{k}_tr_chart")
     
     with t3:
         agg = df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
