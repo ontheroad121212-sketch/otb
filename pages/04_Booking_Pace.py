@@ -203,12 +203,18 @@ with st.sidebar:
             delete_all_data(); st.rerun()
 
     st.divider()
-    # [스냅샷 선택 필터]
+    # [스냅샷 선택 필터 - TypeError 방지 로직 적용]
     st.markdown("**🔍 데이터 버전(Snapshot) 선택**")
-    if not df_raw.empty:
-        snapshot_options = sorted(df_raw['Snapshot'].unique(), reverse=True)
-        selected_snapshot = st.selectbox("조회할 데이터 버전", snapshot_options)
-        df = df_raw[df_raw['Snapshot'] == selected_snapshot]
+    if not df_raw.empty and 'Snapshot' in df_raw.columns:
+        # nan 값을 제거하고 모든 값을 문자열로 변환하여 정렬 에러 방지
+        raw_snapshots = [str(x) for x in df_raw['Snapshot'].unique() if pd.notna(x)]
+        snapshot_options = sorted(raw_snapshots, reverse=True)
+        
+        if snapshot_options:
+            selected_snapshot = st.selectbox("조회할 데이터 버전", snapshot_options)
+            df = df_raw[df_raw['Snapshot'].astype(str) == selected_snapshot]
+        else:
+            df = df_raw
     else:
         df = df_raw
 
