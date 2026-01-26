@@ -4,8 +4,8 @@ import numpy as np
 from datetime import datetime, timedelta
 
 def run_forecasting():
-    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v18.0")
-    st.caption("최종 고도화: 목표 달성 역산(Daily Target) + 현 추세 도착지 시나리오 예측")
+    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v18.1")
+    st.caption("최종 수선 완료: 목표 달성 역산(Daily Target) + 현 추세 도착지 시나리오 예측")
 
     # 1. 월 선택 및 동적 날짜 설정
     selected_month = st.sidebar.selectbox("🎯 분석 대상 월", range(1, 13), index=datetime.now().month-1)
@@ -67,7 +67,7 @@ def run_forecasting():
             rem_days = st.number_input("남은 판매일수", 1, 365, int(auto_rem_days))
         with c3:
             avg_adr_actual = int(current_actual_rev / max(1, current_actual_rms)) if current_actual_rms > 0 else 240000
-            target_adr = st.number_input("설정 ADR", 100000, 1000000, avg_adr_actual if avg_adr_actual > 100000 else 240000, step=5000)
+            target_adr = st.number_input("미래 예상 ADR", 100000, 1000000, avg_adr_actual if avg_adr_actual > 100000 else 240000, step=5000)
 
     # 5. [엔진] 픽업 및 시나리오 계산
     lt_factor_base = (1.0 + (1.0 / np.log1p(rem_days)))
@@ -82,18 +82,15 @@ def run_forecasting():
     final_rms = min(net_total_cap, current_actual_rms + total_pickup)
     final_rev_total = current_actual_rev + (max(0, final_rms - current_actual_rms) * target_adr)
     
-    # [지배인님 요청 추가 1: 목표 달성 역산]
+    # 목표 달성 역산
     gap_rev = (budget_rev * 10000) - current_actual_rev
     req_pickup_rms = gap_rev / max(1, target_adr)
     req_daily_rms = req_pickup_rms / rem_days
 
-    # ----------------------------------------------------------------------
-    # 6. [신규 섹션] GM 목표 달성 커맨드 센터 (추가 요청 반영)
-    # ----------------------------------------------------------------------
+    # 6. GM 목표 달성 커맨드 센터
     st.divider()
     st.subheader("🎯 GM 목표 달성 전략 요건 (Strategic Command)")
     
-    # 현재 온북 상태와 필요한 공격력 시각화
     col_otb, col_gap, col_req = st.columns(3)
     with col_otb:
         st.metric("현재 온북 매출액", f"₩{int(current_actual_rev/10000):,}만")
@@ -102,20 +99,16 @@ def run_forecasting():
         st.metric("추가 필요 매출액", f"₩{int(max(0, gap_rev)/10000):,}만")
         st.caption(f"필요 추가 객실: {int(req_pickup_rms)} Rms")
     with col_req:
-        # 핵심 지표: 하루에 몇 박을 더 팔아야 하는가
         st.metric("🎯 일일 요구 픽업", f"{req_daily_rms:.1f} 박 / Day", f"at ₩{int(target_adr/1000)}k")
-        st.caption(f"남은 {rem_days}일간 매일 달성해야 하는 수치")
+        st.caption(f"남은 {rem_days}일간 매일 달성 요건")
 
-    # [지배인님 요청 추가 2: 현 추세 도착지 시나리오 예측]
     st.write("#### 🔮 현재 온북 속도 기반 도착지 시나리오")
     s_col1, s_col2 = st.columns(2)
     with s_col1:
-        # 현 추세 달성 예상
         prob = (final_rev_total / (budget_rev * 10000)) * 100
         delta_rev = (final_rev_total / 10000) - budget_rev
         st.metric("현 추세 최종 예상 매출", f"₩{int(final_rev_total/10000):,}만", f"{delta_rev:+,.0f}만")
     with s_col2:
-        # 달성 가능성 판단
         status = "목표 달성 가시권" if prob >= 100 else "전략 수정 필요(부족)"
         st.metric("목표 달성 가망성", f"{prob:.1f}%", status)
 
@@ -136,7 +129,7 @@ def run_forecasting():
             })
         st.table(pd.DataFrame(breakdown))
 
-    # 8. 시각화 (무삭제)
+    # 8. 시각화
     t1, t2, t3 = st.tabs(["📊 Actual vs Forecast", "🔮 예약 곡선", "💰 수익 민감도"])
     with t1:
         mix_df = pd.DataFrame({
@@ -144,7 +137,6 @@ def run_forecasting():
             "매출액(만원)": [int(current_actual_rev/10000), int((final_rev_total - current_actual_rev)/10000), budget_rev]
         })
         st.bar_chart(mix_df.set_index("구분"))
-        [Image of a waterfall chart showing actual hotel revenue versus forecasted revenue for the month]
 
     with t2:
         accum_rms = []
