@@ -58,7 +58,7 @@ def clean_num(val):
     except: return 0
 
 def save_to_db(df, data_type='Reservation'):
-    """데이터를 Snapshot_Date(예약일/취소일/OTB파일명날짜)별로 쪼개서 저장"""
+    """데이터를 Snapshot_Date(예약일/취소일)별로 쪼개서 저장"""
     if df is None or df.empty:
         st.warning("⚠️ 저장할 데이터가 없습니다.")
         return False
@@ -116,6 +116,7 @@ def load_db():
             snap = dd.get('snapshot_date', '')
             dtype = dd.get('data_type', 'Reservation')
             
+            # 구버전 호환
             if dtype == 'Reservation' and len(dd['data']) > 0 and 'OTB' in str(dd['data'][0].get('Segment', '')):
                 dtype = 'OTB'
 
@@ -148,6 +149,7 @@ def delete_otb():
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
+    """헤더 행과 키워드별 컬럼 인덱스 찾기"""
     header_idx = None
     col_map = {}
     max_matches = 0
@@ -171,6 +173,7 @@ def find_header_and_cols(df_raw, keywords):
     return header_idx, col_map
 
 def process_res_file(file):
+    """예약 리스트 처리"""
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=None, encoding='cp949')
@@ -278,7 +281,7 @@ def process_cancel_file(file):
         h_idx, col_map = find_header_and_cols(df_raw, keywords)
         
         if h_idx is None:
-            st.error("🚨 취소 파일 형식을 인식할 수 없습니다."); return pd.DataFrame()
+            st.error("🚨 취소 파일 헤더를 찾을 수 없습니다."); return pd.DataFrame()
 
         df_data = df_raw.iloc[h_idx+1:].copy()
         
@@ -333,7 +336,6 @@ def process_cancel_file(file):
 def process_otb(file):
     try:
         fname_date = None
-        # 파일명에서 8자리 숫자(YYYYMMDD) 추출
         match = re.search(r'(\d{8})', file.name)
         if match:
             d = match.group(1)
@@ -355,15 +357,12 @@ def process_otb(file):
             total_rev = int(raw_val.replace(',', '').split('.')[0])
         except: total_rev = 0
         
-        # 파일명에서 추출한 날짜를 Snapshot_Date로 사용
         snap = fname_date if fname_date else datetime.now().strftime('%Y-%m-%d')
 
         return pd.DataFrame([{
             'CheckIn': target_month_str,
             'Room_Revenue': total_rev, 'Total_Revenue': total_rev, 'RN': 0,
-            'Guest_Name': 'OTB', 'Segment': 'OTB', 
-            'Snapshot_Date': snap, 
-            'Status': 'Booked'
+            'Guest_Name': 'OTB', 'Segment': 'OTB', 'Snapshot_Date': snap, 'Status': 'Booked'
         }])
     except: return pd.DataFrame()
 
@@ -485,9 +484,9 @@ try:
         if st.button("🚨 전체 초기화"): d=delete_all(); st.warning(f"{d}건 삭제"); time.sleep(1); st.rerun()
         
         st.divider()
-        st.subheader("📌 예약/취소 조회 (기간)")
+        st.subheader("📌 예약/취소 조회 (기준 vs 비교)")
         
-        # [수정 1] 날짜 범위 선택 (오늘 제외)
+        # [수정 1] 기준 기간 (Target Range)
         yesterday = datetime.now().date() - timedelta(days=1)
         min_date = datetime.now().date() - timedelta(days=365)
         
@@ -500,7 +499,7 @@ try:
             except: pass
 
         dates_selected = st.date_input(
-            "기간 선택 (오늘 제외)",
+            "기준 기간 (Target)",
             value=default_val,
             min_value=min_date,
             max_value=yesterday,
@@ -511,87 +510,116 @@ try:
         if isinstance(dates_selected, tuple):
             if len(dates_selected) > 0: sel_res_start = dates_selected[0].strftime('%Y-%m-%d')
             if len(dates_selected) > 1: sel_res_end = dates_selected[1].strftime('%Y-%m-%d')
-            if sel_res_start and not sel_res_end: sel_res_end = sel_res_start 
+            if sel_res_start and not sel_res_end: sel_res_end = sel_res_start
+            
+        # [수정 2] 비교 기간 (Comparison Range)
+        comp_dates_selected = st.date_input(
+            "비교 기간 (Comparison) - 선택사항",
+            value=(),
+            min_value=min_date,
+            max_value=yesterday,
+            format="YYYY-MM-DD"
+        )
+        
+        comp_start, comp_end = None, None
+        if isinstance(comp_dates_selected, tuple):
+            if len(comp_dates_selected) > 0: comp_start = comp_dates_selected[0].strftime('%Y-%m-%d')
+            if len(comp_dates_selected) > 1: comp_end = comp_dates_selected[1].strftime('%Y-%m-%d')
+            if comp_start and not comp_end: comp_end = comp_start
         
         st.divider()
-        
-        # [수정 2] OTB 선택 상자 강제 표시 (데이터가 없어도 표시)
-        st.subheader("📈 OTB 조회 (기준일)")
-        if otb_dates:
-            sel_otb = st.selectbox("날짜 선택", otb_dates)
-        else:
-            st.info("데이터 없음 (파일 업로드 필요)")
-            sel_otb = None
+        sel_otb = st.selectbox("📈 OTB 조회", otb_dates) if otb_dates else None
         
         st.divider()
         st.write("※ 파일명 날짜 / 컬럼 자동 인식")
         f1 = st.file_uploader("예약 리스트", type=['xlsx','csv'])
         if f1 and st.button("예약 저장"):
-            if save_to_db(process_res_file(f1), 'Reservation'): 
-                st.success("✅ 예약 데이터 저장 완료!"); time.sleep(1); st.rerun()
+            if save_to_db(process_res_file(f1), 'Reservation'): st.rerun()
         f2 = st.file_uploader("취소 리스트", type=['xlsx','csv'])
         if f2 and st.button("취소 저장"):
-            if save_to_db(process_cancel_file(f2), 'Cancellation'): 
-                st.success("✅ 취소 데이터 저장 완료!"); time.sleep(1); st.rerun()
+            if save_to_db(process_cancel_file(f2), 'Cancellation'): st.rerun()
         f3 = st.file_uploader("OTB 파일", type=['xlsx','csv'], accept_multiple_files=True)
         if f3 and st.button("OTB 저장"):
             for f in f3: save_to_db(process_otb(f), 'OTB')
-            st.success("✅ OTB 데이터 저장 완료!"); time.sleep(1); st.rerun()
+            st.rerun()
 
-    # 데이터 로드 (기간 필터링)
+    # 데이터 로드 (기준 기간)
     if sel_res_start and sel_res_end and not df_all.empty:
-        s_str = sel_res_start
-        e_str = sel_res_end
-        
-        mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= s_str) & (df_all['Snapshot_Date'] <= e_str)
+        # 기준 기간 데이터
+        mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_res_start) & (df_all['Snapshot_Date'] <= sel_res_end)
         df_bk_raw = df_all[mask_bk].copy()
-        
         df_bk = df_bk_raw[df_bk_raw['Total_Revenue'] > 0]
         df_zero = df_bk_raw[df_bk_raw['Total_Revenue'] <= 0]
         
-        mask_cn = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= s_str) & (df_all['Snapshot_Date'] <= e_str)
+        mask_cn = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= sel_res_start) & (df_all['Snapshot_Date'] <= sel_res_end)
         df_cn = df_all[mask_cn].copy()
-        
-        if df_cn.empty and not df_bk_raw.empty:
-             df_cn = df_bk_raw[df_bk_raw['Status'] == 'RC']
-        
+        if df_cn.empty and not df_bk_raw.empty: df_cn = df_bk_raw[df_bk_raw['Status'] == 'RC']
         df_tot = pd.concat([df_bk, df_cn])
+        
+        # [수정 3] 비교 기간 데이터 로드 (존재할 경우)
+        df_bk_comp = pd.DataFrame()
+        df_cn_comp = pd.DataFrame()
+        if comp_start and comp_end:
+            mask_bk_comp = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= comp_start) & (df_all['Snapshot_Date'] <= comp_end)
+            df_bk_comp_raw = df_all[mask_bk_comp].copy()
+            df_bk_comp = df_bk_comp_raw[df_bk_comp_raw['Total_Revenue'] > 0]
+            
+            mask_cn_comp = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= comp_start) & (df_all['Snapshot_Date'] <= comp_end)
+            df_cn_comp = df_all[mask_cn_comp].copy()
+            if df_cn_comp.empty and not df_bk_comp_raw.empty: df_cn_comp = df_bk_comp_raw[df_bk_comp_raw['Status'] == 'RC']
+
     else:
         df_bk, df_zero, df_cn, df_tot = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-        s_str, e_str = "", ""
+        df_bk_comp, df_cn_comp = pd.DataFrame(), pd.DataFrame()
 
     if sel_otb and not df_all.empty:
         df_o = df_all[(df_all['Snapshot_Date']==sel_otb) & (df_all['Data_Type']=='OTB')].copy()
     else: df_o = pd.DataFrame()
 
+    # 탭
     tabs = st.tabs(["👑 GM 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"])
     
     with tabs[0]:
-        display_range = f"{s_str} ~ {e_str}" if s_str else "기간 미선택"
-        st.header(f"👑 GM 요약 ({display_range})")
+        disp = f"{sel_res_start}~{sel_res_end}" if sel_res_start else "기간 미선택"
+        st.header(f"👑 GM 요약 ({disp})")
+        
         if df_bk.empty and df_cn.empty: st.info("데이터 없음")
         else:
-            b_rn, b_rev, b_tot = df_bk['RN'].sum(), df_bk['Room_Revenue'].sum(), df_bk['Total_Revenue'].sum()
-            c_rn, c_rev, c_tot = df_cn['RN'].sum(), df_cn['Room_Revenue'].sum(), df_cn['Total_Revenue'].sum()
+            # 기준 기간 집계
+            b_rn = df_bk['RN'].sum()
+            b_rev = df_bk['Room_Revenue'].sum()
+            b_tot = df_bk['Total_Revenue'].sum()
             
-            b_los = b_rn/len(df_bk) if len(df_bk)>0 else 0
-            c_los = c_rn/len(df_cn) if len(df_cn)>0 else 0
+            c_rn = df_cn['RN'].sum()
+            c_rev = df_cn['Room_Revenue'].sum()
+            c_tot = df_cn['Total_Revenue'].sum()
+            
+            # 비교 기간 집계 (없으면 0)
+            b_rn_comp = df_bk_comp['RN'].sum() if not df_bk_comp.empty else 0
+            b_rev_comp = df_bk_comp['Room_Revenue'].sum() if not df_bk_comp.empty else 0
+            b_tot_comp = df_bk_comp['Total_Revenue'].sum() if not df_bk_comp.empty else 0
+            
+            c_rn_comp = df_cn_comp['RN'].sum() if not df_cn_comp.empty else 0
+            c_rev_comp = df_cn_comp['Room_Revenue'].sum() if not df_cn_comp.empty else 0
+            c_tot_comp = df_cn_comp['Total_Revenue'].sum() if not df_cn_comp.empty else 0
+            
             rc_in_bk = len(df_bk[df_bk['Status']=='RC'])
             
+            # [수정 4] 델타 계산 및 표시
             st.markdown("#### ✅ 예약 (Reservation List)")
             c = st.columns(6)
-            c[0].metric("RN", f"{b_rn:,.0f}")
-            c[1].metric("객실료", f"{b_rev:,.0f}")
-            c[2].metric("총매출", f"{b_tot:,.0f}")
+            c[0].metric("RN", f"{b_rn:,.0f}", delta=f"{b_rn - b_rn_comp:,.0f}" if comp_start else None)
+            c[1].metric("객실료", f"{b_rev:,.0f}", delta=f"{b_rev - b_rev_comp:,.0f}" if comp_start else None)
+            c[2].metric("총매출", f"{b_tot:,.0f}", delta=f"{b_tot - b_tot_comp:,.0f}" if comp_start else None)
             c[3].metric("ADR(Room)", f"{b_rev/b_rn if b_rn>0 else 0:,.0f}")
             c[4].metric("ADR(Total)", f"{b_tot/b_rn if b_rn>0 else 0:,.0f}")
             c[5].metric("건수", f"{len(df_bk):,.0f}", delta=f"이중 RC: {rc_in_bk}")
             
             st.markdown("#### ❌ 취소 (Cancellation List)")
             c = st.columns(6)
-            c[0].metric("RN", f"{c_rn:,.0f}")
-            c[1].metric("객실료", f"{c_rev:,.0f}")
-            c[2].metric("총매출", f"{c_tot:,.0f}")
+            c[0].metric("RN", f"{c_rn:,.0f}", delta=f"{c_rn - c_rn_comp:,.0f}" if comp_start else None, delta_color="inverse")
+            c[1].metric("객실료", f"{c_rev:,.0f}", delta=f"{c_rev - c_rev_comp:,.0f}" if comp_start else None, delta_color="inverse")
+            c[2].metric("총매출", f"{c_tot:,.0f}", delta=f"{c_tot - c_tot_comp:,.0f}" if comp_start else None, delta_color="inverse")
             c[3].metric("ADR(Room)", f"{c_rev/c_rn if c_rn>0 else 0:,.0f}")
             c[4].metric("ADR(Total)", f"{c_tot/c_rn if c_rn>0 else 0:,.0f}")
             c[5].metric("건수", f"{len(df_cn):,.0f}")
