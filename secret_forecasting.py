@@ -4,8 +4,8 @@ import numpy as np
 from datetime import datetime, timedelta
 
 def run_forecasting():
-    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v16.5")
-    st.caption("에러 수정 완료: 메인 탭 실적 연동 + 3개년 비교 + 예약 곡선 + ADR 민감도")
+    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v16.6")
+    st.caption("핀셋 정밀 수선: 실적 콘크리트 보존 로직 + 무삭제 통합 시각화")
 
     # 1. 월 선택 및 날짜 기반 동적 설정
     selected_month = st.sidebar.selectbox("🎯 분석 대상 월", range(1, 13), index=datetime.now().month-1)
@@ -13,6 +13,7 @@ def run_forecasting():
     today = datetime.now()
     target_month_first_day = datetime(today.year, selected_month, 1)
     
+    # [잔여 판매일수 계산 로직]
     if selected_month > today.month:
         next_month = datetime(today.year + (1 if selected_month == 12 else 0), (selected_month % 12) + 1, 1)
         last_day_of_target = (next_month - timedelta(days=1)).day
@@ -35,7 +36,7 @@ def run_forecasting():
         st.warning(f"메인 리포트에서 {selected_month}월 실적 데이터를 먼저 로드해 주세요.")
         return
 
-    # 실시간 실적(Actual OTB) 추출
+    # [실시간 확정 실적] 바닥에 깔리는 절대 수치
     current_actual_rms = float(target_sob.get('FIT_RMS', 0) + target_sob.get('GRP_RMS', 0))
     current_actual_rev = float(target_sob.get('FIT_REV', 0) + target_sob.get('GRP_REV', 0))
     
@@ -47,7 +48,6 @@ def run_forecasting():
     st.write(f"### 📈 {selected_month}월 목표 및 실적 대조")
     cur_budget_man = int(BUDGET_DATA.get(selected_month, 500000000) / 10000)
     cur_ly_man = int(LY_DATA.get(selected_month, 450000000) / 10000)
-    cur_py_man = int(PY_DATA.get(selected_month, 400000000) / 10000)
 
     with st.container(border=True):
         col_tgt, col_ly, col_py = st.columns(3)
@@ -57,6 +57,7 @@ def run_forecasting():
         with col_ly:
             ly_rev = st.number_input("전년 매출 (만원)", value=cur_ly_man, key=f"ly_rev_{selected_month}")
         with col_py:
+            cur_py_man = int(PY_DATA.get(selected_month, 400000000) / 10000)
             py_rev = st.number_input("전전년 매출 (만원)", value=cur_py_man, key=f"py_rev_{selected_month}")
 
     st.write("---")
@@ -75,19 +76,29 @@ def run_forecasting():
             current_adr_actual = int(current_actual_rev / max(1, current_actual_rms))
             target_adr = st.number_input("미래 예상 ADR", 100000, 1000000, current_adr_actual if current_adr_actual > 100000 else 240000, step=5000, key=f"adr_{selected_month}")
 
-    # 5. [정밀 엔진] 수식 (실적 보존형)
+    # 5. [수정된 엔진] 실적 보존 + 추가 픽업 합산 방식
     lt_factor = (1.0 + (1.0 / np.log1p(rem_days)))
-    future_pickup_rms = actual_pace * auto_dow_index * accel * lt_factor * rem_days
     
-    final_rms = min(net_total_cap, (current_actual_rms * 0.97) + future_pickup_rms)
-    additional_rev = (final_rms - current_actual_rms) * target_adr
-    final_rev_total = current_actual_rev + additional_rev
+    # 미래 추가로 팔 수 있는 객실 수만 계산 (Washout은 미래 픽업에서만 고려하거나 생략)
+    expected_pickup_rms = actual_pace * auto_dow_index * accel * lt_factor * rem_days
+    
+    # 최종 예상 객실 = 현재 확정 객실 + 미래 예상 픽업 (가용량 제한)
+    final_rms = min(net_total_cap, current_actual_rms + expected_pickup_rms)
+    
+    # 마이너스 픽업 방지 로직: 최종 객실은 최소한 현재 실적보다는 커야 함
+    final_rms = max(final_rms, current_actual_rms)
+    
+    # 추가 매출 = (최종 예상 객실 - 현재 확정 객실) * 목표 ADR
+    # 만약 현재 확정 객실이 이미 가용량을 넘었다면 추가 매출은 0
+    additional_pickup_rev = max(0, (final_rms - current_actual_rms)) * target_adr
+    
+    final_rev_total = current_actual_rev + additional_pickup_rev
     final_rev_man = final_rev_total / 10000
 
     occ_pct = (final_rms / net_total_cap) * 100
     revpar = final_rev_total / net_total_cap
 
-    # 6. 시각화 대시보드 (3개 탭 - 무삭제)
+    # 6. 시각화 대시보드 (무삭제)
     st.divider()
     tab1, tab2, tab3 = st.tabs(["📊 성과 비교 (3개년)", "🔮 예약 곡선 (누적)", "💰 ADR 민감도 분석"])
     
@@ -101,8 +112,8 @@ def run_forecasting():
 
     with tab2:
         st.subheader("🔮 예약 누적 시뮬레이션")
-        daily_pickup = future_pickup_rms / max(1, rem_days)
-        curve_data = [{"Day": i, "예상 누적 Rms": min(net_total_cap, (current_actual_rms*0.97) + (daily_pickup * i))} for i in range(rem_days + 1)]
+        daily_pickup = expected_pickup_rms / max(1, rem_days)
+        curve_data = [{"Day": i, "예상 누적 Rms": min(net_total_cap, current_actual_rms + (daily_pickup * i))} for i in range(rem_days + 1)]
         st.line_chart(pd.DataFrame(curve_data).set_index("Day"))
 
     with tab3:
@@ -113,8 +124,8 @@ def run_forecasting():
             test_adr = target_adr * rate
             p_diff = rate - 1
             d_impact = max(0, 1 - (p_diff * elasticity))
-            t_rms = min(net_total_cap, (current_actual_rms * 0.97) + (future_pickup_rms * d_impact))
-            test_rev_val = (current_actual_rev + (t_rms - current_actual_rms) * test_adr) / 10000
+            t_rms = min(net_total_cap, current_actual_rms + (expected_pickup_rms * d_impact))
+            test_rev_val = (current_actual_rev + (max(0, t_rms - current_actual_rms)) * test_adr) / 10000
             adr_scenarios.append({"ADR": f"{int(rate*100)}%", "REV": int(test_rev_val), "RMS": int(t_rms)})
         
         sc_df = pd.DataFrame(adr_scenarios).set_index("ADR")
@@ -122,12 +133,12 @@ def run_forecasting():
         with cs1: st.line_chart(sc_df["RMS"])
         with cs2: st.line_chart(sc_df["REV"])
 
-    # 7. KPI 대시보드
+    # 7. KPI 대시보드 (정상화 완료)
     st.divider()
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("최종 예상 매출", f"{int(final_rev_man):,}만", f"{final_rev_man - budget_rev:+,.0f}")
     k2.metric("현재 확정 실적", f"₩{int(current_actual_rev/10000):,}만")
-    k3.metric("추가 예상(Pickup)", f"+₩{int(additional_rev/10000):,}만")
+    k3.metric("추가 예상(Pickup)", f"+₩{int(additional_pickup_rev/10000):,}만") # 이제 마이너스 안 나옵니다!
     k4.metric("최종 예상 OCC", f"{occ_pct:.1f}%")
 
     # 8. 운영 및 수익성 지표 (무삭제)
