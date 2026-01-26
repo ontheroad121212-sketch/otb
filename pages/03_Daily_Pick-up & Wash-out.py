@@ -46,10 +46,11 @@ db = firestore.client()
 COLLECTION_NAME = "revenue_integrity_history"
 
 # ==============================================================================
-# 3. 데이터 유틸리티
+# 3. 데이터 유틸리티 (핵심 수정: 데이터 세탁 기능 추가)
 # ==============================================================================
 
 def clean_num(val):
+    """개별 값 숫자 변환"""
     try:
         if pd.isna(val) or str(val).strip() == '': return 0
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').strip()
@@ -70,24 +71,46 @@ def save_to_db(df, data_type='Reservation'):
             sub = df[df['Snapshot_Date'] == d].copy()
             if sub.empty: continue
             
-            # 날짜 객체 문자열 변환
+            # 1. 날짜 객체 문자열 변환
             for c in sub.select_dtypes(include=['datetime64[ns]']).columns:
                 sub[c] = sub[c].astype(str)
-                
+            
+            # 2. NaN 값을 None으로 변환 (Firestore 호환)
+            sub = sub.where(pd.notnull(sub), None)
+            
             recs = sub.to_dict(orient='records')
+            
+            # 3. [핵심] Numpy 타입 제거 (세탁 과정)
+            sanitized_recs = []
+            for r in recs:
+                new_r = {}
+                for k, v in r.items():
+                    # 키(Key) 이름 정제 (점이나 공백 제거)
+                    clean_k = str(k).replace('.', '_').strip()
+                    
+                    # 값(Value) 타입 정제
+                    if isinstance(v, (np.integer, np.int64, np.int32)):
+                        new_r[clean_k] = int(v)
+                    elif isinstance(v, (np.floating, np.float64, np.float32)):
+                        new_r[clean_k] = float(v)
+                    elif isinstance(v, (np.bool_, bool)):
+                        new_r[clean_k] = bool(v)
+                    else:
+                        new_r[clean_k] = v
+                sanitized_recs.append(new_r)
             
             # 문서 ID: 날짜_타입_타임스탬프
             did = f"{d}_{data_type}_{int(time.time()*1000)}"
             
             db.collection(COLLECTION_NAME).document(did).set({
-                'data': recs, 
+                'data': sanitized_recs, 
                 'uploaded_at': datetime.now(), 
                 'snapshot_date': d, 
                 'data_type': data_type
             })
         return True
     except Exception as e: 
-        st.error(f"저장 실패: {e}")
+        st.error(f"❌ DB 저장 실패: {e}") # 에러 메시지를 화면에 출력
         return False
 
 @st.cache_data(ttl=0)
@@ -127,7 +150,7 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (핀셋 수정: 예약일/취소일 기준 복구)
+# 4. 파일 처리 로직
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
@@ -216,7 +239,7 @@ def process_res_file(file):
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # [복구] 예약일을 스냅샷 날짜로 사용
+        # [예약일 기준]
         df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
@@ -300,7 +323,7 @@ def process_cancel_file(file):
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # [복구] 취소일을 스냅샷 날짜로 사용
+        # [취소일 기준]
         df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
