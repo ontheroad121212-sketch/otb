@@ -67,7 +67,7 @@ def save_to_db(df, data_type='Reservation'):
             sub = df[df['Snapshot_Date'] == d].copy()
             if sub.empty: continue
             
-            # 날짜 객체 문자열 변환
+            # 날짜 객체 문자열 변환 (JSON 직렬화 문제 방지)
             for c in sub.select_dtypes(include=['datetime64[ns]']).columns:
                 sub[c] = sub[c].astype(str)
                 
@@ -120,58 +120,68 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (지능형 헤더 찾기 및 매핑 적용)
+# 4. 파일 처리 로직 (핀셋 수정: 헤더 찾기 강화 및 컬럼 안전장치)
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
-    """헤더 행과 키워드별 컬럼 인덱스를 찾는 헬퍼 함수"""
+    """
+    [수정] 헤더 행과 키워드별 컬럼 인덱스를 찾는 헬퍼 함수
+    가장 많은 키워드가 매칭되는 행을 헤더로 선정하는 방식으로 개선
+    """
     header_idx = None
     col_map = {}
+    max_matches = 0
     
-    # 상위 10줄에서 헤더 탐색
-    for r in range(min(15, len(df_raw))):
+    # 상위 20줄에서 헤더 탐색
+    for r in range(min(20, len(df_raw))):
         row_vals = df_raw.iloc[r].astype(str).values
-        # 필수 키워드가 포함된 행을 헤더로 간주 (예: 예약번호, 고객명)
-        if any('번호' in v or 'No' in v for v in row_vals) and any('고객' in v or 'Name' in v for v in row_vals):
+        match_count = 0
+        current_map = {}
+        
+        # 키워드 매칭 개수 확인
+        for c_idx, val in enumerate(row_vals):
+            for k, patterns in keywords.items():
+                if any(p in val for p in patterns):
+                    current_map[k] = c_idx
+                    match_count += 1
+        
+        # 가장 많이 매칭된 행을 헤더로 선택 (최소 3개 이상 매칭 시)
+        if match_count > max_matches and match_count >= 3:
+            max_matches = match_count
             header_idx = r
-            # 컬럼 매핑
-            for c_idx, val in enumerate(row_vals):
-                for k, patterns in keywords.items():
-                    if any(p in val for p in patterns):
-                        col_map[k] = c_idx
-            break
+            col_map = current_map
             
     return header_idx, col_map
 
 def process_res_file(file):
-    """예약 리스트 처리 (지능형 매핑)"""
+    """예약 리스트 처리 (안전장치 추가)"""
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=None, encoding='cp949')
             except: df_raw = pd.read_csv(file, header=None)
         else: df_raw = pd.read_excel(file, header=None)
 
-        # 1. 헤더 찾기
+        # 1. 헤더 찾기 키워드 정의
         keywords = {
             'Status': ['상태', 'Stat'],
-            'Res_No': ['번호', 'No'],
-            'Guest_Name': ['고객명', 'Name'],
-            'CheckIn': ['도착', 'Arr', 'In'],
-            'CheckOut': ['출발', 'Dep', 'Out'],
+            'Res_No': ['번호', 'No', 'Res'],
+            'Guest_Name': ['고객명', 'Name', 'Guest'],
+            'CheckIn': ['도착', 'Arr', 'In', 'Check In'],
+            'CheckOut': ['출발', 'Dep', 'Out', 'Check Out'],
             'Nights': ['박수', 'Ngt', 'Night'],
-            'Room_Type': ['객실유형', 'Type'],
-            'Rooms': ['객실수', 'Rm', 'Room'], # '객실료'와 혼동 주의
+            'Room_Type': ['객실유형', 'Type', 'Room Type'],
+            'Rooms': ['객실수', 'Rm', 'Room'],
             'Room_Revenue': ['객실료', '객실매출', 'Revenue', 'Room Rev'],
             'Total_Revenue': ['총매출', '합계', 'Total Rev'],
             'Account': ['거래처', 'Agent', 'Source'],
-            'Segment': ['세그먼트', 'Market'],
-            'Nat_Orig': ['국적', 'Nat'],
+            'Segment': ['세그먼트', 'Market', 'Seg'],
+            'Nat_Orig': ['국적', 'Nat', 'Nation'],
             'Booking_Date': ['예약일', 'Book', 'Create']
         }
         
         h_idx, col_map = find_header_and_cols(df_raw, keywords)
         
-        # 헤더를 못 찾으면 기존 하드코딩 방식 Fallback (30열 이상 체크)
+        # 헤더를 못 찾으면 Fallback
         if h_idx is None:
             if len(df_raw.columns) > 30:
                 h_idx = 2
@@ -182,17 +192,22 @@ def process_res_file(file):
                     'Nat_Orig': 23, 'Booking_Date': 30
                 }
             else:
-                st.error("🚨 예약 파일 형식을 인식할 수 없습니다."); return pd.DataFrame()
+                st.error("🚨 예약 파일 형식을 인식할 수 없습니다. (헤더 감지 실패)"); return pd.DataFrame()
 
         # 데이터 추출
         df_data = df_raw.iloc[h_idx+1:].copy()
-        df = pd.DataFrame()
+        
+        # [수정] 빈 데이터프레임을 만들 때 미리 컬럼을 정의하여 KeyError 방지
+        df = pd.DataFrame(columns=keywords.keys())
         
         # 매핑된 컬럼으로 데이터 채우기
         for col, idx in col_map.items():
             if idx < len(df_data.columns):
                 df[col] = df_data.iloc[:, idx]
-            else:
+        
+        # [수정] 매핑되지 않은 컬럼은 기본값으로 채움
+        for col in keywords.keys():
+            if col not in df.columns or df[col].isnull().all():
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
         # 2. 데이터 정제
@@ -205,9 +220,8 @@ def process_res_file(file):
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        # 3. [중요] 합계(Total) 행 및 이상 데이터 제거
-        # 예약번호가 없거나 'Total'인 행 제거, RN이 비정상적으로 큰 행 제거
-        df = df[pd.to_numeric(df['Rooms'], errors='coerce').fillna(0) < 1000] # 객실수가 1000개 이상이면 합계행으로 간주
+        # 3. 합계(Total) 행 및 이상 데이터 제거
+        df = df[pd.to_numeric(df['Rooms'], errors='coerce').fillna(0) < 1000] # 합계행 제거
         df = df[df['CheckIn'].notna()] # 날짜 없는 행 제거
 
         # RN & LeadTime 계산
@@ -235,7 +249,7 @@ def process_res_file(file):
             return 'OTH'
         df['Nat_Group'] = df['Nat_Orig'].apply(classify_nat)
         
-        # 조식 여부 (Service Code가 없으면 전체 텍스트에서 검색)
+        # 조식 여부
         raw_str = df_data.astype(str).agg(''.join, axis=1).str.upper()
         df['Breakfast'] = np.where(raw_str.str.contains('BF'), 'Included', 'Not Included')
 
@@ -243,26 +257,25 @@ def process_res_file(file):
     except Exception as e: st.error(f"예약 오류: {e}"); return pd.DataFrame()
 
 def process_cancel_file(file):
-    """취소 리스트 처리 (지능형 매핑)"""
+    """취소 리스트 처리 (안전장치 추가)"""
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=None, encoding='cp949')
             except: df_raw = pd.read_csv(file, header=None)
         else: df_raw = pd.read_excel(file, header=None)
 
-        # 1. 헤더 찾기
         keywords = {
             'Status': ['상태', 'Stat'],
             'Res_No': ['번호', 'No'],
             'Guest_Name': ['고객명', 'Name'],
             'CheckIn': ['도착', 'Arr', 'In'],
             'CheckOut': ['출발', 'Dep', 'Out'],
-            'Nights': ['박수', 'Ngt', 'Night'],
+            'Nights': ['박수', 'Ngt'],
             'Room_Type': ['객실유형', 'Type'],
-            'Rooms': ['객실수', 'Rm', 'Room'],
-            'Room_Revenue': ['객실료', '객실매출', 'Revenue', 'Room Rev'],
-            'Total_Revenue': ['총매출', '합계', 'Total Rev'],
-            'Account': ['거래처', 'Agent', 'Source'],
+            'Rooms': ['객실수', 'Rm'],
+            'Room_Revenue': ['객실료', '객실매출', 'Revenue'],
+            'Total_Revenue': ['총매출', '합계'],
+            'Account': ['거래처', 'Agent'],
             'Segment': ['세그먼트', 'Market'],
             'Nat_Orig': ['국적', 'Nat'],
             'Booking_Date': ['예약일', 'Book'],
@@ -272,7 +285,6 @@ def process_cancel_file(file):
         h_idx, col_map = find_header_and_cols(df_raw, keywords)
         
         if h_idx is None:
-            # Fallback
             if len(df_raw.columns) > 27:
                 h_idx = 2
                 col_map = {
@@ -285,12 +297,16 @@ def process_cancel_file(file):
                 st.error("🚨 취소 파일 형식을 인식할 수 없습니다."); return pd.DataFrame()
 
         df_data = df_raw.iloc[h_idx+1:].copy()
-        df = pd.DataFrame()
+        
+        # [수정] 컬럼 강제 초기화
+        df = pd.DataFrame(columns=keywords.keys())
         
         for col, idx in col_map.items():
             if idx < len(df_data.columns):
                 df[col] = df_data.iloc[:, idx]
-            else:
+        
+        for col in keywords.keys():
+            if col not in df.columns or df[col].isnull().all():
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
         # 2. 정제
@@ -304,7 +320,7 @@ def process_cancel_file(file):
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        # 3. [중요] 합계 행 제거
+        # 3. 합계 행 제거
         df = df[pd.to_numeric(df['Rooms'], errors='coerce').fillna(0) < 1000]
         df = df[df['CheckIn'].notna()]
 
@@ -314,7 +330,6 @@ def process_cancel_file(file):
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # Snapshot (취소일 기준)
         df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
@@ -376,7 +391,6 @@ def add_total_with_adr(df, group_col_name="구분"):
     row = {c: "" for c in df.columns}; row.update(num.sum().to_dict())
     row[group_col_name if group_col_name in df.columns else df.columns[0]] = "TOTAL"
     
-    # ADR 재계산
     if row.get('RN', 0) > 0:
         if 'Room_Revenue' in row: row['ADR_Room'] = row['Room_Revenue'] / row['RN']
         if 'Total_Revenue' in row: row['ADR_Total'] = row['Total_Revenue'] / row['RN']
@@ -534,6 +548,7 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
+    # 데이터 로드 (기간 필터링 적용)
     if sel_res_start and sel_res_end and not df_all.empty:
         s_str = sel_res_start.strftime('%Y-%m-%d')
         e_str = sel_res_end.strftime('%Y-%m-%d')
@@ -559,6 +574,7 @@ try:
         df_o = df_all[(df_all['Snapshot_Date']==sel_otb) & (df_all['Data_Type']=='OTB')].copy()
     else: df_o = pd.DataFrame()
 
+    # 탭
     tabs = st.tabs(["👑 GM 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"])
     
     with tabs[0]:
