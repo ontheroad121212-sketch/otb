@@ -398,8 +398,7 @@ try:
     # 날짜 분리
     res_dates_all = sorted(df_all[df_all['Data_Type']=='Reservation']['Snapshot_Date'].unique(), reverse=True)
     today = datetime.now().strftime('%Y-%m-%d')
-    res_dates = [d for d in res_dates_all if d != today] # 오늘 제외
-    
+    # OTB 날짜
     otb_dates = sorted(df_all[df_all['Data_Type']=='OTB']['Snapshot_Date'].unique(), reverse=True)
 
     with st.sidebar:
@@ -408,7 +407,36 @@ try:
         if st.button("🚨 전체 초기화"): d=delete_all(); st.warning(f"{d}건 삭제"); time.sleep(1); st.rerun()
         
         st.divider()
-        sel_res = st.selectbox("📌 예약/취소 조회", res_dates) if res_dates else None
+        # [수정] 날짜 선택을 달력 범위 선택(date_input)으로 변경
+        st.subheader("📌 예약/취소 조회 (기간 선택)")
+        
+        # 기본 범위 설정을 위한 날짜 계산
+        min_date = datetime.now() - timedelta(days=365)
+        max_date = datetime.now() + timedelta(days=365)
+        
+        if res_dates_all:
+            try:
+                min_date = datetime.strptime(res_dates_all[-1], "%Y-%m-%d")
+                max_date = datetime.strptime(res_dates_all[0], "%Y-%m-%d")
+            except: pass
+
+        date_range = st.date_input(
+            "조회 기간",
+            value=(max_date, max_date), # 기본값: 가장 최근 데이터 날짜
+            min_value=min_date,
+            max_value=max_date,
+            format="YYYY-MM-DD"
+        )
+        
+        sel_res_start, sel_res_end = None, None
+        if isinstance(date_range, tuple):
+            if len(date_range) == 2:
+                sel_res_start, sel_res_end = date_range
+            elif len(date_range) == 1:
+                sel_res_start = sel_res_end = date_range[0]
+        
+        st.divider()
+        # OTB는 기존 selectbox 유지
         sel_otb = st.selectbox("📈 OTB 조회", otb_dates) if otb_dates else None
         
         st.divider()
@@ -426,26 +454,32 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
-    # 데이터 로드
-    if sel_res and not df_all.empty:
-        # 예약리스트 출처 (Reservation 타입)
-        df_bk_raw = df_all[(df_all['Snapshot_Date']==sel_res) & (df_all['Data_Type']=='Reservation')].copy()
+    # 데이터 로드 (기간 필터링 적용)
+    if sel_res_start and sel_res_end and not df_all.empty:
+        s_str = sel_res_start.strftime('%Y-%m-%d')
+        e_str = sel_res_end.strftime('%Y-%m-%d')
+        
+        # 예약리스트 출처 (Reservation 타입) & 기간 필터
+        mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= s_str) & (df_all['Snapshot_Date'] <= e_str)
+        df_bk_raw = df_all[mask_bk].copy()
         
         # 예약: Total_Revenue > 0 (상태 무관, 예약리스트에 있으면 예약)
         df_bk = df_bk_raw[df_bk_raw['Total_Revenue'] > 0]
         # 0원 예약
         df_zero = df_bk_raw[df_bk_raw['Total_Revenue'] <= 0]
         
-        # 취소 데이터 (Cancellation 타입)
-        df_cn = df_all[(df_all['Snapshot_Date']==sel_res) & (df_all['Data_Type']=='Cancellation')].copy()
+        # 취소 데이터 (Cancellation 타입) & 기간 필터
+        mask_cn = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= s_str) & (df_all['Snapshot_Date'] <= e_str)
+        df_cn = df_all[mask_cn].copy()
         
-        # Fallback: Cancellation 타입이 없으면(구버전), Reservation 내의 RC를 취소로
+        # Fallback: Cancellation 타입이 없으면(구버전), Reservation 내의 RC를 취소로 (이 경우도 기간 내 필터)
         if df_cn.empty and not df_bk_raw.empty:
              df_cn = df_bk_raw[df_bk_raw['Status'] == 'RC']
         
         df_tot = pd.concat([df_bk, df_cn])
     else:
         df_bk, df_zero, df_cn, df_tot = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        s_str, e_str = "", ""
 
     if sel_otb and not df_all.empty:
         df_o = df_all[(df_all['Snapshot_Date']==sel_otb) & (df_all['Data_Type']=='OTB')].copy()
@@ -455,7 +489,7 @@ try:
     tabs = st.tabs(["👑 GM 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"])
     
     with tabs[0]:
-        st.header(f"👑 GM 요약 ({sel_res})")
+        st.header(f"👑 GM 요약 ({s_str} ~ {e_str})")
         if df_bk.empty and df_cn.empty: st.info("데이터 없음")
         else:
             b_rn, b_rev, b_tot = df_bk['RN'].sum(), df_bk['Room_Revenue'].sum(), df_bk['Total_Revenue'].sum()
