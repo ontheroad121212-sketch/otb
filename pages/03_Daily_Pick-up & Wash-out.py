@@ -11,7 +11,7 @@ import time
 import textwrap
 
 # ==============================================================================
-# 1. 페이지 기본 설정 및 CSS
+# 1. 기본 설정 및 CSS
 # ==============================================================================
 st.set_page_config(page_title="ARI Final Integrity", layout="wide", initial_sidebar_state="expanded")
 
@@ -50,7 +50,6 @@ COLLECTION_NAME = "revenue_integrity_history"
 # ==============================================================================
 
 def clean_num(val):
-    """개별 값 숫자 변환 (공백 제거 포함)"""
     try:
         if pd.isna(val) or str(val).strip() == '': return 0
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').strip()
@@ -58,9 +57,9 @@ def clean_num(val):
     except: return 0
 
 def save_to_db(df, data_type='Reservation'):
-    """데이터를 날짜별로 쪼개서 저장"""
+    """데이터를 Snapshot_Date(예약일/취소일)별로 쪼개서 저장"""
     if df is None or df.empty:
-        st.warning("⚠️ 저장할 데이터가 없습니다. (파일 처리 결과를 확인하세요)")
+        st.warning("⚠️ 저장할 데이터가 없습니다.")
         return False
     try:
         if 'Snapshot_Date' not in df.columns: 
@@ -77,7 +76,7 @@ def save_to_db(df, data_type='Reservation'):
                 
             recs = sub.to_dict(orient='records')
             
-            # 문서 ID 생성
+            # 문서 ID: 날짜_타입_타임스탬프
             did = f"{d}_{data_type}_{int(time.time()*1000)}"
             
             db.collection(COLLECTION_NAME).document(did).set({
@@ -100,7 +99,6 @@ def load_db():
             snap = dd.get('snapshot_date', '')
             dtype = dd.get('data_type', 'Reservation')
             
-            # 구버전 호환
             if dtype == 'Reservation' and len(dd['data']) > 0 and 'OTB' in str(dd['data'][0].get('Segment', '')):
                 dtype = 'OTB'
 
@@ -129,7 +127,7 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (핀셋 수정: 데이터 추출 방식 개선)
+# 4. 파일 처리 로직 (핀셋 수정: 예약일/취소일 기준 복구)
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
@@ -157,7 +155,7 @@ def find_header_and_cols(df_raw, keywords):
     return header_idx, col_map
 
 def process_res_file(file):
-    """예약 리스트 처리 (데이터프레임 생성 방식 수정)"""
+    """예약 리스트 처리 (예약일 기준 Snapshot)"""
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=None, encoding='cp949')
@@ -168,52 +166,38 @@ def process_res_file(file):
             'Status': ['상태', 'Stat'],
             'Res_No': ['번호', 'No', 'Res'],
             'Guest_Name': ['고객명', 'Name', 'Guest'],
-            'CheckIn': ['도착', 'Arr', 'In'],
-            'CheckOut': ['출발', 'Dep', 'Out'],
+            'CheckIn': ['도착', 'Arr', 'In', 'Check In'],
+            'CheckOut': ['출발', 'Dep', 'Out', 'Check Out'],
             'Nights': ['박수', 'Ngt', 'Night'],
-            'Room_Type': ['객실유형', 'Type'],
+            'Room_Type': ['객실유형', 'Type', 'Room Type'],
             'Rooms': ['객실수', 'Rm', 'Room'],
             'Room_Revenue': ['객실료', '객실매출', 'Revenue', 'Room Rev'],
             'Total_Revenue': ['총매출', '합계', 'Total Rev'],
             'Account': ['거래처', 'Agent', 'Source'],
-            'Segment': ['세그먼트', 'Market'],
-            'Nat_Orig': ['국적', 'Nat'],
+            'Segment': ['세그먼트', 'Market', 'Seg'],
+            'Nat_Orig': ['국적', 'Nat', 'Nation'],
             'Booking_Date': ['예약일', 'Book', 'Create']
         }
         
         h_idx, col_map = find_header_and_cols(df_raw, keywords)
         
         if h_idx is None:
-            # Fallback
-            if len(df_raw.columns) > 30:
-                h_idx = 2
-                col_map = {
-                    'Status': 1, 'Res_No': 2, 'Guest_Name': 5, 'CheckIn': 6, 'CheckOut': 7,
-                    'Nights': 8, 'Room_Type': 9, 'Service_Code': 10, 'Rooms': 11,
-                    'Room_Revenue': 13, 'Total_Revenue': 15, 'Account': 16, 'Segment': 17,
-                    'Nat_Orig': 23, 'Booking_Date': 30
-                }
-            else:
-                st.error("🚨 예약 파일 형식을 인식할 수 없습니다."); return pd.DataFrame()
+            st.error("🚨 예약 파일 형식을 인식할 수 없습니다."); return pd.DataFrame()
 
         df_data = df_raw.iloc[h_idx+1:].copy()
         
-        # [핵심 수정] 딕셔너리로 데이터를 먼저 모은 후 DataFrame 생성 (인덱스 문제 해결)
         data_dict = {}
         for col, idx in col_map.items():
             if idx < len(df_data.columns):
-                # .values를 사용하여 인덱스 무시하고 값만 가져옴
                 data_dict[col] = df_data.iloc[:, idx].values
         
-        # DataFrame 생성
         df = pd.DataFrame(data_dict)
         
-        # 매핑되지 않은 컬럼 빈 값으로 채우기
         for col in keywords.keys():
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        # 데이터 정제
+        # 정제
         df['CheckIn'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['CheckOut'] = pd.to_datetime(df['CheckOut'], errors='coerce')
         df['Booking_Date'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
@@ -223,7 +207,6 @@ def process_res_file(file):
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        # 이상 데이터 필터링
         df = df[pd.to_numeric(df['Rooms'], errors='coerce').fillna(0) < 1000]
         df = df[df['CheckIn'].notna()]
 
@@ -233,6 +216,7 @@ def process_res_file(file):
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
+        # [복구] 예약일을 스냅샷 날짜로 사용
         df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
@@ -254,7 +238,7 @@ def process_res_file(file):
     except Exception as e: st.error(f"예약 오류 상세: {e}"); return pd.DataFrame()
 
 def process_cancel_file(file):
-    """취소 리스트 처리 (데이터프레임 생성 방식 수정)"""
+    """취소 리스트 처리 (취소일 기준 Snapshot)"""
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=None, encoding='cp949')
@@ -282,20 +266,10 @@ def process_cancel_file(file):
         h_idx, col_map = find_header_and_cols(df_raw, keywords)
         
         if h_idx is None:
-            if len(df_raw.columns) > 27:
-                h_idx = 2
-                col_map = {
-                    'Status': 1, 'Res_No': 2, 'Guest_Name': 5, 'CheckIn': 6, 'CheckOut': 7,
-                    'Nights': 8, 'Room_Type': 9, 'Service_Code': 10, 'Rooms': 11,
-                    'Room_Revenue': 13, 'Total_Revenue': 15, 'Account': 16, 'Segment': 17,
-                    'Nat_Orig': 23, 'Booking_Date': 26, 'Cancel_Date': 27
-                }
-            else:
-                st.error("🚨 취소 파일 형식을 인식할 수 없습니다."); return pd.DataFrame()
+            st.error("🚨 취소 파일 형식을 인식할 수 없습니다."); return pd.DataFrame()
 
         df_data = df_raw.iloc[h_idx+1:].copy()
         
-        # [핵심 수정] 딕셔너리로 먼저 모으기
         data_dict = {}
         for col, idx in col_map.items():
             if idx < len(df_data.columns):
@@ -307,7 +281,6 @@ def process_cancel_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        # 정제
         df['CheckIn'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['CheckOut'] = pd.to_datetime(df['CheckOut'], errors='coerce')
         df['Booking_Date'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
@@ -327,6 +300,7 @@ def process_cancel_file(file):
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
+        # [복구] 취소일을 스냅샷 날짜로 사용
         df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
@@ -400,7 +374,6 @@ def show_styled(df):
     st.dataframe(df.style.format({c: "{:,.0f}" for c in cols}).apply(lambda r: ['background-color: #fff9c4; font-weight: bold; border-top: 2px solid black']*len(r) if str(r[0])=="TOTAL" else ['']*len(r), axis=1), hide_index=True, use_container_width=True)
 
 def group_and_show(df, group_col):
-    """그룹핑 + ADR 계산 + 차트/표 출력"""
     if df.empty: return pd.DataFrame()
     agg = df.groupby(group_col).agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
     agg['ADR_Room'] = np.where(agg['RN']>0, agg['Room_Revenue']/agg['RN'], 0)
@@ -409,9 +382,7 @@ def group_and_show(df, group_col):
     return agg
 
 def render_tab(df, k):
-    if df.empty:
-        st.info("데이터 없음")
-        return
+    if df.empty: st.info("데이터 없음"); return
     
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs(["📊 세그먼트", "📅 Pacing", "🏢 거래처", "⏳ 리드타임", "🛏️ 객실타입", "🗓️ 요일", "🌐 국적", "🍳 조식"])
     
@@ -459,23 +430,19 @@ def render_tab(df, k):
         if not l.empty:
             st.plotly_chart(px.bar(l, x='LT_G', y='RN', title="리드타임별 RN 실적"), use_container_width=True, key=f"{k}_lt")
     
-    with t5:
-        group_and_show(df, 'Room_Type')
-        
+    with t5: group_and_show(df, 'Room_Type')
     with t6:
         w = group_and_show(df, 'Day_Type')
         if not w.empty:
             c1, c2 = st.columns(2)
             c1.plotly_chart(px.bar(w, x='Day_Type', y='Room_Revenue', title="요일별 매출"), use_container_width=True, key=f"{k}_w_b")
             c2.plotly_chart(px.pie(w, values='RN', names='Day_Type', title="요일별 RN 비중"), use_container_width=True, key=f"{k}_w_p")
-            
     with t7:
         n = group_and_show(df, 'Nat_Group')
         if not n.empty:
             c1, c2 = st.columns(2)
             c1.plotly_chart(px.pie(n, values='RN', names='Nat_Group', title="국적별 RN 비중"), use_container_width=True, key=f"{k}_n_p")
             c2.plotly_chart(px.bar(n, x='Nat_Group', y='Room_Revenue', title="국적별 매출 실적"), use_container_width=True, key=f"{k}_n_b")
-            
     with t8:
         b = group_and_show(df, 'Breakfast')
         if not b.empty:
@@ -507,33 +474,23 @@ try:
         
         min_date = datetime.now() - timedelta(days=365)
         max_date = datetime.now() + timedelta(days=365)
-        
         if res_dates_all:
             try:
                 min_date = datetime.strptime(res_dates_all[-1], "%Y-%m-%d")
                 max_date = datetime.strptime(res_dates_all[0], "%Y-%m-%d")
             except: pass
 
-        date_range = st.date_input(
-            "조회 기간",
-            value=(max_date, max_date),
-            min_value=min_date,
-            max_value=max_date,
-            format="YYYY-MM-DD"
-        )
-        
+        date_range = st.date_input("조회 기간", value=(max_date, max_date), min_value=min_date, max_value=max_date, format="YYYY-MM-DD")
         sel_res_start, sel_res_end = None, None
         if isinstance(date_range, tuple):
-            if len(date_range) == 2:
-                sel_res_start, sel_res_end = date_range
-            elif len(date_range) == 1:
-                sel_res_start = sel_res_end = date_range[0]
+            if len(date_range) == 2: sel_res_start, sel_res_end = date_range
+            elif len(date_range) == 1: sel_res_start = sel_res_end = date_range[0]
         
-        st.divider()
         sel_otb = st.selectbox("📈 OTB 조회", otb_dates) if otb_dates else None
         
         st.divider()
-        st.write("※ 파일명 날짜 / 컬럼 자동 인식")
+        st.subheader("📤 파일 업로드 (날짜 자동 인식)")
+        
         f1 = st.file_uploader("예약 리스트", type=['xlsx','csv'])
         if f1 and st.button("예약 저장"):
             if save_to_db(process_res_file(f1), 'Reservation'): 
@@ -547,12 +504,12 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.success("✅ OTB 데이터 저장 완료!"); time.sleep(1); st.rerun()
 
-    # 데이터 로드 (기간 필터링 적용 - 모든 해당 날짜 데이터 합산)
+    # 데이터 필터링
     if sel_res_start and sel_res_end and not df_all.empty:
         s_str = sel_res_start.strftime('%Y-%m-%d')
         e_str = sel_res_end.strftime('%Y-%m-%d')
         
-        # [핵심 수정] 기간 내 모든 데이터를 합쳐서(Concat) 보여줌
+        # 선택된 기간 내의 모든 데이터를 합칩니다 (Concat)
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= s_str) & (df_all['Snapshot_Date'] <= e_str)
         df_bk_raw = df_all[mask_bk].copy()
         
