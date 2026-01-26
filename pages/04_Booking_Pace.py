@@ -40,17 +40,16 @@ def upload_to_firestore(df_new):
     if db is None: return
     df_new = df_new.copy()
     
-    # 업로드 시점 자동 기록
+    # 업로드 시점 자동 기록 (이게 있어야 필터에서 최신 업데이트본 확인 가능)
     upload_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     df_new['Snapshot'] = upload_time
     
-    # 날짜 필드 변환
+    # 필수 전처리
     df_new['입실일자'] = pd.to_datetime(df_new['입실일자'], errors='coerce')
     df_new['예약일자'] = pd.to_datetime(df_new['예약일자'], errors='coerce')
     df_new['예약번호'] = df_new['예약번호'].astype(str)
     
-    # [중요] 숫자 필드 강제 변환 (사장님 데이터 필드 기준)
-    # 객실료, 총금액, 객실수, 박수, 객단가, 서비스료 등
+    # 숫자 필드 강제 변환
     numeric_cols = ['객실료', '총금액', '객실수', '박수', '객단가', '서비스료']
     for col in numeric_cols:
         if col in df_new.columns:
@@ -68,11 +67,14 @@ def upload_to_firestore(df_new):
     
     for _, row in df_upload.iterrows():
         doc_id = row['예약번호']
-        if not doc_id or doc_id == 'None': continue
+        # 예약번호가 없거나 비어있으면 건너뜀 (안전장치)
+        if not doc_id or doc_id == 'None' or doc_id == '': continue
         
+        # [핵심] 예약번호를 문서 ID로 지정하여 동일 번호는 자동 업데이트
         doc_ref = db.collection('hotel_bookings').document(doc_id)
         payload = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
         
+        # merge=True: 기존 필드는 유지하되 바뀐 데이터(상태 등)만 쏙 덮어씀
         batch.set(doc_ref, payload, merge=True)
         count += 1
         
@@ -80,17 +82,17 @@ def upload_to_firestore(df_new):
             batch.commit()
             batch = db.batch()
             bar.progress(count / total)
-            msg.text(f"⏳ 업로드 중... ({count}/{total})")
+            msg.text(f"⏳ 데이터 동기화 및 상태 업데이트 중... ({count}/{total})")
             time.sleep(0.05)
             
     batch.commit()
     bar.empty()
-    msg.success(f"✅ {total}건 업데이트 완료!")
+    msg.success(f"✅ {total}건 동기화 완료! 이제 예약번호당 최신 상태만 남습니다.")
     
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     st.cache_data.clear()
-
+    
 def delete_all_data():
     if db is None: return
     coll_ref = db.collection('hotel_bookings')
