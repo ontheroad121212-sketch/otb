@@ -4,15 +4,20 @@ import numpy as np
 from datetime import datetime, timedelta
 
 def run_forecasting():
-    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v17.8")
-    st.caption("데이터 직결 완료: 메인 탭 실적(Actual) 실시간 합산 + 초정밀 전략 가이드")
+    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v17.9")
+    st.caption("에러 수선 완료: 메인 탭 실적(Actual) 실시간 합산 + 초정밀 리드타임 감쇄 엔진")
 
     # 1. 월 선택 및 동적 날짜 설정
     selected_month = st.sidebar.selectbox("🎯 분석 대상 월", range(1, 13), index=datetime.now().month-1)
     today = datetime.now()
     
     target_month_first_day = datetime(today.year, selected_month, 1)
-    next_month_date = datetime(today.year + (1 if selected_month == 12 else 0), (selected_month % 12) + 1, 1)
+    # 다음 달의 첫날을 구한 뒤 하루를 빼서 이번 달의 마지막 날을 구함
+    if selected_month == 12:
+        next_month_date = datetime(today.year + 1, 1, 1)
+    else:
+        next_month_date = datetime(today.year, selected_month + 1, 1)
+    
     last_day_of_target = (next_month_date - timedelta(days=1)).day
     
     if selected_month > today.month:
@@ -20,16 +25,14 @@ def run_forecasting():
     else:
         auto_rem_days = max(1, last_day_of_target - today.day)
 
-    # ----------------------------------------------------------------------
-    # 2. [데이터 핀셋 조정] 메인 탭 실시간 온북(OTB) 실적 불러오기
-    # ----------------------------------------------------------------------
+    # 2. [데이터 연동] 메인 탭 실시간 온북(OTB) 실적 불러오기
     target_sob = st.session_state.get(f"sob_{selected_month}")
     
     if not target_sob or not isinstance(target_sob, dict):
         st.warning(f"⚠️ 메인 리포트에서 {selected_month}월 탭을 먼저 클릭하여 원장 데이터를 로드해 주세요.")
         return
 
-    # [핵심] 지배인님의 원장에서 직접 추출한 '현재까지 번 돈'과 '팔린 방'
+    # 지배인님의 실시간 온북 실적 (Actual)
     current_actual_rms = float(target_sob.get('FIT_RMS', 0) + target_sob.get('GRP_RMS', 0))
     current_actual_rev = float(target_sob.get('FIT_REV', 0) + target_sob.get('GRP_REV', 0))
     
@@ -69,7 +72,7 @@ def run_forecasting():
             target_adr = st.number_input("미래 예상 ADR", 100000, 1000000, avg_adr_actual if avg_adr_actual > 100000 else 240000, step=5000)
             st.caption(f"💡 현재 온북 실적 ADR: ₩{avg_adr_actual:,}")
 
-    # 5. [엔진] 리드타임 감쇄 픽업 계산
+    # 5. [엔진] 리드타임 감쇄 및 픽업 계산
     lt_factor_base = (1.0 + (1.0 / np.log1p(rem_days)))
     decay_curve = []
     accum_rms = []
@@ -83,12 +86,11 @@ def run_forecasting():
         accum_rms.append(min(net_total_cap, current_actual_rms + total_pickup))
 
     final_rms = min(net_total_cap, current_actual_rms + total_pickup)
-    # [수정] 최종 매출 = 현재까지 번 돈 + 미래에 더 벌 돈
     additional_rev = (max(0, final_rms - current_actual_rms) * target_adr)
     final_rev_total = current_actual_rev + additional_rev
     final_rev_man = final_rev_total / 10000
 
-    # 6. GM 전략 가이드 (모든 시각화 데이터에 실적 반영)
+    # 6. GM 전략 가이드
     st.divider()
     st.subheader("🎯 총지배인 전용 초정밀 전략 가이드")
     
@@ -109,7 +111,8 @@ def run_forecasting():
         st.metric("Burn Rate", f"{burn_rate:.2f}x", "High" if burn_rate > 1.2 else "Normal")
     with m4:
         st.write("**📊 주중/주말 믹스**")
-        we_ratio = (dow_indices.get(4, 1.3)+dow_indices.get(5, 1.5)) / sum(dow_indices.values()) * 100
+        sum_dow = sum(dow_indices.values())
+        we_ratio = (dow_indices.get(4, 1.3)+dow_indices.get(5, 1.5)) / sum_dow * 100 if sum_dow > 0 else 0
         st.metric("WE Pickup Ratio", f"{we_ratio:.1f}%", "Weekend Heavy")
 
     with st.expander("🔍 구간별 타겟 ADR 및 권장 액션", expanded=True):
@@ -133,13 +136,11 @@ def run_forecasting():
     
     with t1:
         st.subheader("🏁 누적 매출 구성 (Waterfall)")
-        # 지배인님이 원하신 '현재까지 매출' 시각화 반영
         mix_df = pd.DataFrame({
             "구분": ["현재 확정 실적(Actual)", "미래 추가 예측(Forecast)", "전체 목표(Budget)"],
             "매출액(만원)": [int(current_actual_rev/10000), int(final_rev_man - current_actual_rev/10000), budget_rev]
         })
         st.bar_chart(mix_df.set_index("구분"))
-        [Image of a stacked waterfall chart showing actual revenue plus forecasted revenue toward a total goal]
 
     with t2:
         st.subheader("🔮 리드타임 감쇄 기반 예약 흐름 시뮬레이션")
@@ -153,7 +154,6 @@ def run_forecasting():
         sens_data = []
         for r in [0.8, 0.9, 1.0, 1.1, 1.2]:
             t_adr_sens = target_adr * r
-            # 탄력성 적용 픽업량
             t_rms_sens = min(net_total_cap, current_actual_rms + (total_pickup * (1 - (r-1)*1.5)))
             sens_data.append({"ADR계수": f"{int(r*100)}%", "최종매출(만)": int((current_actual_rev + (t_rms_sens - current_actual_rms)*t_adr_sens)/10000)})
         st.line_chart(pd.DataFrame(sens_data).set_index("ADR계수"))
@@ -163,7 +163,7 @@ def run_forecasting():
     cola, colb = st.columns(2)
     with cola:
         v_cost = st.slider("객실당 변동비", 10000, 50000, 25000, step=5000)
-        net_margin = (final_rev_total) - (final_rms * v_cost)
+        net_margin = final_rev_total - (final_rms * v_cost)
         st.write(f"💰 **예상 최종 공헌이익:** ₩{int(net_margin/10000):,}만")
     with colb:
         needed_staff = np.ceil(final_rms / (last_day_of_target * 15))
