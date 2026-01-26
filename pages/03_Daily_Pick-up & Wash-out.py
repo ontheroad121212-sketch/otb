@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 import time
+import textwrap
 
 # ==============================================================================
 # 1. 기본 설정 및 CSS
@@ -69,14 +70,32 @@ def save_to_db(df, data_type='Reservation'):
             # 날짜 객체 문자열 변환
             for c in sub.select_dtypes(include=['datetime64[ns]']).columns:
                 sub[c] = sub[c].astype(str)
-                
+            
+            # NaN 처리
+            sub = sub.where(pd.notnull(sub), None)
+            
             recs = sub.to_dict(orient='records')
             
-            # 문서 ID 생성 (날짜_타입_시간)
+            # Sanitization
+            sanitized_recs = []
+            for r in recs:
+                new_r = {}
+                for k, v in r.items():
+                    clean_k = str(k).replace('.', '_').strip()
+                    if isinstance(v, (np.integer, np.int64, np.int32)):
+                        new_r[clean_k] = int(v)
+                    elif isinstance(v, (np.floating, np.float64, np.float32)):
+                        new_r[clean_k] = float(v)
+                    elif isinstance(v, (np.bool_, bool)):
+                        new_r[clean_k] = bool(v)
+                    else:
+                        new_r[clean_k] = v
+                sanitized_recs.append(new_r)
+            
             did = f"{d}_{data_type}_{int(time.time()*1000)}"
             
             db.collection(COLLECTION_NAME).document(did).set({
-                'data': recs, 'uploaded_at': datetime.now(), 'snapshot_date': d, 'data_type': data_type
+                'data': sanitized_recs, 'uploaded_at': datetime.now(), 'snapshot_date': d, 'data_type': data_type
             })
         return True
     except Exception as e: st.error(f"저장 실패: {e}"); return False
@@ -119,11 +138,11 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (컬럼 위치 정밀 타격 & RN 직접 계산)
+# 4. 파일 처리 로직
 # ==============================================================================
 
 def process_res_file(file):
-    """예약 리스트: AE(30)=예약일, L(11)=객실수, I(8)=박수"""
+    """예약 리스트 처리"""
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=2, encoding='cp949')
@@ -319,16 +338,12 @@ def render_tab(df, k):
             c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue', title="세그먼트별 매출"), use_container_width=True, key=f"{k}_b")
     
     with t2:
-        # [핵심 수정] 페이싱: 예약월 vs 투숙월 히트맵 & 투숙월별 막대 차트
         st.subheader("📅 Booking Pacing Matrix (Booking vs Stay)")
-        
-        # 데이터 정리 (날짜 문자열로 변환하여 축 정렬)
         p_df = df.copy()
         p_df['Booking_Month'] = p_df['Booking_Month'].astype(str).str.strip()
         p_df['Stay_Month'] = p_df['Stay_Month'].astype(str).str.strip()
         p_df = p_df.sort_values(['Booking_Month', 'Stay_Month'])
         
-        # 1. 히트맵 (Booking vs Stay)
         p = p_df.pivot_table(index='Booking_Month', columns='Stay_Month', values='RN', aggfunc='sum').fillna(0)
         
         if not p.empty:
@@ -338,7 +353,6 @@ def render_tab(df, k):
             fig_hm.update_layout(xaxis={'type':'category', 'title':'투숙월 (Stay)'}, yaxis={'type':'category', 'title':'예약생성월 (Booking)'}, height=500)
             st.plotly_chart(fig_hm, use_container_width=True, key=f"{k}_hm")
             
-            # 2. 막대 차트 (투숙월별 분포)
             st.markdown("---")
             st.subheader("📊 투숙월별 예약 분포 (Stay Month Distribution)")
             stay_dist = p_df.groupby('Stay_Month')['RN'].sum().reset_index()
@@ -398,7 +412,6 @@ try:
     # 날짜 분리
     res_dates_all = sorted(df_all[df_all['Data_Type']=='Reservation']['Snapshot_Date'].unique(), reverse=True)
     today = datetime.now().strftime('%Y-%m-%d')
-    # OTB 날짜 (구분)
     otb_dates = sorted(df_all[df_all['Data_Type']=='OTB']['Snapshot_Date'].unique(), reverse=True)
 
     with st.sidebar:
@@ -409,12 +422,10 @@ try:
         st.divider()
         st.subheader("📌 예약/취소 조회 (기간)")
         
-        # [수정] 1. 일자 선택 -> 달력 기간 선택 (date_input)으로 변경
-        # [수정] 3. 오늘 일자 조회 차단 (max_value를 yesterday로 설정)
+        # [수정] 날짜 범위 선택 (date_input)으로 변경
         yesterday = datetime.now().date() - timedelta(days=1)
         min_date = datetime.now().date() - timedelta(days=365)
         
-        # 기본값 설정
         default_val = (yesterday, yesterday)
         if res_dates_all:
             try:
@@ -424,10 +435,10 @@ try:
             except: pass
 
         dates_selected = st.date_input(
-            "기간 선택",
+            "기간 선택 (오늘 제외)",
             value=default_val,
             min_value=min_date,
-            max_value=yesterday, # 오늘 선택 불가
+            max_value=yesterday, # [수정] 오늘 날짜 선택 막기
             format="YYYY-MM-DD"
         )
         
@@ -435,11 +446,11 @@ try:
         if isinstance(dates_selected, tuple):
             if len(dates_selected) > 0: sel_res_start = dates_selected[0].strftime('%Y-%m-%d')
             if len(dates_selected) > 1: sel_res_end = dates_selected[1].strftime('%Y-%m-%d')
-            if sel_res_start and not sel_end_str: sel_res_end = sel_res_start # 단일 선택 시
+            # [수정] 오타 수정: sel_end_str -> sel_res_end
+            if sel_res_start and not sel_res_end: sel_res_end = sel_res_start 
         
         st.divider()
-        # [수정] 2. OTB는 기존 selectbox 유지 (일자별 선택)
-        sel_otb = st.selectbox("📈 OTB 조회 (기준일)", otb_dates) if otb_dates else None
+        sel_otb = st.selectbox("📈 OTB 조회", otb_dates) if otb_dates else None
         
         st.divider()
         st.write("※ 파일명 날짜 / 컬럼 위치 기준")
@@ -454,25 +465,25 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
-    # 데이터 로드 (기간 필터링 적용)
+    # 데이터 로드 (기간 필터링 및 합산)
     if sel_res_start and sel_res_end and not df_all.empty:
         s_str = sel_res_start
         e_str = sel_res_end
         
-        # [수정] 기간 내 데이터 합산 (합계 계산 로직)
-        mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= s_str) & (df_all['Snapshot_Date'] <= e_str)
+        # [수정] 기간 내 데이터 합산
+        mask_bk = (df_all['Data_Type']=='Reservation') & \
+                  (df_all['Snapshot_Date'] >= s_str) & \
+                  (df_all['Snapshot_Date'] <= e_str)
         df_bk_raw = df_all[mask_bk].copy()
         
-        # 예약: Total_Revenue > 0
         df_bk = df_bk_raw[df_bk_raw['Total_Revenue'] > 0]
-        # 0원 예약
         df_zero = df_bk_raw[df_bk_raw['Total_Revenue'] <= 0]
         
-        # 취소 데이터
-        mask_cn = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= s_str) & (df_all['Snapshot_Date'] <= e_str)
+        mask_cn = (df_all['Data_Type']=='Cancellation') & \
+                  (df_all['Snapshot_Date'] >= s_str) & \
+                  (df_all['Snapshot_Date'] <= e_str)
         df_cn = df_all[mask_cn].copy()
         
-        # Fallback
         if df_cn.empty and not df_bk_raw.empty:
              df_cn = df_bk_raw[df_bk_raw['Status'] == 'RC']
         
@@ -489,9 +500,8 @@ try:
     tabs = st.tabs(["👑 GM 요약", "✅ 예약 상세", "❌ 취소 상세", "📈 종합 합계", "🆓 0원 예약", "🎯 OTB 현황"])
     
     with tabs[0]:
-        display_range = f"{s_str} ~ {e_str}" if s_str else "기간 미선택"
-        st.header(f"👑 GM 요약 ({display_range})")
-        
+        disp_date = f"{s_str} ~ {e_str}" if s_str else "기간 미선택"
+        st.header(f"👑 GM 요약 ({disp_date})")
         if df_bk.empty and df_cn.empty: st.info("데이터 없음")
         else:
             b_rn, b_rev, b_tot = df_bk['RN'].sum(), df_bk['Room_Revenue'].sum(), df_bk['Total_Revenue'].sum()
