@@ -202,7 +202,7 @@ with st.sidebar:
         if st.button("🗑️ 전체 삭제") and st.text_input("확인 ('초기화')") == "초기화":
             delete_all_data(); st.rerun()
 
-   st.divider()
+st.divider()
     # [데이터 통합 및 선택 필터]
     st.markdown("**🔍 데이터 버전(Snapshot) 선택**")
     if not df_raw.empty:
@@ -226,7 +226,6 @@ with st.sidebar:
     else:
         df = df_raw
         st.warning("⚠️ 파이어베이스에서 데이터를 불러오지 못했습니다.")
-
     if '국적' in df.columns:
         # 1. 대문자 변환 및 공백 제거
         df['국적'] = df['국적'].astype(str).str.upper().str.strip()
