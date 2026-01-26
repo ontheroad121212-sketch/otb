@@ -4,14 +4,13 @@ import numpy as np
 from datetime import datetime, timedelta
 
 def run_forecasting():
-    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v17.7")
-    st.caption("전기능 통합: 실시간 실적 연동 + 초정밀 전략 가이드 + 리드타임 감쇄 곡선")
+    st.title("🏛️ 총지배인(GM) 전략 의사결정 대시보드 v17.8")
+    st.caption("데이터 직결 완료: 메인 탭 실적(Actual) 실시간 합산 + 초정밀 전략 가이드")
 
     # 1. 월 선택 및 동적 날짜 설정
     selected_month = st.sidebar.selectbox("🎯 분석 대상 월", range(1, 13), index=datetime.now().month-1)
     today = datetime.now()
     
-    # [날짜 계산 로직]
     target_month_first_day = datetime(today.year, selected_month, 1)
     next_month_date = datetime(today.year + (1 if selected_month == 12 else 0), (selected_month % 12) + 1, 1)
     last_day_of_target = (next_month_date - timedelta(days=1)).day
@@ -21,14 +20,16 @@ def run_forecasting():
     else:
         auto_rem_days = max(1, last_day_of_target - today.day)
 
-    # 2. [데이터 직결] 메인 탭 실적 데이터 실시간 바인딩
+    # ----------------------------------------------------------------------
+    # 2. [데이터 핀셋 조정] 메인 탭 실시간 온북(OTB) 실적 불러오기
+    # ----------------------------------------------------------------------
     target_sob = st.session_state.get(f"sob_{selected_month}")
     
     if not target_sob or not isinstance(target_sob, dict):
         st.warning(f"⚠️ 메인 리포트에서 {selected_month}월 탭을 먼저 클릭하여 원장 데이터를 로드해 주세요.")
         return
 
-    # 실시간 실적(Actual) 추출
+    # [핵심] 지배인님의 원장에서 직접 추출한 '현재까지 번 돈'과 '팔린 방'
     current_actual_rms = float(target_sob.get('FIT_RMS', 0) + target_sob.get('GRP_RMS', 0))
     current_actual_rev = float(target_sob.get('FIT_REV', 0) + target_sob.get('GRP_REV', 0))
     
@@ -65,10 +66,10 @@ def run_forecasting():
             rem_days = st.number_input("남은 판매일수", 1, 365, int(auto_rem_days))
         with c3:
             avg_adr_actual = int(current_actual_rev / max(1, current_actual_rms)) if current_actual_rms > 0 else 240000
-            target_adr = st.number_input("미래 설정 ADR", 100000, 1000000, avg_adr_actual if avg_adr_actual > 100000 else 240000, step=5000)
-            st.caption(f"💡 현재 실적 ADR: ₩{avg_adr_actual:,}")
+            target_adr = st.number_input("미래 예상 ADR", 100000, 1000000, avg_adr_actual if avg_adr_actual > 100000 else 240000, step=5000)
+            st.caption(f"💡 현재 온북 실적 ADR: ₩{avg_adr_actual:,}")
 
-    # 5. [초정밀 엔진] 리드타임 감쇄 및 픽업 계산
+    # 5. [엔진] 리드타임 감쇄 픽업 계산
     lt_factor_base = (1.0 + (1.0 / np.log1p(rem_days)))
     decay_curve = []
     accum_rms = []
@@ -82,11 +83,12 @@ def run_forecasting():
         accum_rms.append(min(net_total_cap, current_actual_rms + total_pickup))
 
     final_rms = min(net_total_cap, current_actual_rms + total_pickup)
+    # [수정] 최종 매출 = 현재까지 번 돈 + 미래에 더 벌 돈
     additional_rev = (max(0, final_rms - current_actual_rms) * target_adr)
     final_rev_total = current_actual_rev + additional_rev
     final_rev_man = final_rev_total / 10000
 
-    # 6. [전략 섹션] GM 전용 초정밀 브리핑
+    # 6. GM 전략 가이드 (모든 시각화 데이터에 실적 반영)
     st.divider()
     st.subheader("🎯 총지배인 전용 초정밀 전략 가이드")
     
@@ -98,9 +100,9 @@ def run_forecasting():
     with m2:
         st.write("**💰 목표 달성 필요 단가**")
         needed_rev = (budget_rev * 10000) - current_actual_rev
-        needed_pickup_rms = final_rms - current_actual_rms
-        req_adr = needed_rev / max(1, needed_pickup_rms)
-        st.metric("Required ADR", f"₩{int(req_adr/1000)}k", f"{int((req_adr/target_adr-1)*100):+d}%")
+        needed_pickup_rms = max(1, final_rms - current_actual_rms)
+        req_adr = needed_rev / needed_pickup_rms
+        st.metric("Required ADR", f"₩{int(req_adr/1000)}k", f"{int((req_adr/target_adr-1)*100) if target_adr > 0 else 0:+d}%")
     with m3:
         st.write("**⚡ 인벤토리 소진 속도**")
         burn_rate = (total_pickup / rem_days) / (TOTAL_ROOMS/7)
@@ -110,7 +112,7 @@ def run_forecasting():
         we_ratio = (dow_indices.get(4, 1.3)+dow_indices.get(5, 1.5)) / sum(dow_indices.values()) * 100
         st.metric("WE Pickup Ratio", f"{we_ratio:.1f}%", "Weekend Heavy")
 
-    with st.expander("🔍 구간별 타겟 ADR 및 권장 액션 (Strategic Breakdown)", expanded=True):
+    with st.expander("🔍 구간별 타겟 ADR 및 권장 액션", expanded=True):
         step = max(1, rem_days // 3)
         breakdown = []
         for i in range(0, rem_days, step):
@@ -125,17 +127,19 @@ def run_forecasting():
             })
         st.table(pd.DataFrame(breakdown))
 
-    # 7. 시각화 (Actual vs Forecast 통합 강화)
+    # 7. 시각화 (실적 데이터 합산 반영)
     st.divider()
     t1, t2, t3 = st.tabs(["📊 성과 분석 (Actual vs Forecast)", "🔮 정밀 예약 곡선", "💰 수익 민감도"])
     
     with t1:
-        st.subheader("🏁 누적 매출 구성 분석 (Waterfall)")
+        st.subheader("🏁 누적 매출 구성 (Waterfall)")
+        # 지배인님이 원하신 '현재까지 매출' 시각화 반영
         mix_df = pd.DataFrame({
             "구분": ["현재 확정 실적(Actual)", "미래 추가 예측(Forecast)", "전체 목표(Budget)"],
             "매출액(만원)": [int(current_actual_rev/10000), int(final_rev_man - current_actual_rev/10000), budget_rev]
         })
         st.bar_chart(mix_df.set_index("구분"))
+        [Image of a stacked waterfall chart showing actual revenue plus forecasted revenue toward a total goal]
 
     with t2:
         st.subheader("🔮 리드타임 감쇄 기반 예약 흐름 시뮬레이션")
@@ -149,19 +153,19 @@ def run_forecasting():
         sens_data = []
         for r in [0.8, 0.9, 1.0, 1.1, 1.2]:
             t_adr_sens = target_adr * r
+            # 탄력성 적용 픽업량
             t_rms_sens = min(net_total_cap, current_actual_rms + (total_pickup * (1 - (r-1)*1.5)))
             sens_data.append({"ADR계수": f"{int(r*100)}%", "최종매출(만)": int((current_actual_rev + (t_rms_sens - current_actual_rms)*t_adr_sens)/10000)})
         st.line_chart(pd.DataFrame(sens_data).set_index("ADR계수"))
 
-    # 8. 운영 지표 (에러 수정 완료)
+    # 8. 운영 지표
     st.write("---")
     cola, colb = st.columns(2)
     with cola:
         v_cost = st.slider("객실당 변동비", 10000, 50000, 25000, step=5000)
-        net_margin = (final_rev_man * 10000) - (final_rms * v_cost)
+        net_margin = (final_rev_total) - (final_rms * v_cost)
         st.write(f"💰 **예상 최종 공헌이익:** ₩{int(net_margin/10000):,}만")
     with colb:
-        # staff 변수 이름을 명확히 일치시켜 NameError 방지
         needed_staff = np.ceil(final_rms / (last_day_of_target * 15))
         st.write(f"🧑‍🤝‍🧑 **필요 메이드 인력:** {needed_staff:.0f}명")
 
