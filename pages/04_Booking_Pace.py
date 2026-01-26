@@ -206,16 +206,17 @@ with st.sidebar:
     # [데이터 통합 및 선택 필터]
     st.markdown("**🔍 데이터 버전(Snapshot) 선택**")
     if not df_raw.empty:
-        # 1. Snapshot 컬럼 보정 및 문자열 변환
+        # 1. Snapshot 컬럼 보정
         if 'Snapshot' not in df_raw.columns:
             df_raw['Snapshot'] = "이전 데이터"
         
+        # 2. 결측치 제거 및 문자열 변환
         valid_snapshots = [str(x) for x in df_raw['Snapshot'].unique() if pd.notna(x)]
         snapshot_options = ["전체 누적 데이터"] + sorted(valid_snapshots, reverse=True)
         
         selected_snapshot = st.selectbox("조회할 업로드 시점 선택", snapshot_options)
         
-        # 2. 필터링 로직: "전체"를 선택하면 4만 건 모두 보여줌
+        # 3. 필터링 로직
         if selected_snapshot == "전체 누적 데이터":
             df = df_raw
         else:
