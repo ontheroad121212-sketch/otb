@@ -202,28 +202,29 @@ with st.sidebar:
         if st.button("🗑️ 전체 삭제") and st.text_input("확인 ('초기화')") == "초기화":
             delete_all_data(); st.rerun()
 
-    st.divider()
-    # [데이터 복구 및 에러 방지 필터]
+   st.divider()
+    # [데이터 통합 및 선택 필터]
     st.markdown("**🔍 데이터 버전(Snapshot) 선택**")
     if not df_raw.empty:
-        # 1. Snapshot 컬럼이 없으면 강제로 생성 (에러 방지)
+        # 1. Snapshot 컬럼 보정 및 문자열 변환
         if 'Snapshot' not in df_raw.columns:
             df_raw['Snapshot'] = "이전 데이터"
-            
-        # 2. 결측치 제거 및 문자열 변환 후 최신순 정렬 (TypeError 원천 차단)
-        valid_snapshots = [str(x) for x in df_raw['Snapshot'].unique() if pd.notna(x)]
-        snapshot_options = sorted(valid_snapshots, reverse=True)
         
-        if snapshot_options:
-            selected_snapshot = st.selectbox("조회할 업로드 시점 선택", snapshot_options)
-            # 3. 선택된 스냅샷 데이터만 필터링
-            df = df_raw[df_raw['Snapshot'].astype(str) == selected_snapshot]
-        else:
+        valid_snapshots = [str(x) for x in df_raw['Snapshot'].unique() if pd.notna(x)]
+        snapshot_options = ["전체 누적 데이터"] + sorted(valid_snapshots, reverse=True)
+        
+        selected_snapshot = st.selectbox("조회할 업로드 시점 선택", snapshot_options)
+        
+        # 2. 필터링 로직: "전체"를 선택하면 4만 건 모두 보여줌
+        if selected_snapshot == "전체 누적 데이터":
             df = df_raw
+        else:
+            df = df_raw[df_raw['Snapshot'].astype(str) == selected_snapshot]
+            
+        st.success(f"현재 {len(df):,}건의 데이터를 분석 중입니다.")
     else:
-        # 데이터가 아예 안 불려왔을 경우
         df = df_raw
-        st.warning("⚠️ 파이어베이스에서 데이터를 불러오지 못했습니다. 새로고침을 해주세요.")
+        st.warning("⚠️ 파이어베이스에서 데이터를 불러오지 못했습니다.")
 
     if '국적' in df.columns:
         # 1. 대문자 변환 및 공백 제거
