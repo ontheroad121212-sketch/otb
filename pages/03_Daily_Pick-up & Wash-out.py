@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+import time
+import textwrap
 
 # ==============================================================================
 # [1] 설정 및 언어 세션 고정 (무한로딩 방지 & 파라미터 유지)
@@ -591,7 +593,10 @@ try:
         if st.button(T("🚨 전체 초기화")): delete_all(); st.rerun()
         st.divider()
         st.subheader(T("📌 예약/취소 조회 (기준 vs 비교)"))
-        yesterday = datetime.now().date() - timedelta(days=1)
+        
+        # [핀셋 수정] KST(UTC+9) 기준 날짜 보정: 오늘(28일) 기준 어제(27일)를 계산
+        now_kst = datetime.now() + timedelta(hours=9)
+        yesterday = now_kst.date() - timedelta(days=1)
         
         default_val = (yesterday, yesterday)
         dates_selected = st.date_input(T("기준 기간 (어제까지 선택 가능)"), value=default_val, max_value=yesterday, format="YYYY-MM-DD")
