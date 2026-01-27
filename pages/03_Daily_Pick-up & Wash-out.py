@@ -13,7 +13,25 @@ import textwrap
 # ==============================================================================
 # 1. 기본 설정 및 회장님 모드(중국어) 강력 유지 로직 (Session State)
 # ==============================================================================
+# 1. 페이지 설정 (가장 처음에 와야 합니다)
 st.set_page_config(page_title="Daily Pick-up & Wash-out", layout="wide")
+
+# URL 파라미터 확인
+try:
+    url_params = st.query_params
+    url_lang = url_params.get("lang")
+except:
+    url_lang = st.experimental_get_query_params().get("lang", [""])[0]
+
+# 변경이 필요할 때만 세션을 업데이트 (이게 없으면 계속 재실행되어 뱅글뱅글 돕니다)
+if url_lang and url_lang != st.session_state.lang:
+    if url_lang in ['zh', 'ko']:
+        st.session_state.lang = url_lang
+        # 세션이 바뀌었으므로 한 번만 다시 로드
+        st.rerun()
+
+# 최종 모드 결정
+is_chairman_mode = (st.session_state.lang == 'zh')
 
 # 2. 언어 유지 핵심 로직 (이걸 넣어줘야 파라미터가 유지됩니다)
 if 'lang' not in st.session_state:
