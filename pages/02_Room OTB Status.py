@@ -4,7 +4,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import datetime
 import re
-import pytz # 코드 맨 윗줄에 추가 (설치 필요 시: pip install pytz)
+import pytz # 시차 해결을 위해 추가
 
 # --------------------------------------------------------------------------
 # 1. 기본 설정 및 DB 연결
@@ -146,10 +146,10 @@ def merge_files(files):
 tab_upload, tab_dashboard = st.tabs(["📤 데이터 업로드 (관리자)", "📊 통합 리포트"])
 
 # ==========================================================================
-# [TAB 1] 업로드
+# [TAB 1] 업로드 (수정됨: 날짜 선택 기능 + 한국 시간 적용)
 # ==========================================================================
 with tab_upload:
-    st.info("💡 '어제 데이터'는 자동으로 불러오므로, '오늘 데이터'만 올리시면 됩니다.")
+    st.info("💡 과거 데이터가 누락되었다면, 아래 '저장 날짜'를 변경해서 올리세요.")
     
     # 암호 입력창
     admin_pw = st.text_input("🔑 관리자 암호 (저장하려면 입력하세요)", type="password")
@@ -158,9 +158,20 @@ with tab_upload:
     
     c1, c2 = st.columns(2)
     
+    # 한국 시간 설정
+    KST = pytz.timezone('Asia/Seoul')
+    now_kst = datetime.datetime.now(KST)
+
     # 1. 오늘 판매량
     with c1:
         st.subheader("1. 오늘 판매량 (Snapshot)")
+        
+        # [NEW] 저장 날짜 선택 기능 (기본값: 오늘)
+        save_date = st.date_input(
+            "📅 저장할 날짜 선택 (과거 데이터 복구용)", 
+            now_kst.date()
+        )
+
         files_today = st.file_uploader("오늘 판매 파일들 (드래그)", accept_multiple_files=True, key="today")
         
         if st.button("오늘 판매량 저장", type="primary"):
@@ -170,16 +181,15 @@ with tab_upload:
                     if df is not None:
                         df_save = df.fillna(0)
                         
-                        # [핀셋 수정] 한국 시간 기준으로 날짜 강제 고정 (시차 해결)
-                        KST = pytz.timezone('Asia/Seoul')
-                        now_kst = datetime.datetime.now(KST)
-                        today_str = now_kst.strftime("%Y-%m-%d") # 2026-01-28 정상 생성됨
+                        # [핵심] 선택한 날짜를 문자열로 변환하여 문서 ID로 사용
+                        target_date_str = save_date.strftime("%Y-%m-%d")
                         
                         # DB 저장
-                        db.collection("daily_sales_snapshot").document(today_str).set({
-                            "data": df_save.to_dict(), "created_at": now_kst
+                        db.collection("daily_sales_snapshot").document(target_date_str).set({
+                            "data": df_save.to_dict(), 
+                            "created_at": datetime.datetime.now(KST) # 실제 저장 시간은 현재로 기록
                         })
-                        st.success(f"✅ 한국 시간 {today_str} 기준으로 저장되었습니다! (DB에 안전하게 보관됨)")
+                        st.success(f"✅ {target_date_str} 날짜로 저장 완료! (과거 데이터 복구 성공)")
                         st.cache_data.clear() # 캐시 초기화
                 else:
                     st.warning("파일을 먼저 선택해주세요.")
@@ -199,7 +209,7 @@ with tab_upload:
                         df_save = df.fillna(0)
                         # DB 저장 (최신 상태 덮어쓰기)
                         db.collection("hotel_settings").document("latest_availability_view").set({
-                            "data": df_save.to_dict(), "updated_at": datetime.datetime.now()
+                            "data": df_save.to_dict(), "updated_at": datetime.datetime.now(KST)
                         })
                         st.success("✅ 남은 객실 데이터 업데이트 완료!")
                 else:
@@ -208,18 +218,18 @@ with tab_upload:
                 st.error("⛔ 암호가 틀렸습니다!")
 
 # ==========================================================================
-# [TAB 2] 리포트 (수정됨: 자동 과거 날짜 매칭 + 한국 시간 기본값)
+# [TAB 2] 리포트 (수정됨: 조회 기준일 한국시간 적용)
 # ==========================================================================
 with tab_dashboard:
     st.header("📊 객실 통합 리포트")
     
     col_sel, col_btn = st.columns([1, 4])
     with col_sel:
-        # [핵심 수정] 조회 달력의 기본값을 '한국 시간' 오늘로 변경
+        # [핵심] 조회 달력의 기본값을 '한국 시간' 오늘로 변경
         KST = pytz.timezone('Asia/Seoul')
-        today_kst = datetime.datetime.now(KST).date()
+        today_kst_date = datetime.datetime.now(KST).date()
         
-        search_date = st.date_input("조회 기준일", today_kst) # 이제 아침에도 28일로 뜹니다!
+        search_date = st.date_input("조회 기준일", today_kst_date)
         search_str = search_date.strftime("%Y-%m-%d")
         yest_str = (search_date - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     
