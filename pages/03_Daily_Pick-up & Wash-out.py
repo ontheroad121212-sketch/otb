@@ -16,7 +16,7 @@ st.set_page_config(page_title="Daily Pick-up & Wash-out", layout="wide")
 if 'lang' not in st.session_state:
     st.session_state.lang = 'ko'
 
-# URL 파라미터가 보이면 즉시 세션 금고를 업데이트 (로직 보강)
+# URL 파라미터 감지 및 세션 업데이트
 try:
     url_params = st.query_params
     if url_params.get("lang") == "zh":
@@ -84,7 +84,7 @@ LANG_DICT = {
     "조식 포함 여부 비중(RN)": "含早/不含早占比 (Breakfast Ratio)",
     "조식 상세 코드 비중": "含早代码明细 (Breakfast Code Detail)",
     
-    # 탭 메뉴 (여기가 안 바뀐다고 하셔서 추가)
+    # [탭 메뉴 번역 추가]
     "📊 세그먼트": "📊 市场细分 (Segment)",
     "📅 Pacing": "📅 预订进度 (Pacing)",
     "🏢 거래처": "🏢 代理商/客户 (Account)",
@@ -94,7 +94,7 @@ LANG_DICT = {
     "🌐 국적": "🌐 国籍 (Nationality)",
     "🍳 조식": "🍳 早餐 (Breakfast)",
     
-    # 거래처명 및 데이터 (화면 캡처 내용 반영)
+    # [거래처명 데이터 번역 추가]
     "네이버": "Naver",
     "아고다": "Agoda",
     "부킹닷컴": "Booking.com",
