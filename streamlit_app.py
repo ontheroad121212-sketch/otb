@@ -9,17 +9,17 @@ import textwrap
 import secret_forecasting  # 포캐스팅 모듈 임포트
 
 # ==============================================================================
-# [1] 페이지 기본 설정 및 CSS 스타일링
+# [1] 페이지 기본 설정 및 다국어(중국어) 로직
 # ==============================================================================
+
 # 1. 기본 설정 (가장 최상단 유지)
-# [1] 설정
 st.set_page_config(layout="wide", page_title="ARI Management", initial_sidebar_state="expanded")
 
-# [2] 언어 세션 초기화 (없을 때만 ko)
+# 2. 언어 세션 초기화 (없을 때만 ko)
 if 'lang' not in st.session_state:
     st.session_state.lang = 'ko'
 
-# [3] URL 파라미터 감지 및 세션 고정
+# 3. URL 파라미터 감지 및 세션 고정
 # URL에 ?lang=zh가 있으면 무조건 세션 금고를 업데이트합니다.
 params = st.query_params
 if "lang" in params:
@@ -28,9 +28,73 @@ if "lang" in params:
     elif params["lang"] == "ko":
         st.session_state.lang = "ko"
 
-# [4] 최종 모드 결정 (URL이 아니라 '세션'을 바라봄)
+# 4. 최종 모드 결정 (URL이 아니라 '세션'을 바라봄)
 is_chairman_mode = (st.session_state.lang == "zh")
 
+# [번역 사전] 회장님 모드일 때만 사용되는 중국어 매핑
+LANG_DICT = {
+    # 사이드바 & 공통
+    "⚙️ Settings": "⚙️ 设置 (Settings)",
+    "기준 일자": "基准日期 (Report Date)",
+    "비교 일자": "对比日期 (Compare Date)",
+    "Admin Key": "管理员密钥 (Admin Key)",
+    "✅ Admin Mode On": "✅ 管理员模式已开启 (Admin Mode On)",
+    "Navigation": "导航 (Navigation)",
+    "Main Report": "主要报告 (Main Report)",
+    "🎯 Forecasting": "🎯 预测 (Forecasting)",
+    "⏳ 과거 패턴 분석이 필요합니다.": "⏳ 需要分析历史模式。",
+    "📊 4만건 히스토리 전체 분석 시작": "📊 开始全量历史数据分析",
+    "데이터 고속 도로 개통 중...": "正在建立数据通道...",
+    "파이어베이스 서버에 접속 중...": "正在连接 Firebase 服务器...",
+    "'hotel_bookings' 데이터를 수색합니다...": "正在搜索 'hotel_bookings' 数据...",
+    "데이터를 업로드하거나 조회하세요.": "请上传或查询数据。",
+    
+    # 메인 리포트
+    "🏨 Daily Pace Report": "🏨 每日进度报告 (Daily Pace Report)",
+    "엑셀 업로드": "上传 Excel (Upload)",
+    "월": "月",
+    "Performance Summary": "绩效摘要 (Performance Summary)",
+    "Budget": "预算 (Budget)",
+    "Actual": "实际 (Actual)",
+    "Variance": "差异 (Variance)",
+    
+    # 테이블 헤더 & 지표
+    "Segment": "细分 (Segment)",
+    "RMS": "房晚 (RMS)",
+    "ADR": "房价 (ADR)",
+    "REV": "收入 (REV)",
+    "OCC": "出租率 (OCC)",
+    "ACHIEVEMENT": "达成率 (ACHIEVEMENT)",
+    "FIT": "散客 (FIT)",
+    "GROUP": "团队 (GROUP)",
+    "TOTAL": "总计 (TOTAL)",
+    
+    # 상세 테이블 (Date, Pre, Today, Var)
+    "Date": "日期",
+    "Day": "星期",
+    "Pre": "前日",
+    "Today": "今日",
+    "Var": "变化",
+    
+    # 메시지
+    "월 데이터 DB 저장": "月数据存入数据库",
+    "월 데이터가 안전하게 저장되었습니다.": "月数据已安全保存。",
+    "데이터 없음": "无数据"
+}
+
+def T(text):
+    """회장님 모드(zh)일 때만 번역, 아니면 원문 반환"""
+    if is_chairman_mode:
+        # 1. 완전 일치 검색
+        if text in LANG_DICT:
+            return LANG_DICT[text]
+        # 2. 부분 일치 검색 (f-string 등)
+        for k, v in LANG_DICT.items():
+            if k in str(text):
+                return str(text).replace(k, v)
+    return text
+
+# CSS 스타일링
 st.markdown(textwrap.dedent("""
 <style>
     .block-container { padding-top: 0.5rem; padding-bottom: 2rem; }
@@ -96,10 +160,9 @@ BUDGET_DATA = {1:514992575, 2:786570856, 3:529599040, 4:695351004, 5:903705440, 
 def load_all_historical_data():
     """hotel_bookings 컬렉션에서 4만 건의 예약 데이터를 직접 분석"""
     db = firestore.client()
-    st.write("📡 hotel_bookings 데이터베이스 연결 중...")
+    st.write(T("파이어베이스 서버에 접속 중..."))
     
     # 1. 4만 건을 한꺼번에 가져오기 위한 스트림 설정
-    # (주의: 데이터가 너무 많으면 시간이 걸리므로 덩어리로 끊어서 로드하는 것이 안전함)
     docs = db.collection("hotel_bookings").stream()
     
     data = []
@@ -109,33 +172,27 @@ def load_all_historical_data():
     for doc in docs:
         data.append(doc.to_dict())
         count += 1
-        # 2,000건마다 진행 상황 표시 (지배인님이 답답하지 않게!)
         if count % 2000 == 0:
-            status_text.write(f"📂 {count:,}건 읽어오는 중... 조금만 기다려주세요!")
+            status_text.write(T("현재 {count:,}건 로드 중...").format(count=count))
             
     if not data:
         return {}, 0
     
     df = pd.DataFrame(data)
-    st.write(f"✅ 총 {len(df):,}건 로드 완료! 지표 가공 시작...")
+    st.write(T("총 {count:,}건 수신 완료! 지표 계산 시작...").format(count=len(df)))
 
     # 2. 예약 생성일(booking_date 등) 필드 자동 매칭
-    # 호텔 시스템마다 필드명이 다를 수 있으니 유연하게 대처합니다.
     bd_col = next((c for c in df.columns if c.lower() in ['booking_date', 'created_at', 'reservation_date', 'date']), None)
     
     if bd_col:
-        # 날짜 형식으로 변환
         df['b_date'] = pd.to_datetime(df[bd_col], errors='coerce')
         df = df.dropna(subset=['b_date'])
-        
-        # 요일 추출 (0:월, 6:일)
         df['dow'] = df['b_date'].dt.dayofweek
         
-        # [핵심] 요일별 예약 비중 지수화 (4만 건의 평균을 1.0으로 둠)
-        # 예: 일요일 예약이 평소보다 1.2배 많다면 지수는 1.2
+        # 요일별 예약 비중 지수화
         dow_indices = (df['dow'].value_counts(normalize=True) * 7).to_dict()
     else:
-        st.error("날짜 필드(booking_date)를 찾을 수 없습니다. 필드명을 확인해주세요.")
+        st.error(T("필드를 찾지 못했습니다."))
         dow_indices = {i: 1.0 for i in range(7)}
 
     # 3. 추가 통계 (재방문율 등)
@@ -197,36 +254,33 @@ def save_data_with_sob(date_str, month, df, sob):
     except: return False
 
 # ==============================================================================
-# [3] 메인 화면 UI 및 사이드바 (지배인님 데이터 필드 맞춤형 최종본)
+# [3] 메인 화면 UI 및 사이드바
 # ==============================================================================
-st.sidebar.header("⚙️ Settings")
-report_date = st.sidebar.date_input("기준 일자", datetime.now())
-compare_date = st.sidebar.date_input("비교 일자", report_date - timedelta(days=1))
-admin_key = st.sidebar.text_input("Admin Key", type="password")
+st.sidebar.header(T("⚙️ Settings"))
+report_date = st.sidebar.date_input(T("기준 일자"), datetime.now())
+compare_date = st.sidebar.date_input(T("비교 일자"), report_date - timedelta(days=1))
+admin_key = st.sidebar.text_input(T("Admin Key"), type="password")
 
 if admin_key == "master136":
     st.session_state["authenticated"] = True
 
 selected_page = "Main Report"
 if st.session_state.get("authenticated"):
-    st.sidebar.success("✅ Admin Mode On")
-    selected_page = st.sidebar.radio("Navigation", ["Main Report", "🎯 Forecasting"])
+    st.sidebar.success(T("✅ Admin Mode On"))
+    selected_page = st.sidebar.radio(T("Navigation"), ["Main Report", "🎯 Forecasting"])
     
     st.sidebar.markdown("---")
     
-    # 과거 패턴 데이터가 없을 때만 분석 UI 표시
     if "historical_dow" not in st.session_state:
-        st.sidebar.warning("⏳ 과거 패턴 분석이 필요합니다.")
+        st.sidebar.warning(T("⏳ 과거 패턴 분석이 필요합니다."))
         
-        if st.sidebar.button("📊 4만건 히스토리 전체 분석 시작"):
-            with st.sidebar.status("데이터 고속 도로 개통 중...", expanded=True) as status:
+        if st.sidebar.button(T("📊 4만건 히스토리 전체 분석 시작")):
+            with st.sidebar.status(T("데이터 고속 도로 개통 중..."), expanded=True) as status:
                 try:
-                    st.write("📡 파이어베이스 서버에 접속 중...")
+                    st.write(T("파이어베이스 서버에 접속 중..."))
                     db = firestore.client()
                     
-                    # 1. 데이터 수집 (확인된 컬렉션명: hotel_bookings)
-                    # 만약 DB 이름이 hotel_bookings라면 아래 문구에서 s만 붙여주세요.
-                    st.write("🔎 'hotel_bookings' 데이터를 수색합니다...")
+                    st.write(T("'hotel_bookings' 데이터를 수색합니다..."))
                     docs = db.collection_group("hotel_bookings").stream()
                     
                     hist_data = []
@@ -237,63 +291,56 @@ if st.session_state.get("authenticated"):
                         hist_data.append(doc.to_dict())
                         count += 1
                         if count % 2000 == 0:
-                            status_placeholder.write(f"📥 현재 {count:,}건 로드 중...")
+                            status_placeholder.write(T("현재 {count:,}건 로드 중...").format(count=count))
                     
-                    # 2. 지배인님 데이터 맞춤형 지표 계산
                     if count > 0:
-                        st.write(f"✅ 총 {count:,}건 수신 완료! 지표 계산 시작...")
+                        st.write(T("총 {count:,}건 수신 완료! 지표 계산 시작...").format(count=count))
                         h_df = pd.DataFrame(hist_data)
                         
-                        # [핵심] 한글 필드 '예약일자'를 찾아 날짜로 변환
                         target_date_col = '예약일자' 
                         if target_date_col in h_df.columns:
-                            st.write(f"📈 '{target_date_col}' 필드 분석 중...")
+                            st.write(f"📈 '{target_date_col}' {T('필드 분석 중...')}")
                             h_df['b_date'] = pd.to_datetime(h_df[target_date_col], errors='coerce')
                             h_df = h_df.dropna(subset=['b_date'])
                             h_df['dow'] = h_df['b_date'].dt.dayofweek
                             
-                            # 요일 지수 세션 저장 (미래 예측의 핵심 엔진)
                             st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
                             
-                            # 재방문율 계산 (확인된 필드: '휴대폰')
                             if '휴대폰' in h_df.columns:
                                 st.session_state["repeat_rate"] = (h_df['휴대폰'].value_counts() > 1).mean() * 100
                             
-                            status.update(label=f"✅ {count:,}건 분석 완료!", state="complete")
-                            st.sidebar.success(f"📊 {count:,}건의 패턴이 반영되었습니다.")
+                            status.update(label=T("✅ {count:,}건 분석 완료!").format(count=count), state="complete")
+                            st.sidebar.success(T("📊 {count:,}건의 패턴이 반영되었습니다.").format(count=count))
                             
-                            # 결과 반영을 위해 즉시 앱 재실행
                             st.rerun()
                         else:
-                            # 필드를 못 찾았을 때를 위한 디버깅용 정보 출력
-                            st.error(f"❌ '{target_date_col}' 필드를 찾지 못했습니다.")
-                            st.write("실제 데이터 필드명:", h_df.columns.tolist())
+                            st.error(T("필드를 찾지 못했습니다."))
+                            st.write(T("실제 데이터 필드명:"), h_df.columns.tolist())
                     else:
-                        st.error("⚠️ 데이터를 수집하지 못했습니다. 컬렉션명을 확인해주세요.")
+                        st.error(T("데이터를 수집하지 못했습니다. 컬렉션명을 확인해주세요."))
 
                 except Exception as e:
-                    st.error(f"❌ 연결 실패 원인: {str(e)}")
-                    st.info("💡 팁: 서비스 계정 권한 또는 네트워크를 확인하세요.")
+                    st.error(f"❌ {T('연결 실패 원인')}: {str(e)}")
+                    st.info("💡 Tip: Check service account permissions.")
     else:
-        # 분석이 완료된 상태
-        st.sidebar.success("✅ 과거 패턴 분석 완료")
-        # 요일 지수가 잘 들어갔는지 시각적 피드백 (선택사항)
+        st.sidebar.success(T("✅ 과거 패턴 분석 완료"))
         if "historical_dow" in st.session_state:
-            st.sidebar.info("📅 요일별 가중치 적용 중")
+            st.sidebar.info(T("📅 요일별 가중치 적용 중"))
             
-        if st.sidebar.button("🔄 데이터 다시 분석"):
+        if st.sidebar.button(T("🔄 데이터 다시 분석")):
             if "historical_dow" in st.session_state:
                 del st.session_state["historical_dow"]
             st.rerun()
 
-if selected_page == "🎯 Forecasting":
+if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting"):
+    # Forecasting 모듈 실행 시에도 T 함수 적용 가능하도록 로직 필요할 수 있음
     secret_forecasting.run_forecasting()
     st.stop()
 
-st.title("🏨 Daily Pace Report")
-uploaded_files = st.file_uploader("엑셀 업로드", accept_multiple_files=True, type=['xlsx'])
+st.title(T("🏨 Daily Pace Report"))
+uploaded_files = st.file_uploader(T("엑셀 업로드"), accept_multiple_files=True, type=['xlsx'])
 
-tabs = st.tabs([f"{i}월" for i in range(1, 13)])
+tabs = st.tabs([f"{i}{T('월')}" for i in range(1, 13)])
 month_files_map = {i: [] for i in range(1, 13)}
 if uploaded_files:
     for f in uploaded_files:
@@ -301,7 +348,7 @@ if uploaded_files:
         if m: month_files_map[m].append({'name': f.name, 'data': df, 'sob': sob})
 
 # ==============================================================================
-# [4] 탭별 데이터 렌더링 (메인 로직)
+# [4] 탭별 데이터 렌더링
 # ==============================================================================
 for i, tab in enumerate(tabs):
     cur_m = i + 1
@@ -321,67 +368,59 @@ for i, tab in enumerate(tabs):
             if df_curr is not None: df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
 
         if df_curr is None:
-            st.info(f"{cur_m}월 데이터를 업로드하거나 조회하세요.")
+            st.info(f"{cur_m}{T('월')} {T('데이터를 업로드하거나 조회하세요.')}")
             continue
 
-        # S.O.B 대시보드 계산 및 출력
+        # S.O.B 대시보드
         budget = BUDGET_DATA.get(cur_m, 0)
         total_rev = sob_curr['FIT_REV'] + sob_curr['GRP_REV']
         total_rms = sob_curr['FIT_RMS'] + sob_curr['GRP_RMS']
         
-        # HTML S.O.B 대시보드 렌더링
         st.markdown(f"""
         <div class="sob-container">
-            <div class="sob-header">📊 {cur_m}월 Performance Summary</div>
+            <div class="sob-header">📊 {cur_m}{T('월')} {T('Performance Summary')}</div>
             <div class="sob-grid">
                 <div>
                     <table class="modern-table">
-                        <tr><td class="label">Budget</td><td>{budget:,.0f}</td></tr>
-                        <tr><td class="label">Actual</td><td style="font-weight:bold;">{total_rev:,.0f}</td></tr>
-                        <tr><td class="label">Variance</td><td style="color:{'green' if total_rev>=budget else 'red'}">{total_rev-budget:+,.0f}</td></tr>
+                        <tr><td class="label">{T('Budget')}</td><td>{budget:,.0f}</td></tr>
+                        <tr><td class="label">{T('Actual')}</td><td style="font-weight:bold;">{total_rev:,.0f}</td></tr>
+                        <tr><td class="label">{T('Variance')}</td><td style="color:{'green' if total_rev>=budget else 'red'}">{total_rev-budget:+,.0f}</td></tr>
                     </table>
                     <div class="kpi-wrapper">
-                        <div class="kpi-card"><div class="kpi-title">OCC</div><div class="kpi-value">{sob_curr['TOTAL_OCC']:.1f}%</div></div>
-                        <div class="kpi-card kpi-accent"><div class="kpi-title">ACHIEVEMENT</div><div class="kpi-value">{(total_rev/budget*100):.1f}%</div></div>
+                        <div class="kpi-card"><div class="kpi-title">{T('OCC')}</div><div class="kpi-value">{sob_curr['TOTAL_OCC']:.1f}%</div></div>
+                        <div class="kpi-card kpi-accent"><div class="kpi-title">{T('ACHIEVEMENT')}</div><div class="kpi-value">{(total_rev/budget*100):.1f}%</div></div>
                     </div>
                 </div>
                 <div>
                     <table class="modern-table">
-                        <thead><tr><th>Segment</th><th>RMS</th><th>ADR</th><th>REV</th></tr></thead>
-                        <tr><td class="label">FIT</td><td>{sob_curr['FIT_RMS']:,.0f}</td><td>{(sob_curr['FIT_REV']/max(1,sob_curr['FIT_RMS'])):,.0f}</td><td>{sob_curr['FIT_REV']:,.0f}</td></tr>
-                        <tr><td class="label">GROUP</td><td>{sob_curr['GRP_RMS']:,.0f}</td><td>{(sob_curr['GRP_REV']/max(1,sob_curr['GRP_RMS'])):,.0f}</td><td>{sob_curr['GRP_REV']:,.0f}</td></tr>
-                        <tr style="background:#eff6ff; font-weight:bold;"><td>TOTAL</td><td>{total_rms:,.0f}</td><td>{(total_rev/max(1,total_rms)):,.0f}</td><td>{total_rev:,.0f}</td></tr>
+                        <thead><tr><th>{T('Segment')}</th><th>{T('RMS')}</th><th>{T('ADR')}</th><th>{T('REV')}</th></tr></thead>
+                        <tr><td class="label">{T('FIT')}</td><td>{sob_curr['FIT_RMS']:,.0f}</td><td>{(sob_curr['FIT_REV']/max(1,sob_curr['FIT_RMS'])):,.0f}</td><td>{sob_curr['FIT_REV']:,.0f}</td></tr>
+                        <tr><td class="label">{T('GROUP')}</td><td>{sob_curr['GRP_RMS']:,.0f}</td><td>{(sob_curr['GRP_REV']/max(1,sob_curr['GRP_RMS'])):,.0f}</td><td>{sob_curr['GRP_REV']:,.0f}</td></tr>
+                        <tr style="background:#eff6ff; font-weight:bold;"><td>{T('TOTAL')}</td><td>{total_rms:,.0f}</td><td>{(total_rev/max(1,total_rms)):,.0f}</td><td>{total_rev:,.0f}</td></tr>
                     </table>
                 </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-# ----------------------------------------------------------------------
-        # [B] 상세 리포트 데이터 병합 (어제 vs 오늘)
-        # ----------------------------------------------------------------------
+        # 상세 리포트 병합
         merged = df_curr.copy()
         if df_prev is not None:
             df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
             merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
         else:
-            # 비교 데이터가 없을 경우 현재 데이터를 기본값으로 설정
             for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
                 merged[f'{c}_prev'] = merged[c]
 
-        # 변화량(PickUp) 계산
         for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
             merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
 
-        # 합계(TOTAL) 행 추가 계산
         sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
         totals = merged[sum_items].sum()
         
-        # 비율 지표 가중평균 재계산 (TOTAL 행용)
         def get_total_rates(prefix_rms, prefix_rev, is_curr=True):
             s_rms = totals[prefix_rms]
             s_rev = totals[prefix_rev]
-            # 전체 가용객실수 역산 (RMS / (OCC/100))
             if is_curr:
                 avail = (merged['RMS'] / (merged['OCC'].replace(0, np.nan) / 100)).fillna(0).sum()
             else:
@@ -406,48 +445,37 @@ for i, tab in enumerate(tabs):
         
         merged = pd.concat([merged, total_row], ignore_index=True)
 
-        # ----------------------------------------------------------------------
-        # [C] Forecasting 연동 데이터 저장
-        # ----------------------------------------------------------------------
         st.session_state[f"sob_{cur_m}"] = sob_curr
-        # 실시간 픽업량(17박 등)을 세션에 전달
         st.session_state[f"pace_{cur_m}"] = totals['Pick_RMS']
 
-        # ----------------------------------------------------------------------
-        # [D] 테이블 스타일링 (히트맵/색상 로직 복구)
-        # ----------------------------------------------------------------------
         final_df = merged[['DateStr', 'WeekDay', 
                            'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
                            'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
                            'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_OCC', 'Pick_ADR', 'Pick_RevPAR', 'Pick_REV']]
 
-        # 헤더 이름 변경 (줄바꿈 포함)
-        col_map = {'DateStr':'Date', 'WeekDay':'Day'}
+        # 헤더 이름 변경 (T 적용)
+        col_map = {'DateStr': T('Date'), 'WeekDay': T('Day')}
         items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
         for it in items:
-            col_map[f'{it}_prev'] = f'Pre\n{it}'
-            col_map[it] = f'Today\n{it}'
-            col_map[f'Pick_{it}'] = f'Var\n{it}'
+            col_map[f'{it}_prev'] = f'{T("Pre")}\n{T(it)}'
+            col_map[it] = f'{T("Today")}\n{T(it)}'
+            col_map[f'Pick_{it}'] = f'{T("Var")}\n{T(it)}'
         final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
-        # 숫자 포맷 설정
-        fmt = {c: '{:,.0f}' for c in final_df.columns if 'OCC' not in c and 'Date' not in c and 'Day' not in c}
+        fmt = {c: '{:,.0f}' for c in final_df.columns if 'OCC' not in c and T('Date') not in c and T('Day') not in c}
         for c in [c for c in final_df.columns if 'OCC' in c]: fmt[c] = '{:.1f}%'
 
         styler = final_df.style.format(fmt)
 
-        # 1. Pre(어제) 그룹 - 회색 파스텔 스타일
-        pre_cols = [c for c in final_df.columns if 'Pre' in c]
+        pre_cols = [c for c in final_df.columns if T('Pre') in c]
         styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#9ca3af'})
 
-        # 2. Today(오늘) 그룹 - 블루/오렌지 히트맵
-        curr_cols = [c for c in final_df.columns if 'Today' in c]
-        data_idx = final_df.index[:-1] # TOTAL 제외
+        curr_cols = [c for c in final_df.columns if T('Today') in c]
+        data_idx = final_df.index[:-1] 
         styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.6)
         styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.7)
 
-        # 3. Var(변화) 그룹 - 색상 텍스트 (양수 초록 / 음수 빨강)
-        var_cols = [c for c in final_df.columns if 'Var' in c]
+        var_cols = [c for c in final_df.columns if T('Var') in c]
         def color_pick(val):
             try:
                 v = float(str(val).replace('%','').replace(',',''))
@@ -456,14 +484,11 @@ for i, tab in enumerate(tabs):
         styler = styler.map(color_pick, subset=var_cols)
         styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
 
-        # 4. TOTAL 행 하이라이트
         styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
-                                      **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
+                                       **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
 
-        # 출력
         st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
-        # 저장 버튼
-        if uploaded_files and st.button(f"💾 {cur_m}월 데이터 DB 저장", key=f"btn_{cur_m}"):
+        if uploaded_files and st.button(f"💾 {cur_m}{T('월 데이터 DB 저장')}", key=f"btn_{cur_m}"):
             if save_data_with_sob(report_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr):
-                st.toast(f"✅ {cur_m}월 데이터가 안전하게 저장되었습니다.")
+                st.toast(f"✅ {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
