@@ -4,6 +4,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import datetime
 import re
+import pytz # 코드 맨 윗줄에 추가 (설치 필요 시: pip install pytz)
 
 # --------------------------------------------------------------------------
 # 1. 기본 설정 및 DB 연결
@@ -168,12 +169,18 @@ with tab_upload:
                     df = merge_files(files_today)
                     if df is not None:
                         df_save = df.fillna(0)
-                        today_str = datetime.date.today().strftime("%Y-%m-%d")
+                        
+                        # [핀셋 수정] 한국 시간 기준으로 날짜 강제 고정 (시차 해결)
+                        KST = pytz.timezone('Asia/Seoul')
+                        now_kst = datetime.datetime.now(KST)
+                        today_str = now_kst.strftime("%Y-%m-%d") # 2026-01-28 정상 생성됨
+                        
                         # DB 저장
                         db.collection("daily_sales_snapshot").document(today_str).set({
-                            "data": df_save.to_dict(), "created_at": datetime.datetime.now()
+                            "data": df_save.to_dict(), "created_at": now_kst
                         })
-                        st.success(f"✅ {today_str} 저장 완료! (DB에 안전하게 보관됨)")
+                        st.success(f"✅ 한국 시간 {today_str} 기준으로 저장되었습니다! (DB에 안전하게 보관됨)")
+                        st.cache_data.clear() # 캐시 초기화
                 else:
                     st.warning("파일을 먼저 선택해주세요.")
             else:
