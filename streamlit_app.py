@@ -107,7 +107,10 @@ LANG_DICT = {
     "현재": "当前",
     "건 로드 중...": "条正在加载...",
     "총": "总计",
-    "건 수신 완료! 지표 계산 시작...": "条接收完成！开始计算指标..."
+    "건 수신 완료! 지표 계산 시작...": "条接收完成！开始计算指标...",
+    
+    # [추가] 핀셋 조정용 번역
+    "저장할 기준 일자 선택": "选择保存日期 (Select Save Date)"
 }
 
 def T(text):
@@ -299,8 +302,25 @@ if is_chairman_mode:
 
 # 이하 기존 사이드바 로직 유지
 st.sidebar.header(T("⚙️ Settings"))
-report_date = st.sidebar.date_input(T("기준 일자"), datetime.now())
-compare_date = st.sidebar.date_input(T("비교 일자"), report_date - timedelta(days=1))
+
+# [핀셋 수정] 한국 시간(KST) 기준 어제 날짜 계산 (서버 시간 오차 보정)
+now_kst = datetime.now() + timedelta(hours=9)
+yesterday = now_kst.date() - timedelta(days=1)
+
+# [핀셋 수정] 기준 일자: 기본값 어제, 최대 선택 가능 어제
+report_date = st.sidebar.date_input(
+    T("기준 일자"), 
+    value=yesterday, 
+    max_value=yesterday
+)
+
+# [핀셋 수정] 비교 일자: 기본값 어제-1일, 최대 선택 가능 어제
+compare_date = st.sidebar.date_input(
+    T("비교 일자"), 
+    value=report_date - timedelta(days=1),
+    max_value=yesterday
+)
+
 admin_key = st.sidebar.text_input(T("Admin Key"), type="password")
 
 if admin_key == "master136":
@@ -534,12 +554,22 @@ for i, tab in enumerate(tabs):
 
         # 4. TOTAL 행 하이라이트
         styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
-                                       **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
+                                     **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
 
         # 출력
         st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
-        # 저장 버튼
-        if uploaded_files and st.button(f"💾 {cur_m}{T('월 데이터 DB 저장')}", key=f"btn_{cur_m}"):
-            if save_data_with_sob(report_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr):
-                st.toast(f"✅ {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
+        # [핀셋 수정] 저장 버튼 로직: 업로드 파일이 있는 경우에만 날짜 선택 및 저장 버튼 노출
+        if uploaded_files:
+            st.divider()
+            # 저장할 날짜 선택 (기본값은 사이드바 기준일자)
+            save_date = st.date_input(
+                T("저장할 기준 일자 선택"), 
+                value=report_date, 
+                key=f"save_date_{cur_m}"
+            )
+            
+            if st.button(f"💾 {save_date} / {cur_m}{T('월 데이터 DB 저장')}", key=f"btn_{cur_m}"):
+                # 선택된 save_date를 사용하여 데이터 저장
+                if save_data_with_sob(save_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr):
+                    st.toast(f"✅ {save_date} : {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
