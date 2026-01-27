@@ -12,28 +12,32 @@ import secret_forecasting  # 포캐스팅 모듈 임포트
 # [1] 페이지 기본 설정 및 다국어(중국어) 세션 고정 로직
 # ==============================================================================
 
-# [1] 가장 최상단 설정 (기존 것 교체)
-st.set_page_config(layout="wide", page_title="ARI Management", initial_sidebar_state="expanded")
+# [1] 설정
+st.set_page_config(layout="wide", page_title="ARI Management")
 
-# [2] 강력한 언어 자물쇠 로직 (이 순서가 생명입니다)
-# URL 파라미터를 먼저 읽습니다.
-url_params = st.query_params
+# [2] 에러 방지용 언어 로직
+if 'lang' not in st.session_state:
+    st.session_state['lang'] = 'ko'
 
-# 만약 URL에 lang=zh가 찍혀있다면 세션에 무조건 강제로 박아넣습니다.
-if url_params.get("lang") == "zh":
-    st.session_state["lang"] = "zh"
-elif url_params.get("lang") == "ko":
-    st.session_state["lang"] = "ko"
+# URL 파라미터 강제 추출 (에러가 나도 무시하고 진행)
+try:
+    # 최신 방식 시도
+    u_params = st.query_params
+    if u_params.get("lang") == "zh":
+        st.session_state['lang'] = 'zh'
+    elif u_params.get("lang") == "ko":
+        st.session_state['lang'] = 'ko'
+except Exception:
+    pass
 
-# 세션에 값이 아예 없을 때만 기본값 'ko'를 줍니다.
-if "lang" not in st.session_state:
-    st.session_state["lang"] = "ko"
+# 최종 결정
+is_chairman_mode = (st.session_state.get('lang') == 'zh')
 
-# 화면을 그리는 기준은 '세션' 금고만 봅니다.
-is_chairman_mode = (st.session_state["lang"] == "zh")
-
-# [확인용 임시 코드] 배포 후 화면 맨 위에 이게 뜨는지 확인하세요.
-# st.write(f"접속 모드: {'중국어' if is_chairman_mode else '한국어'}")
+# [강제 출력 테스트] 화면 가장 위에 무조건 뜨게 함
+if is_chairman_mode:
+    st.error("현재 모드: 중국어 (ZH)")
+else:
+    st.info("현재 모드: 한국어 (KO)")
 
 # [번역 사전] 회장님 모드일 때만 사용되는 중국어 매핑 (대시보드 용어 완벽 포함)
 LANG_DICT = {
