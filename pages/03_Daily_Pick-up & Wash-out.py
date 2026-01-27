@@ -13,24 +13,26 @@ import textwrap
 # ==============================================================================
 # 1. 기본 설정 및 회장님 모드(중국어) 강력 유지 로직 (Session State)
 # ==============================================================================
-st.set_page_config(page_title="ARI Final Integrity", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Daily Pick-up & Wash-out", layout="wide")
 
-# [핵심] 세션 스테이트를 활용한 언어 설정 유지
+# 2. 언어 유지 핵심 로직 (이걸 넣어줘야 파라미터가 유지됩니다)
 if 'lang' not in st.session_state:
-    st.session_state.lang = 'ko' # 기본값 한국어
+    st.session_state.lang = 'ko'
 
-# URL 파라미터 확인 (접속 순간 감지)
+# URL에서 언어 설정 가져오기
 try:
-    query_params = st.query_params
-    url_lang = query_params.get("lang")
+    url_params = st.query_params
+    url_lang = url_params.get("lang")
 except:
     url_lang = st.experimental_get_query_params().get("lang", [""])[0]
 
-# URL에 zh가 있으면 세션 상태를 중국어로 고정
+# URL에 설정이 있으면 세션 업데이트, 없으면 기존 세션(금고) 값 유지
 if url_lang == 'zh':
     st.session_state.lang = 'zh'
+elif url_lang == 'ko':
+    st.session_state.lang = 'ko'
 
-# 회장님 모드 변수 설정 (이제 세션을 바라봄)
+# 현재 페이지의 모드 결정
 is_chairman_mode = (st.session_state.lang == 'zh')
 
 # [번역 사전]
