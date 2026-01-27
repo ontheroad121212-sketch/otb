@@ -60,15 +60,16 @@ def clean_num(val):
 def save_to_db(df, data_type='Reservation'):
     """데이터를 Snapshot_Date(예약일/취소일)별로 쪼개서 저장"""
     if df is None or df.empty:
-        st.warning("⚠️ 저장할 데이터가 없습니다. (파일 내용 확인 필요)")
+        st.warning("⚠️ 유효한 데이터가 없습니다. (파일 내용 확인 필요)")
         return False
     try:
+        # Snapshot_Date가 없으면 오늘 날짜로 대체 (데이터 살리기)
         if 'Snapshot_Date' not in df.columns: 
-            return False
+            df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
             
         dates = df['Snapshot_Date'].unique()
         for d in dates:
-            if pd.isna(d): continue # 날짜 없음 건너뜀
+            if pd.isna(d): continue 
 
             sub = df[df['Snapshot_Date'] == d].copy()
             if sub.empty: continue
@@ -146,7 +147,7 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (핀셋 수정: 날짜 변환 안전장치 강화)
+# 4. 파일 처리 로직 (핀셋 수정: 날짜 변환 오류 해결 & 데이터 살리기)
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
@@ -216,38 +217,45 @@ def process_res_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        # [필터링 1] 합계 텍스트 제거
+        # [필터링 1] 합계 텍스트가 있는 행 제거
         if 'Res_No' in df.columns:
-            df = df[~df['Res_No'].astype(str).str.contains('합계|총계|Total', case=False, na=False)]
+            df = df[~df['Res_No'].astype(str).str.contains('합계|총계|누계|Total|Subtotal', case=False, na=False)]
             df = df[df['Res_No'].astype(str).str.len() > 1]
 
-        # [필터링 2] 날짜 변환 및 유효성 검사 (오류 방지 핵심)
-        # 먼저 문자열로 변환 후 datetime 변환 시도
-        df['Booking_Date'] = pd.to_datetime(df['Booking_Date'].astype(str), errors='coerce')
+        # [수정] 2. 날짜 변환 (먼저 문자열로 변환)
         df['CheckIn'] = pd.to_datetime(df['CheckIn'].astype(str), errors='coerce')
         df['CheckOut'] = pd.to_datetime(df['CheckOut'].astype(str), errors='coerce')
+        df['Booking_Date'] = pd.to_datetime(df['Booking_Date'].astype(str), errors='coerce')
         
-        # 날짜가 NaT(Not a Time)인 행은 합계 줄로 간주하고 삭제
-        df = df.dropna(subset=['Booking_Date']) 
+        # [핵심] 체크인 날짜가 없으면 가차없이 삭제 (합계행 제거)
         df = df.dropna(subset=['CheckIn'])
+        
+        # 예약일이 없으면 체크인 날짜로 대체 (데이터 살리기)
+        df['Booking_Date'] = df['Booking_Date'].fillna(df['CheckIn'])
 
-        # [필터링 3] 숫자 변환
         df['Nights'] = df['Nights'].apply(clean_num)
         df['Rooms'] = df['Rooms'].apply(clean_num)
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        # [필터링 4] 비정상 매출(100억 이상) 제거 (합계 방지)
+        # [수정] 매출액 100억 이상인 행만 합계로 간주하고 제거 (MICE 살리기)
         df = df[df['Room_Revenue'] < 10000000000]
 
         df['Rooms'] = np.where(df['Rooms']<=0, 1, df['Rooms'])
         df['Nights'] = np.where(df['Nights']<=0, 1, df['Nights'])
         df['RN'] = df['Rooms'] * df['Nights']
-        df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
+        
+        # [수정] Lead Time 계산 안전장치 (에러 방지)
+        try:
+            df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
+        except:
+            df['Lead_Time'] = 0 # 에러나면 그냥 0
+
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # 날짜 포맷팅 (여기서 .dt 사용 시 오류 안 남)
+        # 예약일 기준 Snapshot
         df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d')
+        
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_Date'].dt.strftime('%Y-%m')
         df['Day_Type'] = df['CheckIn'].dt.weekday.apply(lambda x: 'Weekend' if x>=4 else 'Weekday')
@@ -314,32 +322,38 @@ def process_cancel_file(file):
 
         # [필터링 1] 합계 텍스트 제거
         if 'Res_No' in df.columns:
-            df = df[~df['Res_No'].astype(str).str.contains('합계|총계|Total', case=False, na=False)]
+            df = df[~df['Res_No'].astype(str).str.contains('합계|총계|누계|Total', case=False, na=False)]
             df = df[df['Res_No'].astype(str).str.len() > 1]
 
-        # [필터링 2] 날짜 변환 및 안전장치 (오류 발생 지점 수정)
+        # [필터링 2] 날짜 변환 (에러 방지)
         df['Cancel_Date'] = pd.to_datetime(df['Cancel_Date'].astype(str), errors='coerce')
         df['CheckIn'] = pd.to_datetime(df['CheckIn'].astype(str), errors='coerce')
+        df['Booking_Date'] = pd.to_datetime(df['Booking_Date'].astype(str), errors='coerce')
         
-        # [핵심] 취소일이 없으면(NaT) 삭제. (여기서 합계행이 걸러짐)
+        # [핵심] 취소일이 없으면 삭제 (합계행 제거)
         df = df.dropna(subset=['Cancel_Date'])
         
-        # [필터링 3] 숫자 변환
         df['Nights'] = df['Nights'].apply(clean_num)
         df['Rooms'] = df['Rooms'].apply(clean_num)
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        # [필터링 4] 비정상 매출 제거
+        # [수정] 100억 이상 매출만 제거
         df = df[df['Room_Revenue'] < 10000000000]
 
         df['Rooms'] = np.where(df['Rooms']<=0, 1, df['Rooms'])
         df['Nights'] = np.where(df['Nights']<=0, 1, df['Nights'])
         df['RN'] = df['Rooms'] * df['Nights']
-        df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
+        
+        # [수정] Lead Time 계산 안전장치 (타입 에러 방지)
+        try:
+            df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
+        except:
+            df['Lead_Time'] = 0
+
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # 이제 안전하게 .dt 사용 가능
+        # 취소일 기준 Snapshot
         df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d')
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
