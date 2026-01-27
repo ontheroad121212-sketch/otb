@@ -8,22 +8,34 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 
-# [1] 설정 (서브 페이지용)
+# ==============================================================================
+# [1] 설정 및 언어 세션 고정 (무한로딩 방지 & 파라미터 유지)
+# ==============================================================================
 st.set_page_config(page_title="Daily Pick-up & Wash-out", layout="wide")
 
-# [2] 메인에서 설정한 언어 금고 확인
 if 'lang' not in st.session_state:
     st.session_state.lang = 'ko'
 
-# [3] 핵심: URL 파라미터가 사라졌어도 세션에 저장된 'zh'를 강제로 사용
+# URL 파라미터가 보이면 즉시 세션 금고를 업데이트 (로직 보강)
+try:
+    url_params = st.query_params
+    if url_params.get("lang") == "zh":
+        st.session_state.lang = "zh"
+    elif url_params.get("lang") == "ko":
+        st.session_state.lang = "ko"
+except:
+    pass
+
 is_chairman_mode = (st.session_state.lang == "zh")
 
-# [4] 테스트용 (중국어 모드라면 화면에 표시됨)
 if is_chairman_mode:
     st.sidebar.success("Chairman Mode Active (ZH)")
 
-# [번역 사전]
+# ==============================================================================
+# [번역 사전] - 거래처명 및 탭 메뉴 등 상세 추가 완료
+# ==============================================================================
 LANG_DICT = {
+    # UI 및 보고서 제목
     "ARI Final Integrity": "ARI 最终数据完整性报告",
     "🏛️ 앰버 호텔 경영 리포트 (Final Integrity)": "🏛️ 琥珀酒店经营报告 (Amber Hotel Management Report)",
     "설정": "设置 (Settings)",
@@ -48,6 +60,8 @@ LANG_DICT = {
     "🎯 OTB 현황": "🎯 OTB 现状 (Pacing)",
     "✅ 예약 (Reservation List)": "✅ 预订 (Reservation List)",
     "❌ 취소 (Cancellation List)": "❌ 取消 (Cancellation List)",
+    
+    # 지표 및 컬럼
     "RN": "间夜量 (RN)",
     "객실료": "客房收入 (Room Rev)",
     "총매출": "总收入 (Total Rev)",
@@ -69,12 +83,46 @@ LANG_DICT = {
     "국적별 매출 실적": "分国籍收入表现 (Rev by Nation)",
     "조식 포함 여부 비중(RN)": "含早/不含早占比 (Breakfast Ratio)",
     "조식 상세 코드 비중": "含早代码明细 (Breakfast Code Detail)",
+    
+    # 탭 메뉴 (여기가 안 바뀐다고 하셔서 추가)
+    "📊 세그먼트": "📊 市场细分 (Segment)",
+    "📅 Pacing": "📅 预订进度 (Pacing)",
+    "🏢 거래처": "🏢 代理商/客户 (Account)",
+    "⏳ 리드타임": "⏳ 提前预订期 (Lead Time)",
+    "🛏️ 객실타입": "🛏️ 房型 (Room Type)",
+    "🗓️ 요일": "🗓️ 星期 (Day of Week)",
+    "🌐 국적": "🌐 国籍 (Nationality)",
+    "🍳 조식": "🍳 早餐 (Breakfast)",
+    
+    # 거래처명 및 데이터 (화면 캡처 내용 반영)
+    "네이버": "Naver",
+    "아고다": "Agoda",
+    "부킹닷컴": "Booking.com",
+    "야놀자": "Yanolja",
+    "여기어때": "Yeogi-Eottae",
+    "익스피디아": "Expedia",
+    "트립닷컴": "Trip.com",
+    "마이리얼트립": "MyRealTrip",
+    "가고파여행사": "Gagopa Travel",
+    "산하정보기술": "Sanha IT",
+    "마이스팀": "MICE Team",
+    "에어비앤비": "Airbnb",
+    "도매": "Wholesale",
+    "기업": "Corporate",
+    "여행사": "Travel Agency",
+    "OTA": "OTA",
+    
+    # 기타 메시지
     "데이터 없음": "无数据",
     "기간 미선택": "未选择期间",
     "⚠️ 저장할 데이터가 없습니다.": "⚠️ 没有可保存的数据。",
     "❌ 저장할 데이터가 0건입니다.": "❌ 保存的数据为 0 笔 (被过滤)",
     "✅ 데이터 {save_count}건 저장 완료!": "✅ 已成功保存 {save_count} 笔数据!",
-    "⚠️ 날짜 문제로 저장된 데이터가 없습니다.": "⚠️ 因日期格式问题，未保存任何数据。"
+    "⚠️ 날짜 문제로 저장된 데이터가 없습니다.": "⚠️ 因日期格式问题，未保存任何数据。",
+    "📊 예약 처리": "📊 预订处理",
+    "📊 취소 처리": "📊 取消处理",
+    "건": "笔",
+    "조식 포함 내역이 없습니다.": "无含早记录"
 }
 
 def T(text):
@@ -253,7 +301,6 @@ def process_res_file(file):
             return pd.DataFrame()
 
         # [수정] 1. 서비스코드 컬럼명 찾기 (한글 '서비스코드' -> 영어 'Service_Code' 매핑)
-        # 만약 컬럼명이 조금 다를 수도 있으니 동적으로 찾아서 바꿈
         for col in df.columns:
             if "서비스" in str(col) and "코드" in str(col):
                 df.rename(columns={col: 'Service_Code'}, inplace=True)
@@ -316,14 +363,12 @@ def process_res_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
-        # [핵심] 조식 판별 (Service_Code 컬럼이 존재하는지 확인 후 처리)
+        # [핵심] 조식 판별
         if 'Service_Code' in df.columns:
-            # 대문자 변환 후 BF 포함 여부 확인
             df['Breakfast'] = df['Service_Code'].fillna('').astype(str).str.upper().apply(
                 lambda x: 'Included' if 'BF' in x else 'Room Only'
             )
         else:
-            # 서비스코드가 없으면 무조건 Room Only
             df['Breakfast'] = 'Room Only'
 
         with st.sidebar:
@@ -339,7 +384,6 @@ def process_cancel_file(file):
             st.error("🚨 Header Error")
             return pd.DataFrame()
 
-        # [수정] 서비스코드 동적 매핑
         for col in df.columns:
             if "서비스" in str(col) and "코드" in str(col):
                 df.rename(columns={col: 'Service_Code'}, inplace=True)
@@ -353,7 +397,7 @@ def process_cancel_file(file):
             '거래처': 'Account', '세그먼트': 'Segment', '국적': 'Nat_Orig',
             '예약일자': 'Booking_Date', '예약일': 'Booking_Date',
             '취소일자': 'Cancel_Date', '취소일': 'Cancel_Date',
-            # '서비스코드': 'Service_Code' # 위에서 처리함
+            # '서비스코드': 'Service_Code'
         }
         df = df.rename(columns=col_map)
         
@@ -394,7 +438,6 @@ def process_cancel_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
-        # [핵심] 조식 판별 (취소 리스트도 동일 적용)
         if 'Service_Code' in df.columns:
             df['Breakfast'] = df['Service_Code'].fillna('').astype(str).str.upper().apply(
                 lambda x: 'Included' if 'BF' in x else 'Room Only'
@@ -444,12 +487,22 @@ def group_and_show(df, group_col):
     agg['ADR_Room'] = np.where(agg['RN']>0, agg['Room_Revenue']/agg['RN'], 0)
     agg['ADR_Total'] = np.where(agg['RN']>0, agg['Total_Revenue']/agg['RN'], 0)
     final_df = add_total_with_adr(agg, group_col)
+    
+    # [데이터 번역 적용] 회장님 모드일 때만, 그룹 컬럼의 값(예: 네이버, 아고다)을 번역
+    if is_chairman_mode:
+        final_df[group_col] = final_df[group_col].apply(lambda x: LANG_DICT.get(str(x), str(x)))
+        
     show_styled(final_df)
     return final_df
 
 def render_tab(df, k):
     if df.empty: st.info(T("데이터 없음")); return
-    t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([T("📊 세그먼트"), T("📅 Pacing"), T("🏢 거래처"), T("⏳ 리드타임"), T("🛏️ 객실타입"), T("🗓️ 요일"), T("🌐 국적"), T("🍳 조식")])
+    # 탭 이름 번역 적용
+    t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
+        T("📊 세그먼트"), T("📅 Pacing"), T("🏢 거래처"), 
+        T("⏳ 리드타임"), T("🛏️ 객실타입"), T("🗓️ 요일"), 
+        T("🌐 국적"), T("🍳 조식")
+    ])
     
     with t1:
         s = group_and_show(df, 'Segment')
