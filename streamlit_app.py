@@ -9,29 +9,36 @@ import textwrap
 import secret_forecasting  # 포캐스팅 모듈 임포트
 
 # ==============================================================================
-# [1] 페이지 기본 설정 및 다국어(중국어) 로직
+# [1] 페이지 기본 설정 및 다국어(중국어) 세션 고정 로직
 # ==============================================================================
 
 # 1. 기본 설정 (가장 최상단 유지)
-st.set_page_config(layout="wide", page_title="ARI Management", initial_sidebar_state="expanded")
+st.set_page_config(
+    layout="wide",
+    page_title="Daily Pace Report & Forecasting",
+    initial_sidebar_state="expanded"
+)
 
 # 2. 언어 세션 초기화 (없을 때만 ko)
 if 'lang' not in st.session_state:
     st.session_state.lang = 'ko'
 
-# 3. URL 파라미터 감지 및 세션 고정 (무한 루프 방지 보강됨)
+# 3. URL 파라미터 감지 및 세션 고정
+# URL에 ?lang=zh가 있으면 무조건 세션 금고를 업데이트합니다.
 try:
-    url_lang = st.query_params.get("lang")
-    # URL에 파라미터가 있고, 현재 세션과 다를 때만 업데이트 (rerun 방지)
-    if url_lang in ['zh', 'ko'] and url_lang != st.session_state.lang:
-        st.session_state.lang = url_lang
+    params = st.query_params
+    if "lang" in params:
+        if params["lang"] == "zh":
+            st.session_state.lang = "zh"
+        elif params["lang"] == "ko":
+            st.session_state.lang = "ko"
 except:
     pass
 
 # 4. 최종 모드 결정 (URL이 아니라 '세션'을 바라봄)
 is_chairman_mode = (st.session_state.lang == "zh")
 
-# [번역 사전] 회장님 모드일 때만 사용되는 중국어 매핑
+# [번역 사전] 회장님 모드일 때만 사용되는 중국어 매핑 (대시보드 용어 완벽 포함)
 LANG_DICT = {
     # 사이드바 & 공통
     "⚙️ Settings": "⚙️ 设置 (Settings)",
@@ -48,23 +55,35 @@ LANG_DICT = {
     "파이어베이스 서버에 접속 중...": "正在连接 Firebase 服务器...",
     "'hotel_bookings' 데이터를 수색합니다...": "正在搜索 'hotel_bookings' 数据...",
     "데이터를 업로드하거나 조회하세요.": "请上传或查询数据。",
+    "필드를 찾지 못했습니다.": "未找到字段。",
+    "실제 데이터 필드명:": "实际数据字段名:",
+    "연결 실패 원인": "连接失败原因",
+    "과거 패턴 분석 완료": "历史模式分析完成",
+    "요일별 가중치 적용 중": "正在应用星期权重",
+    "데이터 다시 분석": "重新分析数据",
+    "필드 분석 중...": "正在分析字段...",
+    "건 분석 완료!": "条数据分析完成!",
+    "건의 패턴이 반영되었습니다.": "条数据的模式已反映。",
     
     # 메인 리포트
     "🏨 Daily Pace Report": "🏨 每日进度报告 (Daily Pace Report)",
     "엑셀 업로드": "上传 Excel (Upload)",
     "월": "月",
+    "월 데이터를 업로드하거나 조회하세요.": "月 请上传或查询数据。",
+    
+    # [핵심] 대시보드 텍스트 (캡처 화면 대응)
     "Performance Summary": "绩效摘要 (Performance Summary)",
     "Budget": "预算 (Budget)",
     "Actual": "实际 (Actual)",
     "Variance": "差异 (Variance)",
+    "OCC": "出租率 (OCC)",
+    "ACHIEVEMENT": "达成率 (ACHIEVEMENT)",
     
     # 테이블 헤더 & 지표
     "Segment": "细分 (Segment)",
     "RMS": "房晚 (RMS)",
     "ADR": "房价 (ADR)",
     "REV": "收入 (REV)",
-    "OCC": "出租率 (OCC)",
-    "ACHIEVEMENT": "达成率 (ACHIEVEMENT)",
     "FIT": "散客 (FIT)",
     "GROUP": "团队 (GROUP)",
     "TOTAL": "总计 (TOTAL)",
@@ -79,7 +98,11 @@ LANG_DICT = {
     # 메시지
     "월 데이터 DB 저장": "月数据存入数据库",
     "월 데이터가 안전하게 저장되었습니다.": "月数据已安全保存。",
-    "데이터 없음": "无数据"
+    "데이터 없음": "无数据",
+    "현재": "当前",
+    "건 로드 중...": "条正在加载...",
+    "총": "总计",
+    "건 수신 완료! 지표 계산 시작...": "条接收完成！开始计算指标..."
 }
 
 def T(text):
@@ -264,10 +287,10 @@ admin_key = st.sidebar.text_input(T("Admin Key"), type="password")
 if admin_key == "master136":
     st.session_state["authenticated"] = True
 
-selected_page = "Main Report"
+selected_page = T("Main Report")
 if st.session_state.get("authenticated"):
     st.sidebar.success(T("✅ Admin Mode On"))
-    selected_page = st.sidebar.radio(T("Navigation"), ["Main Report", "🎯 Forecasting"])
+    selected_page = st.sidebar.radio(T("Navigation"), [T("Main Report"), T("🎯 Forecasting")])
     
     st.sidebar.markdown("---")
     
@@ -333,6 +356,7 @@ if st.session_state.get("authenticated"):
             st.rerun()
 
 if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting"):
+    # Forecasting 모듈 실행 시에도 T 함수 적용 가능하도록 로직 필요할 수 있음
     secret_forecasting.run_forecasting()
     st.stop()
 
@@ -347,7 +371,7 @@ if uploaded_files:
         if m: month_files_map[m].append({'name': f.name, 'data': df, 'sob': sob})
 
 # ==============================================================================
-# [4] 탭별 데이터 렌더링 (메인 로직)
+# [4] 탭별 데이터 렌더링 (T 함수 적용 핵심 구간)
 # ==============================================================================
 for i, tab in enumerate(tabs):
     cur_m = i + 1
@@ -375,7 +399,7 @@ for i, tab in enumerate(tabs):
         total_rev = sob_curr['FIT_REV'] + sob_curr['GRP_REV']
         total_rms = sob_curr['FIT_RMS'] + sob_curr['GRP_RMS']
         
-        # HTML S.O.B 대시보드 렌더링
+        # HTML S.O.B 대시보드 렌더링 (이 부분에 T() 함수가 빠져있어서 번역이 안됐던 겁니다!)
         st.markdown(f"""
         <div class="sob-container">
             <div class="sob-header">📊 {cur_m}{T('월')} {T('Performance Summary')}</div>
@@ -403,31 +427,24 @@ for i, tab in enumerate(tabs):
         </div>
         """, unsafe_allow_html=True)
 
-        # ----------------------------------------------------------------------
-        # [B] 상세 리포트 데이터 병합 (어제 vs 오늘)
-        # ----------------------------------------------------------------------
+        # 상세 리포트 병합
         merged = df_curr.copy()
         if df_prev is not None:
             df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
             merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
         else:
-            # 비교 데이터가 없을 경우 현재 데이터를 기본값으로 설정
             for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
                 merged[f'{c}_prev'] = merged[c]
 
-        # 변화량(PickUp) 계산
         for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
             merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
 
-        # 합계(TOTAL) 행 추가 계산
         sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
         totals = merged[sum_items].sum()
         
-        # 비율 지표 가중평균 재계산 (TOTAL 행용)
         def get_total_rates(prefix_rms, prefix_rev, is_curr=True):
             s_rms = totals[prefix_rms]
             s_rev = totals[prefix_rev]
-            # 전체 가용객실수 역산 (RMS / (OCC/100))
             if is_curr:
                 avail = (merged['RMS'] / (merged['OCC'].replace(0, np.nan) / 100)).fillna(0).sum()
             else:
@@ -452,16 +469,9 @@ for i, tab in enumerate(tabs):
         
         merged = pd.concat([merged, total_row], ignore_index=True)
 
-        # ----------------------------------------------------------------------
-        # [C] Forecasting 연동 데이터 저장
-        # ----------------------------------------------------------------------
         st.session_state[f"sob_{cur_m}"] = sob_curr
-        # 실시간 픽업량(17박 등)을 세션에 전달
         st.session_state[f"pace_{cur_m}"] = totals['Pick_RMS']
 
-        # ----------------------------------------------------------------------
-        # [D] 테이블 스타일링 (히트맵/색상 로직 복구)
-        # ----------------------------------------------------------------------
         final_df = merged[['DateStr', 'WeekDay', 
                            'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
                            'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
