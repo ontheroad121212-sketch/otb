@@ -39,7 +39,7 @@ if is_chairman_mode:
 else:
     st.info("현재 모드: 한국어 (KO)")
 
-# [번역 사전] 회장님 모드일 때만 사용되는 중국어 매핑 (대시보드 용어 완벽 포함)
+# [번역 사전] 회장님 모드일 때만 사용되는 중국어 매핑
 LANG_DICT = {
     # 사이드바 & 공통
     "⚙️ Settings": "⚙️ 设置 (Settings)",
@@ -66,13 +66,17 @@ LANG_DICT = {
     "건 분석 완료!": "条数据分析完成!",
     "건의 패턴이 반영되었습니다.": "条数据的模式已反映。",
     
+    # [메뉴 제어용 추가]
+    "메인 리포트": "主要报告 (Main)",
+    "데일리 픽업": "每日数据 (Daily Pick-up)",
+    
     # 메인 리포트
     "🏨 Daily Pace Report": "🏨 每日进度报告 (Daily Pace Report)",
     "엑셀 업로드": "上传 Excel (Upload)",
     "월": "月",
     "월 데이터를 업로드하거나 조회하세요.": "月 请上传或查询数据。",
     
-    # [핵심] 대시보드 텍스트 (캡처 화면 대응)
+    # [핵심] 대시보드 텍스트
     "Performance Summary": "绩效摘要 (Performance Summary)",
     "Budget": "预算 (Budget)",
     "Actual": "实际 (Actual)",
@@ -109,10 +113,8 @@ LANG_DICT = {
 def T(text):
     """회장님 모드(zh)일 때만 번역, 아니면 원문 반환"""
     if is_chairman_mode:
-        # 1. 완전 일치 검색
         if text in LANG_DICT:
             return LANG_DICT[text]
-        # 2. 부분 일치 검색 (f-string 등)
         for k, v in LANG_DICT.items():
             if k in str(text):
                 return str(text).replace(k, v)
@@ -278,8 +280,24 @@ def save_data_with_sob(date_str, month, df, sob):
     except: return False
 
 # ==============================================================================
-# [3] 메인 화면 UI 및 사이드바
+# [3] 메인 화면 UI 및 사이드바 (회장님 전용 메뉴 로직 포함)
 # ==============================================================================
+
+# [핵심] 회장님 모드일 때만 기본 메뉴 숨기고 전용 버튼 2개만 노출
+if is_chairman_mode:
+    # 1. 기존 메뉴 숨기기 CSS
+    st.markdown('<style>[data-testid="stSidebarNav"] {display: none;}</style>', unsafe_allow_html=True)
+    
+    # 2. 회장님 전용 네비게이션 직접 그리기
+    with st.sidebar:
+        st.title("Navigation")
+        # 메인 페이지로 이동 (현재 페이지)
+        st.page_link("streamlit_app.py", label=T("메인 리포트"), icon="🏠")
+        # 03번 페이지로 이동 (반드시 파일명이 정확해야 함)
+        st.page_link("pages/03_Daily_Pick-up & Wash-out.py", label=T("데일리 픽업"), icon="📅")
+        st.divider()
+
+# 이하 기존 사이드바 로직 유지
 st.sidebar.header(T("⚙️ Settings"))
 report_date = st.sidebar.date_input(T("기준 일자"), datetime.now())
 compare_date = st.sidebar.date_input(T("비교 일자"), report_date - timedelta(days=1))
@@ -291,6 +309,7 @@ if admin_key == "master136":
 selected_page = T("Main Report")
 if st.session_state.get("authenticated"):
     st.sidebar.success(T("✅ Admin Mode On"))
+    # 여기서 page_link를 쓰지 않고 기존 radio 방식을 쓰면, 회장님 모드가 아닐 때(else) 작동함
     selected_page = st.sidebar.radio(T("Navigation"), [T("Main Report"), T("🎯 Forecasting")])
     
     st.sidebar.markdown("---")
