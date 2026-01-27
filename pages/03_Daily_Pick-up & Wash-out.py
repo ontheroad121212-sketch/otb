@@ -63,9 +63,8 @@ def save_to_db(df, data_type='Reservation'):
         st.warning("⚠️ 저장할 데이터가 없습니다 (유효한 데이터가 0건입니다).")
         return False
     try:
-        # Snapshot_Date 컬럼이 없으면 생성 (있어야 정상)
         if 'Snapshot_Date' not in df.columns: 
-            return False # 날짜 없는 데이터는 저장 불가
+            return False
             
         dates = df['Snapshot_Date'].unique()
         for d in dates:
@@ -97,8 +96,7 @@ def save_to_db(df, data_type='Reservation'):
                         new_r[clean_k] = v
                 sanitized_recs.append(new_r)
             
-            # [핵심] 문서 ID = 날짜_타입 (덮어쓰기)
-            # 이렇게 하면 잘못 들어간 26일 데이터 위에 정상 데이터가 덮어씌워짐
+            # 문서 ID (Overwrite)
             did = f"{d}_{data_type}"
             
             db.collection(COLLECTION_NAME).document(did).set({
@@ -146,7 +144,7 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (핀셋 수정: 날짜 없는 행 절대 저장 금지)
+# 4. 파일 처리 로직 (핀셋 수정: 객실수 제한 해제 & 합계 텍스트 필터 강화)
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
@@ -215,15 +213,17 @@ def process_res_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        # [수정] 1. 예약번호 체크 (합계행 제거)
-        df = df[df['Res_No'].astype(str).str.len() > 2]
-        df = df[~df['Res_No'].astype(str).str.contains('합계|Total', case=False, na=False)]
+        # [핀셋 수정] 1. '합계' 텍스트 포함 행 제거 (MICE 100건은 살리고 합계만 죽임)
+        # 예약번호 컬럼에 '합계', 'Total' 등이 들어간 행만 콕 집어서 제거
+        if 'Res_No' in df.columns:
+            df = df[~df['Res_No'].astype(str).str.contains('합계|총계|누계|Total|Subtotal', case=False, na=False)]
+            # 예약번호가 너무 짧은(1글자 이하) 데이터도 제거 (빈 행 등)
+            df = df[df['Res_No'].astype(str).str.len() > 1]
 
         df['CheckIn'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['CheckOut'] = pd.to_datetime(df['CheckOut'], errors='coerce')
         
-        # [핵심 수정] 2. 예약일(Booking_Date) 변환 및 NaN 제거
-        # fillna를 절대 하지 않습니다! 날짜 없으면 그냥 버립니다.
+        # [핵심] 2. 예약일/체크인 날짜가 없는 행은 무조건 삭제 (합계행은 보통 날짜 없음)
         df['Booking_Date'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
         df = df.dropna(subset=['Booking_Date']) 
         df = df.dropna(subset=['CheckIn'])
@@ -233,9 +233,8 @@ def process_res_file(file):
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        # [수정] 3. 비정상 수치 제거 (안전장치)
-        df = df[df['Rooms'] < 50]
-        df = df[df['Room_Revenue'] < 1000000000]
+        # [수정] 객실수 제한 로직 삭제 (MICE 단체 수용)
+        # df = df[df['Rooms'] < 50]  <-- 이 코드를 삭제했습니다.
 
         df['Rooms'] = np.where(df['Rooms']<=0, 1, df['Rooms'])
         df['Nights'] = np.where(df['Nights']<=0, 1, df['Nights'])
@@ -243,7 +242,6 @@ def process_res_file(file):
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # Snapshot (이제 날짜가 확실한 것만 남음)
         df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d')
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
@@ -310,15 +308,16 @@ def process_cancel_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        # [수정] 1. 예약번호 체크
-        df = df[df['Res_No'].astype(str).str.len() > 2]
-        df = df[~df['Res_No'].astype(str).str.contains('합계|Total', case=False, na=False)]
+        # [핀셋 수정] 1. 합계 텍스트 필터링
+        if 'Res_No' in df.columns:
+            df = df[~df['Res_No'].astype(str).str.contains('합계|총계|누계|Total', case=False, na=False)]
+            df = df[df['Res_No'].astype(str).str.len() > 1]
 
         df['CheckIn'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['CheckOut'] = pd.to_datetime(df['CheckOut'], errors='coerce')
         df['Booking_Date'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
         
-        # [핵심 수정] 2. 취소일(Cancel_Date) 변환 및 NaN 제거 (오늘 날짜 채우기 금지)
+        # [핵심] 2. 취소일(Cancel_Date)이 없는 행은 무조건 삭제
         df['Cancel_Date'] = pd.to_datetime(df['Cancel_Date'], errors='coerce')
         df = df.dropna(subset=['Cancel_Date'])
         df = df.dropna(subset=['CheckIn'])
@@ -328,7 +327,8 @@ def process_cancel_file(file):
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        df = df[df['Rooms'] < 50]
+        # [수정] 객실수 제한 로직 삭제
+        # df = df[df['Rooms'] < 50] <-- 삭제됨
 
         df['Rooms'] = np.where(df['Rooms']<=0, 1, df['Rooms'])
         df['Nights'] = np.where(df['Nights']<=0, 1, df['Nights'])
@@ -510,6 +510,7 @@ try:
         st.divider()
         st.subheader("📌 예약/취소 조회 (기준 vs 비교)")
         
+        # 기준 기간 (Target Range)
         yesterday_date = datetime.now().date() - timedelta(days=1)
         min_date = datetime.now().date() - timedelta(days=365)
         
@@ -525,7 +526,7 @@ try:
             "기준 기간 (어제까지 선택 가능)",
             value=default_val,
             min_value=min_date,
-            max_value=yesterday_date,
+            max_value=yesterday_date, # 오늘 이후 선택 불가
             format="YYYY-MM-DD"
         )
         
@@ -535,6 +536,7 @@ try:
             if len(dates_selected) > 1: sel_res_end = dates_selected[1].strftime('%Y-%m-%d')
             if sel_res_start and not sel_res_end: sel_res_end = sel_res_start
             
+        # 비교 기간 (Comparison Range)
         comp_dates_selected = st.date_input(
             "비교 기간 (선택사항)",
             value=(),
