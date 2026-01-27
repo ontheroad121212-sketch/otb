@@ -60,11 +60,12 @@ def clean_num(val):
 def save_to_db(df, data_type='Reservation'):
     """데이터를 Snapshot_Date(예약일/취소일)별로 쪼개서 저장"""
     if df is None or df.empty:
-        st.warning("⚠️ 저장할 데이터가 없습니다.")
+        st.warning("⚠️ 저장할 데이터가 없습니다 (유효한 데이터가 0건입니다).")
         return False
     try:
+        # Snapshot_Date 컬럼이 없으면 생성 (있어야 정상)
         if 'Snapshot_Date' not in df.columns: 
-            df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
+            return False # 날짜 없는 데이터는 저장 불가
             
         dates = df['Snapshot_Date'].unique()
         for d in dates:
@@ -96,8 +97,9 @@ def save_to_db(df, data_type='Reservation'):
                         new_r[clean_k] = v
                 sanitized_recs.append(new_r)
             
-            # 문서 ID
-            did = f"{d}_{data_type}_{int(time.time()*1000)}"
+            # [핵심] 문서 ID = 날짜_타입 (덮어쓰기)
+            # 이렇게 하면 잘못 들어간 26일 데이터 위에 정상 데이터가 덮어씌워짐
+            did = f"{d}_{data_type}"
             
             db.collection(COLLECTION_NAME).document(did).set({
                 'data': sanitized_recs, 'uploaded_at': datetime.now(), 'snapshot_date': d, 'data_type': data_type
@@ -116,7 +118,6 @@ def load_db():
             snap = dd.get('snapshot_date', '')
             dtype = dd.get('data_type', 'Reservation')
             
-            # 구버전 호환
             if dtype == 'Reservation' and len(dd['data']) > 0 and 'OTB' in str(dd['data'][0].get('Segment', '')):
                 dtype = 'OTB'
 
@@ -145,11 +146,10 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직
+# 4. 파일 처리 로직 (핀셋 수정: 날짜 없는 행 절대 저장 금지)
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
-    """헤더 행과 키워드별 컬럼 인덱스 찾기"""
     header_idx = None
     col_map = {}
     max_matches = 0
@@ -165,7 +165,7 @@ def find_header_and_cols(df_raw, keywords):
                     current_map[k] = c_idx
                     match_count += 1
         
-        if match_count > max_matches and match_count >= 3:
+        if match_count > max_matches and match_count >= 2:
             max_matches = match_count
             header_idx = r
             col_map = current_map
@@ -181,20 +181,20 @@ def process_res_file(file):
         else: df_raw = pd.read_excel(file, header=None)
 
         keywords = {
-            'Status': ['상태', 'Stat'],
-            'Res_No': ['번호', 'No', 'Res'],
-            'Guest_Name': ['고객명', 'Name', 'Guest'],
-            'CheckIn': ['도착', 'Arr', 'In', 'Check In'],
-            'CheckOut': ['출발', 'Dep', 'Out', 'Check Out'],
-            'Nights': ['박수', 'Ngt', 'Night'],
-            'Room_Type': ['객실유형', 'Type', 'Room Type'],
-            'Rooms': ['객실수', 'Rm', 'Room'],
-            'Room_Revenue': ['객실료', '객실매출', 'Revenue', 'Room Rev'],
-            'Total_Revenue': ['총매출', '합계', 'Total Rev'],
-            'Account': ['거래처', 'Agent', 'Source'],
-            'Segment': ['세그먼트', 'Market', 'Seg'],
-            'Nat_Orig': ['국적', 'Nat', 'Nation'],
-            'Booking_Date': ['예약일', 'Book', 'Create']
+            'Status': ['상태', 'Status', 'Stat'],
+            'Res_No': ['예약번호', '번호', 'Res_No', 'No'],
+            'Guest_Name': ['고객명', '성명', 'Guest_Name', 'Name'],
+            'CheckIn': ['도착일', '체크인', 'CheckIn', 'Arr'],
+            'CheckOut': ['출발일', '체크아웃', 'CheckOut', 'Dep'],
+            'Nights': ['박수', 'Nights', 'Ngt'],
+            'Room_Type': ['객실유형', 'Room_Type', 'Type'],
+            'Rooms': ['객실수', 'Rooms', 'Rm'],
+            'Room_Revenue': ['객실료', '객실매출', 'Room_Revenue', 'Revenue'],
+            'Total_Revenue': ['총매출', '합계', 'Total_Revenue'],
+            'Account': ['거래처', '에이전트', 'Account', 'Agent'],
+            'Segment': ['세그먼트', '마켓', 'Segment', 'Market'],
+            'Nat_Orig': ['국적', 'Nat_Orig', 'Nation'],
+            'Booking_Date': ['예약일', '생성일', 'Booking_Date', 'Create']
         }
         
         h_idx, col_map = find_header_and_cols(df_raw, keywords)
@@ -215,17 +215,27 @@ def process_res_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
+        # [수정] 1. 예약번호 체크 (합계행 제거)
+        df = df[df['Res_No'].astype(str).str.len() > 2]
+        df = df[~df['Res_No'].astype(str).str.contains('합계|Total', case=False, na=False)]
+
         df['CheckIn'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['CheckOut'] = pd.to_datetime(df['CheckOut'], errors='coerce')
-        df['Booking_Date'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
         
+        # [핵심 수정] 2. 예약일(Booking_Date) 변환 및 NaN 제거
+        # fillna를 절대 하지 않습니다! 날짜 없으면 그냥 버립니다.
+        df['Booking_Date'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
+        df = df.dropna(subset=['Booking_Date']) 
+        df = df.dropna(subset=['CheckIn'])
+
         df['Nights'] = df['Nights'].apply(clean_num)
         df['Rooms'] = df['Rooms'].apply(clean_num)
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        df = df[pd.to_numeric(df['Rooms'], errors='coerce').fillna(0) < 1000]
-        df = df[df['CheckIn'].notna()]
+        # [수정] 3. 비정상 수치 제거 (안전장치)
+        df = df[df['Rooms'] < 50]
+        df = df[df['Room_Revenue'] < 1000000000]
 
         df['Rooms'] = np.where(df['Rooms']<=0, 1, df['Rooms'])
         df['Nights'] = np.where(df['Nights']<=0, 1, df['Nights'])
@@ -233,7 +243,8 @@ def process_res_file(file):
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
+        # Snapshot (이제 날짜가 확실한 것만 남음)
+        df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d')
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_Date'].dt.strftime('%Y-%m')
@@ -247,6 +258,8 @@ def process_res_file(file):
             return 'OTH'
         df['Nat_Group'] = df['Nat_Orig'].apply(classify_nat)
         
+        df['Segment'] = df['Segment'].astype(str).str.strip()
+        
         raw_str = df_data.astype(str).agg(''.join, axis=1).str.upper()
         df['Breakfast'] = np.where(raw_str.str.contains('BF'), 'Included', 'Not Included')
 
@@ -254,6 +267,7 @@ def process_res_file(file):
     except Exception as e: st.error(f"예약 오류 상세: {e}"); return pd.DataFrame()
 
 def process_cancel_file(file):
+    """취소 리스트 처리"""
     try:
         if file.name.endswith('.csv'):
             try: df_raw = pd.read_csv(file, header=None, encoding='cp949')
@@ -261,21 +275,21 @@ def process_cancel_file(file):
         else: df_raw = pd.read_excel(file, header=None)
 
         keywords = {
-            'Status': ['상태', 'Stat'],
-            'Res_No': ['번호', 'No'],
-            'Guest_Name': ['고객명', 'Name'],
-            'CheckIn': ['도착', 'Arr', 'In'],
-            'CheckOut': ['출발', 'Dep', 'Out'],
-            'Nights': ['박수', 'Ngt'],
-            'Room_Type': ['객실유형', 'Type'],
-            'Rooms': ['객실수', 'Rm'],
-            'Room_Revenue': ['객실료', '객실매출', 'Revenue'],
-            'Total_Revenue': ['총매출', '합계'],
-            'Account': ['거래처', 'Agent'],
-            'Segment': ['세그먼트', 'Market'],
-            'Nat_Orig': ['국적', 'Nat'],
-            'Booking_Date': ['예약일', 'Book'],
-            'Cancel_Date': ['취소일', 'Cancel']
+            'Status': ['상태', 'Status', 'Stat'],
+            'Res_No': ['예약번호', '번호', 'Res_No'],
+            'Guest_Name': ['고객명', '성명', 'Guest_Name'],
+            'CheckIn': ['도착일', '체크인', 'CheckIn'],
+            'CheckOut': ['출발일', '체크아웃', 'CheckOut'],
+            'Nights': ['박수', 'Nights'],
+            'Room_Type': ['객실유형', 'Room_Type'],
+            'Rooms': ['객실수', 'Rooms'],
+            'Room_Revenue': ['객실료', 'Room_Revenue'],
+            'Total_Revenue': ['총매출', 'Total_Revenue'],
+            'Account': ['거래처', 'Account'],
+            'Segment': ['세그먼트', 'Segment'],
+            'Nat_Orig': ['국적', 'Nat_Orig'],
+            'Booking_Date': ['예약일', 'Booking_Date'],
+            'Cancel_Date': ['취소일', 'Cancel_Date']
         }
         
         h_idx, col_map = find_header_and_cols(df_raw, keywords)
@@ -296,18 +310,25 @@ def process_cancel_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
+        # [수정] 1. 예약번호 체크
+        df = df[df['Res_No'].astype(str).str.len() > 2]
+        df = df[~df['Res_No'].astype(str).str.contains('합계|Total', case=False, na=False)]
+
         df['CheckIn'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['CheckOut'] = pd.to_datetime(df['CheckOut'], errors='coerce')
         df['Booking_Date'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
-        df['Cancel_Date'] = pd.to_datetime(df['Cancel_Date'], errors='coerce')
         
+        # [핵심 수정] 2. 취소일(Cancel_Date) 변환 및 NaN 제거 (오늘 날짜 채우기 금지)
+        df['Cancel_Date'] = pd.to_datetime(df['Cancel_Date'], errors='coerce')
+        df = df.dropna(subset=['Cancel_Date'])
+        df = df.dropna(subset=['CheckIn'])
+
         df['Nights'] = df['Nights'].apply(clean_num)
         df['Rooms'] = df['Rooms'].apply(clean_num)
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        df = df[pd.to_numeric(df['Rooms'], errors='coerce').fillna(0) < 1000]
-        df = df[df['CheckIn'].notna()]
+        df = df[df['Rooms'] < 50]
 
         df['Rooms'] = np.where(df['Rooms']<=0, 1, df['Rooms'])
         df['Nights'] = np.where(df['Nights']<=0, 1, df['Nights'])
@@ -315,7 +336,8 @@ def process_cancel_file(file):
         df['Lead_Time'] = (df['CheckIn'] - df['Booking_Date']).dt.days.fillna(0)
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
+        # Snapshot (취소일 기준)
+        df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d')
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_Date'].dt.strftime('%Y-%m')
@@ -326,6 +348,8 @@ def process_cancel_file(file):
             if 'KOR' in val: return 'KOR'
             return 'OTH'
         df['Nat_Group'] = df['Nat_Orig'].apply(classify_nat)
+        
+        df['Segment'] = df['Segment'].astype(str).str.strip()
         
         raw_str = df_data.astype(str).agg(''.join, axis=1).str.upper()
         df['Breakfast'] = np.where(raw_str.str.contains('BF'), 'Included', 'Not Included')
@@ -486,23 +510,22 @@ try:
         st.divider()
         st.subheader("📌 예약/취소 조회 (기준 vs 비교)")
         
-        # [수정 1] 기준 기간 (Target Range)
-        yesterday = datetime.now().date() - timedelta(days=1)
+        yesterday_date = datetime.now().date() - timedelta(days=1)
         min_date = datetime.now().date() - timedelta(days=365)
         
-        default_val = (yesterday, yesterday)
+        default_val = (yesterday_date, yesterday_date)
         if res_dates_all:
             try:
                 latest_db = datetime.strptime(res_dates_all[0], "%Y-%m-%d").date()
-                if latest_db > yesterday: latest_db = yesterday
+                if latest_db > yesterday_date: latest_db = yesterday_date
                 default_val = (latest_db, latest_db)
             except: pass
 
         dates_selected = st.date_input(
-            "기준 기간 (Target)",
+            "기준 기간 (어제까지 선택 가능)",
             value=default_val,
             min_value=min_date,
-            max_value=yesterday,
+            max_value=yesterday_date,
             format="YYYY-MM-DD"
         )
         
@@ -512,12 +535,11 @@ try:
             if len(dates_selected) > 1: sel_res_end = dates_selected[1].strftime('%Y-%m-%d')
             if sel_res_start and not sel_res_end: sel_res_end = sel_res_start
             
-        # [수정 2] 비교 기간 (Comparison Range)
         comp_dates_selected = st.date_input(
-            "비교 기간 (Comparison) - 선택사항",
+            "비교 기간 (선택사항)",
             value=(),
             min_value=min_date,
-            max_value=yesterday,
+            max_value=yesterday_date,
             format="YYYY-MM-DD"
         )
         
@@ -543,9 +565,8 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
-    # 데이터 로드 (기준 기간)
+    # 데이터 로드
     if sel_res_start and sel_res_end and not df_all.empty:
-        # 기준 기간 데이터
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_res_start) & (df_all['Snapshot_Date'] <= sel_res_end)
         df_bk_raw = df_all[mask_bk].copy()
         df_bk = df_bk_raw[df_bk_raw['Total_Revenue'] > 0]
@@ -556,7 +577,6 @@ try:
         if df_cn.empty and not df_bk_raw.empty: df_cn = df_bk_raw[df_bk_raw['Status'] == 'RC']
         df_tot = pd.concat([df_bk, df_cn])
         
-        # [수정 3] 비교 기간 데이터 로드 (존재할 경우)
         df_bk_comp = pd.DataFrame()
         df_cn_comp = pd.DataFrame()
         if comp_start and comp_end:
@@ -585,27 +605,22 @@ try:
         
         if df_bk.empty and df_cn.empty: st.info("데이터 없음")
         else:
-            # 기준 기간 집계
             b_rn = df_bk['RN'].sum()
             b_rev = df_bk['Room_Revenue'].sum()
             b_tot = df_bk['Total_Revenue'].sum()
-            
             c_rn = df_cn['RN'].sum()
             c_rev = df_cn['Room_Revenue'].sum()
             c_tot = df_cn['Total_Revenue'].sum()
             
-            # 비교 기간 집계 (없으면 0)
             b_rn_comp = df_bk_comp['RN'].sum() if not df_bk_comp.empty else 0
             b_rev_comp = df_bk_comp['Room_Revenue'].sum() if not df_bk_comp.empty else 0
             b_tot_comp = df_bk_comp['Total_Revenue'].sum() if not df_bk_comp.empty else 0
-            
             c_rn_comp = df_cn_comp['RN'].sum() if not df_cn_comp.empty else 0
             c_rev_comp = df_cn_comp['Room_Revenue'].sum() if not df_cn_comp.empty else 0
             c_tot_comp = df_cn_comp['Total_Revenue'].sum() if not df_cn_comp.empty else 0
             
             rc_in_bk = len(df_bk[df_bk['Status']=='RC'])
             
-            # [수정 4] 델타 계산 및 표시
             st.markdown("#### ✅ 예약 (Reservation List)")
             c = st.columns(6)
             c[0].metric("RN", f"{b_rn:,.0f}", delta=f"{b_rn - b_rn_comp:,.0f}" if comp_start else None)
