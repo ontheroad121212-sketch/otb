@@ -486,23 +486,28 @@ try:
         st.divider()
         st.subheader("📌 예약/취소 조회 (기준 vs 비교)")
         
-        # [수정 1] 기준 기간 (Target Range)
-        yesterday = datetime.now().date() - timedelta(days=1)
-        min_date = datetime.now().date() - timedelta(days=365)
+        # [수정] 1. 기준 기간 (Target Range)
+        # 오늘 날짜
+        today_date = datetime.now().date()
+        # 어제 날짜
+        yesterday_date = today_date - timedelta(days=1)
+        # 최소 날짜 (1년 전)
+        min_date = today_date - timedelta(days=365)
         
-        default_val = (yesterday, yesterday)
+        # 기본값 (어제)
+        default_val = (yesterday_date, yesterday_date)
         if res_dates_all:
             try:
                 latest_db = datetime.strptime(res_dates_all[0], "%Y-%m-%d").date()
-                if latest_db > yesterday: latest_db = yesterday
+                if latest_db > yesterday_date: latest_db = yesterday_date
                 default_val = (latest_db, latest_db)
             except: pass
 
         dates_selected = st.date_input(
-            "기준 기간 (Target)",
+            "기준 기간 (어제까지 선택 가능)",
             value=default_val,
             min_value=min_date,
-            max_value=yesterday,
+            max_value=yesterday_date, # [핵심] 오늘 이후는 선택 불가 (비활성화)
             format="YYYY-MM-DD"
         )
         
@@ -512,12 +517,12 @@ try:
             if len(dates_selected) > 1: sel_res_end = dates_selected[1].strftime('%Y-%m-%d')
             if sel_res_start and not sel_res_end: sel_res_end = sel_res_start
             
-        # [수정 2] 비교 기간 (Comparison Range)
+        # [수정] 2. 비교 기간 (Comparison Range)
         comp_dates_selected = st.date_input(
-            "비교 기간 (Comparison) - 선택사항",
+            "비교 기간 (선택사항)",
             value=(),
             min_value=min_date,
-            max_value=yesterday,
+            max_value=yesterday_date, # [핵심] 비교 기간도 오늘 이후 선택 불가
             format="YYYY-MM-DD"
         )
         
@@ -545,7 +550,6 @@ try:
 
     # 데이터 로드 (기준 기간)
     if sel_res_start and sel_res_end and not df_all.empty:
-        # 기준 기간 데이터
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_res_start) & (df_all['Snapshot_Date'] <= sel_res_end)
         df_bk_raw = df_all[mask_bk].copy()
         df_bk = df_bk_raw[df_bk_raw['Total_Revenue'] > 0]
@@ -556,7 +560,6 @@ try:
         if df_cn.empty and not df_bk_raw.empty: df_cn = df_bk_raw[df_bk_raw['Status'] == 'RC']
         df_tot = pd.concat([df_bk, df_cn])
         
-        # [수정 3] 비교 기간 데이터 로드 (존재할 경우)
         df_bk_comp = pd.DataFrame()
         df_cn_comp = pd.DataFrame()
         if comp_start and comp_end:
@@ -585,27 +588,22 @@ try:
         
         if df_bk.empty and df_cn.empty: st.info("데이터 없음")
         else:
-            # 기준 기간 집계
             b_rn = df_bk['RN'].sum()
             b_rev = df_bk['Room_Revenue'].sum()
             b_tot = df_bk['Total_Revenue'].sum()
-            
             c_rn = df_cn['RN'].sum()
             c_rev = df_cn['Room_Revenue'].sum()
             c_tot = df_cn['Total_Revenue'].sum()
             
-            # 비교 기간 집계 (없으면 0)
             b_rn_comp = df_bk_comp['RN'].sum() if not df_bk_comp.empty else 0
             b_rev_comp = df_bk_comp['Room_Revenue'].sum() if not df_bk_comp.empty else 0
             b_tot_comp = df_bk_comp['Total_Revenue'].sum() if not df_bk_comp.empty else 0
-            
             c_rn_comp = df_cn_comp['RN'].sum() if not df_cn_comp.empty else 0
             c_rev_comp = df_cn_comp['Room_Revenue'].sum() if not df_cn_comp.empty else 0
             c_tot_comp = df_cn_comp['Total_Revenue'].sum() if not df_cn_comp.empty else 0
             
             rc_in_bk = len(df_bk[df_bk['Status']=='RC'])
             
-            # [수정 4] 델타 계산 및 표시
             st.markdown("#### ✅ 예약 (Reservation List)")
             c = st.columns(6)
             c[0].metric("RN", f"{b_rn:,.0f}", delta=f"{b_rn - b_rn_comp:,.0f}" if comp_start else None)
