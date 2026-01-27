@@ -12,31 +12,24 @@ import secret_forecasting  # 포캐스팅 모듈 임포트
 # [1] 페이지 기본 설정 및 CSS 스타일링
 # ==============================================================================
 # 1. 기본 설정 (가장 최상단 유지)
-st.set_page_config(
-    layout="wide",
-    page_title="Daily Pace Report & Forecasting",
-    initial_sidebar_state="expanded"
-)
+# [1] 설정
+st.set_page_config(layout="wide", page_title="ARI Management", initial_sidebar_state="expanded")
 
-# 2. [핵심] 전역 언어 설정 유지 및 강제 고정 로직
+# [2] 언어 세션 초기화 (없을 때만 ko)
 if 'lang' not in st.session_state:
-    st.session_state.lang = 'ko'  # 금고가 비어있으면 한국어로 시작
+    st.session_state.lang = 'ko'
 
-# URL에서 파라미터 읽기 (감지)
-try:
-    # 현재 URL에 ?lang=zh 등이 있는지 실시간 확인
-    query_params = st.query_params
-    if "lang" in query_params:
-        new_lang = query_params["lang"]
-        if new_lang in ['zh', 'ko']:
-            st.session_state.lang = new_lang # 발견 즉시 금고 교체
-except:
-    pass
+# [3] URL 파라미터 감지 및 세션 고정
+# URL에 ?lang=zh가 있으면 무조건 세션 금고를 업데이트합니다.
+params = st.query_params
+if "lang" in params:
+    if params["lang"] == "zh":
+        st.session_state.lang = "zh"
+    elif params["lang"] == "ko":
+        st.session_state.lang = "ko"
 
-# 3. 최종 모드 결정 (가장 중요!)
-# URL에 파라미터가 있든 없든, '세션 금고'에 저장된 값을 기준으로 결정합니다.
-# 이렇게 해야 메뉴를 눌러서 URL이 깨져도 중국어가 유지됩니다.
-is_chairman_mode = (st.session_state.lang == 'zh')
+# [4] 최종 모드 결정 (URL이 아니라 '세션'을 바라봄)
+is_chairman_mode = (st.session_state.lang == "zh")
 
 st.markdown(textwrap.dedent("""
 <style>
