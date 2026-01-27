@@ -8,23 +8,28 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 
-# 1. 페이지 설정 (반드시 모든 실행 코드 중 맨 처음에 단 한 번만!)
+# 1. 페이지 설정 (가장 처음에 와야 함)
 st.set_page_config(page_title="Daily Pick-up & Wash-out", layout="wide")
 
-# 2. 언어 세션 상태 초기화 및 파라미터 감지
+# 2. [핵심] 세션 스테이트를 활용한 언어 설정 유지 로직
 if 'lang' not in st.session_state:
-    st.session_state.lang = 'ko'
+    st.session_state.lang = 'ko'  # 기본값 한국어
 
-# URL 파라미터 확인 (rerun 없이 세션만 업데이트)
+# URL 파라미터 확인 (페이지 이동 직후에도 감지하기 위함)
 try:
     # URL에 ?lang=zh 등이 있는지 확인
-    url_lang = st.query_params.get("lang")
-    if url_lang in ['zh', 'ko'] and url_lang != st.session_state.lang:
-        st.session_state.lang = url_lang
+    url_params = st.query_params
+    url_lang = url_params.get("lang")
 except:
-    pass
+    url_lang = None
 
-# 최종 회장님 모드 변수 설정
+# 만약 URL에 zh가 명시되어 있다면 세션(금고) 값을 zh로 교체
+if url_lang == 'zh':
+    st.session_state.lang = 'zh'
+elif url_lang == 'ko':
+    st.session_state.lang = 'ko'
+
+# 3. 최종 모드 결정 (이제 URL에 파라미터가 없어져도 세션 값을 보고 판단함)
 is_chairman_mode = (st.session_state.lang == 'zh')
 
 # [번역 사전]
