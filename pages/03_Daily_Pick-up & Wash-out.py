@@ -7,36 +7,26 @@ from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
-import time
-import textwrap
 
-# ==============================================================================
-# 1. 기본 설정 및 회장님 모드(중국어) 강력 유지 로직 (Session State)
-# ==============================================================================
-# 1. 페이지 설정 (가장 최상단 유지)
+# 1. 페이지 설정 (반드시 모든 실행 코드 중 맨 처음에 단 한 번만!)
 st.set_page_config(page_title="Daily Pick-up & Wash-out", layout="wide")
 
-# 2. 세션 상태 및 언어 유지 로직 (중복 제거 및 최적화)
+# 2. 언어 세션 상태 초기화 및 파라미터 감지
 if 'lang' not in st.session_state:
     st.session_state.lang = 'ko'
 
-# URL 파라미터 읽기
+# URL 파라미터 확인 (rerun 없이 세션만 업데이트)
 try:
-    # 최신 Streamlit 방식
+    # URL에 ?lang=zh 등이 있는지 확인
     url_lang = st.query_params.get("lang")
+    if url_lang in ['zh', 'ko'] and url_lang != st.session_state.lang:
+        st.session_state.lang = url_lang
 except:
-    # 구버전 호환 방식
-    try:
-        url_lang = st.experimental_get_query_params().get("lang", [""])[0]
-    except:
-        url_lang = None
+    pass
 
-# [핵심] 값이 있고 기존 세션과 다를 때만 업데이트 (rerun 없이 즉시 반영)
-if url_lang in ['zh', 'ko'] and url_lang != st.session_state.lang:
-    st.session_state.lang = url_lang
-
-# 최종 모드 결정 (변수 이름 통일)
+# 최종 회장님 모드 변수 설정
 is_chairman_mode = (st.session_state.lang == 'zh')
+
 # [번역 사전]
 LANG_DICT = {
     "ARI Final Integrity": "ARI 最终数据完整性报告",
