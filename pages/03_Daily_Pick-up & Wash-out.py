@@ -271,8 +271,7 @@ def process_res_file(file):
         for c in required:
             if c not in df.columns: df[c] = np.nan
 
-        # [핵심] 예약번호 4자리 이상만 (합계 제거)
-        df = df[df['Res_No'].astype(str).str.len() > 3]
+        df = df[df['Res_No'].notna()]
         df = df[~df['Res_No'].astype(str).str.contains('합계|총계|Total', case=False, na=False)]
 
         df['CheckIn'] = safe_date_parse(df['CheckIn'])
@@ -286,7 +285,6 @@ def process_res_file(file):
             if c in df.columns: df[c] = df[c].apply(clean_num)
             else: df[c] = 0
 
-        # 매출 100억 이상 제거 (합계 방지)
         df = df[df['Room_Revenue'] < 10000000000]
 
         df['RN'] = df['Rooms'] * df['Nights']
@@ -315,10 +313,11 @@ def process_res_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
-        # [조식 판별] Service_Code에 BF가 있으면 Included, 없으면 Room Only
+        # [핵심] 조식 판별: Service_Code에 'BF'가 있으면 Included, 없으면 Room Only
         if 'Service_Code' in df.columns:
-            has_bf = df['Service_Code'].fillna('').astype(str).str.upper().str.contains('BF')
-            df['Breakfast'] = np.where(has_bf, 'Included', 'Room Only')
+            df['Breakfast'] = df['Service_Code'].fillna('').astype(str).str.upper().apply(
+                lambda x: 'Included' if 'BF' in x else 'Room Only'
+            )
         else:
             df['Breakfast'] = 'Room Only'
 
@@ -347,8 +346,7 @@ def process_cancel_file(file):
         }
         df = df.rename(columns=col_map)
         
-        # 합계 제거
-        df = df[df['Res_No'].astype(str).str.len() > 3]
+        df = df[df['Res_No'].notna()]
         df = df[~df['Res_No'].astype(str).str.contains('합계|총계|Total', case=False, na=False)]
 
         df['Cancel_Date'] = safe_date_parse(df.get('Cancel_Date'))
@@ -385,9 +383,11 @@ def process_cancel_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
+        # [핵심] 취소 리스트도 조식 판별 적용
         if 'Service_Code' in df.columns:
-            has_bf = df['Service_Code'].fillna('').astype(str).str.upper().str.contains('BF')
-            df['Breakfast'] = np.where(has_bf, 'Included', 'Room Only')
+            df['Breakfast'] = df['Service_Code'].fillna('').astype(str).str.upper().apply(
+                lambda x: 'Included' if 'BF' in x else 'Room Only'
+            )
         else:
             df['Breakfast'] = 'Room Only'
 
@@ -407,7 +407,7 @@ def process_otb(file):
     except: return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 및 번역 적용 (T 함수 활용)
+# 5. UI 및 번역 적용
 # ==============================================================================
 
 def add_total_with_adr(df, group_col_name="구분"):
@@ -422,7 +422,6 @@ def add_total_with_adr(df, group_col_name="구분"):
 
 def show_styled(df):
     if df.empty: st.info(T("데이터 없음")); return
-    # [핵심] 인덱스 리셋하여 "Included156..." 현상 방지
     df = df.reset_index(drop=True)
     cols = df.select_dtypes(include=[np.number]).columns
     # [핵심] 숫자 포맷팅 (콤마 추가)
@@ -433,7 +432,6 @@ def group_and_show(df, group_col):
     agg = df.groupby(group_col).agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
     agg['ADR_Room'] = np.where(agg['RN']>0, agg['Room_Revenue']/agg['RN'], 0)
     agg['ADR_Total'] = np.where(agg['RN']>0, agg['Total_Revenue']/agg['RN'], 0)
-    # add_total 후 show_styled
     final_df = add_total_with_adr(agg, group_col)
     show_styled(final_df)
     return final_df
@@ -441,12 +439,14 @@ def group_and_show(df, group_col):
 def render_tab(df, k):
     if df.empty: st.info(T("데이터 없음")); return
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([T("📊 세그먼트"), T("📅 Pacing"), T("🏢 거래처"), T("⏳ 리드타임"), T("🛏️ 객실타입"), T("🗓️ 요일"), T("🌐 국적"), T("🍳 조식")])
+    
     with t1:
         s = group_and_show(df, 'Segment')
         if not s.empty:
             c1, c2 = st.columns(2)
             c1.plotly_chart(px.pie(s, values='Room_Revenue', names='Segment', title=T("매출 비중")), use_container_width=True, key=f"{k}_p")
             c2.plotly_chart(px.bar(s, x='Segment', y='Room_Revenue', title=T("세그먼트별 매출")), use_container_width=True, key=f"{k}_b")
+    
     with t2:
         st.subheader(T("📅 Booking Pacing Matrix (Booking vs Stay)"))
         p_df = df.copy()
@@ -463,22 +463,36 @@ def render_tab(df, k):
             stay_dist = p_df.groupby('Stay_Month')['RN'].sum().reset_index()
             st.plotly_chart(px.bar(stay_dist, x='Stay_Month', y='RN', text_auto='.0f', title=T("투숙월별 총 RN")), use_container_width=True, key=f"{k}_stay_b")
         else: st.warning(T("페이싱 데이터 없음"))
+    
     with t3: group_and_show(df, 'Account')
+    
     with t4:
         df['LT_G'] = pd.cut(df['Lead_Time'], bins=[-999,0,3,7,14,30,60,90,999], labels=['0','1-3','4-7','8-14','15-30','31-60','61-90','90+'])
-        group_and_show(df, 'LT_G')
+        l = group_and_show(df, 'LT_G')
+        if not l.empty: st.plotly_chart(px.bar(l, x='LT_G', y='RN', title=T("리드타임별 RN 실적")), use_container_width=True, key=f"{k}_lt")
+    
     with t5: group_and_show(df, 'Room_Type')
-    with t6: group_and_show(df, 'Day_Type')
-    with t7: group_and_show(df, 'Nat_Group')
+    
+    with t6:
+        w = group_and_show(df, 'Day_Type')
+        if not w.empty:
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(px.bar(w, x='Day_Type', y='Room_Revenue', title=T("요일별 매출")), use_container_width=True, key=f"{k}_w_b")
+            c2.plotly_chart(px.pie(w, values='RN', names='Day_Type', title=T("요일별 RN 비중")), use_container_width=True, key=f"{k}_w_p")
+    
+    with t7:
+        n = group_and_show(df, 'Nat_Group')
+        if not n.empty:
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(px.pie(n, values='RN', names='Nat_Group', title=T("국적별 RN 비중")), use_container_width=True, key=f"{k}_n_p")
+            c2.plotly_chart(px.bar(n, x='Nat_Group', y='Room_Revenue', title=T("국적별 매출 실적")), use_container_width=True, key=f"{k}_n_b")
+    
     with t8:
-        # [핵심] 조식 분석 (왼쪽: 유무 파이 / 오른쪽: 상세 코드 막대)
-        # TOTAL 행이 섞이지 않게 순수 데이터로 차트 그림
+        # [복구] 조식 상세 분석
         b_raw = df.groupby('Breakfast').agg({'RN': 'sum'}).reset_index()
-        
         c1, c2 = st.columns(2)
         c1.plotly_chart(px.pie(b_raw, values='RN', names='Breakfast', title=T("조식 포함 여부 비중(RN)")), use_container_width=True, key=f"{k}_bf_pie")
         
-        # 상세 코드 분석
         bf_included = df[df['Breakfast'] == 'Included']
         if not bf_included.empty and 'Service_Code' in bf_included.columns:
             detail = bf_included.groupby('Service_Code')['RN'].sum().reset_index().sort_values('RN', ascending=False)
@@ -486,7 +500,6 @@ def render_tab(df, k):
         else:
             c2.info(T("조식 포함 내역이 없습니다."))
             
-        # 테이블은 group_and_show로 깔끔하게
         group_and_show(df, 'Breakfast')
 
 # ==============================================================================
@@ -534,7 +547,6 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
-    # 데이터 필터링
     if sel_start and sel_end and not df_all.empty:
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_start) & (df_all['Snapshot_Date'] <= sel_end)
         df_bk = df_all[mask_bk & (df_all['Total_Revenue']>0)].copy()
