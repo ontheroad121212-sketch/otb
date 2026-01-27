@@ -112,6 +112,12 @@ LANG_DICT = {
     "여행사": "Travel Agency",
     "OTA": "OTA",
     
+    # [필터 관련 번역 추가 - 정밀 이식용]
+    "🏢 거래처 필터": "🏢 代理商筛选 (Filter)",
+    "전체 거래처": "全部代理商 (All Accounts)",
+    "거래처 선택": "选择代理商 (Select)",
+    "거래처 필터 적용 중": "当前筛选 (Filtering by)",
+    
     # 기타 메시지
     "데이터 없음": "无数据",
     "기간 미선택": "未选择期间",
@@ -597,6 +603,26 @@ try:
         c_start = comp_selected[0].strftime('%Y-%m-%d') if isinstance(comp_selected, tuple) and len(comp_selected)>0 else None
         c_end = comp_selected[1].strftime('%Y-%m-%d') if isinstance(comp_selected, tuple) and len(comp_selected)>1 else c_start
 
+        # ==============================================================================
+        # [UI 추가] 🏢 거래처 필터 (데이터 연동)
+        # ==============================================================================
+        st.divider()
+        st.subheader(T("🏢 거래처 필터"))
+        all_accounts = ["전체 거래처"]
+        # DB에서 불러온 전체 데이터에서 거래처 목록 추출 (중복 제거)
+        if not df_all.empty and 'Account' in df_all.columns:
+            raw_accs = sorted(df_all['Account'].dropna().astype(str).unique().tolist())
+            all_accounts.extend(raw_accs)
+        
+        # 선택 박스 (중국어 모드라면 '전체 거래처'만 번역되고 나머지는 원문 유지)
+        # 실제 데이터 필터링을 위해 인덱스를 활용하거나 값을 매핑
+        acc_idx = st.selectbox(
+            T("거래처 선택"), 
+            range(len(all_accounts)), 
+            format_func=lambda x: T(all_accounts[x]) # T 함수가 '전체 거래처'만 번역함
+        )
+        selected_acc = all_accounts[acc_idx] # 실제 필터링에 쓸 값 (예: '네이버')
+
         st.divider()
         sel_otb = st.selectbox(T("📈 OTB 조회"), otb_dates) if otb_dates else None
         st.divider()
@@ -611,23 +637,42 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
-    # 데이터 필터링
+    # 데이터 필터링 (거래처 필터 로직 추가됨)
     if sel_start and sel_end and not df_all.empty:
+        # 1. 기본 날짜 필터
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_start) & (df_all['Snapshot_Date'] <= sel_end)
+        
+        # 2. [핵심] 거래처 필터 적용 (선택된 경우에만)
+        if selected_acc != "전체 거래처":
+            mask_bk = mask_bk & (df_all['Account'] == selected_acc)
+            
         df_bk = df_all[mask_bk & (df_all['Total_Revenue']>0)].copy()
         df_zero = df_all[mask_bk & (df_all['Total_Revenue']<=0)].copy()
         
         mask_cn = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= sel_start) & (df_all['Snapshot_Date'] <= sel_end)
+        
+        # 3. [핵심] 취소 데이터에도 거래처 필터 적용
+        if selected_acc != "전체 거래처":
+            mask_cn = mask_cn & (df_all['Account'] == selected_acc)
+            
         df_cn = df_all[mask_cn].copy()
-        if df_cn.empty and not df_bk.empty: df_cn = df_all[mask_bk & (df_all['Status']=='RC')].copy()
+        if df_cn.empty and not df_bk.empty: 
+            # 이중 RC 로직에도 필터 적용 고려 (bk 데이터에서 가져오므로 이미 적용됨)
+            df_cn = df_all[mask_bk & (df_all['Status']=='RC')].copy()
         
         df_tot = pd.concat([df_bk, df_cn])
         
         df_bk_comp = pd.DataFrame(); df_cn_comp = pd.DataFrame()
         if c_start and c_end:
             mask_bk_c = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= c_start) & (df_all['Snapshot_Date'] <= c_end)
-            df_bk_comp = df_all[mask_bk_c & (df_all['Total_Revenue']>0)].copy()
             mask_cn_c = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= c_start) & (df_all['Snapshot_Date'] <= c_end)
+            
+            # 4. [핵심] 비교 기간 데이터에도 거래처 필터 적용
+            if selected_acc != "전체 거래처":
+                mask_bk_c = mask_bk_c & (df_all['Account'] == selected_acc)
+                mask_cn_c = mask_cn_c & (df_all['Account'] == selected_acc)
+                
+            df_bk_comp = df_all[mask_bk_c & (df_all['Total_Revenue']>0)].copy()
             df_cn_comp = df_all[mask_cn_c].copy()
             if df_cn_comp.empty and not df_all[mask_bk_c].empty: df_cn_comp = df_all[mask_bk_c & (df_all['Status']=='RC')]
     else:
@@ -643,6 +688,11 @@ try:
     with tabs[0]:
         disp = f"{sel_start}~{sel_end}" if sel_start else T("기간 미선택")
         st.header(f"{T('👑 GM 요약')} ({disp})")
+        
+        # [UI 추가] 현재 필터링 상태 표시
+        if selected_acc != "전체 거래처":
+            st.caption(f"🎯 {T('거래처 필터 적용 중')}: {T(selected_acc)}")
+            
         if df_bk.empty and df_cn.empty: st.info(T("데이터 없음"))
         else:
             b_rn = df_bk['RN'].sum()
