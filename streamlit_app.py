@@ -17,29 +17,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ▼▼▼ [핀셋 추가 1] 회장님 전용 스텔스 다국어 설정 ▼▼▼
-query_params = st.query_params
-lang_code = "zh" if query_params.get("lang") == "zh" else "ko"
-
-TRANS = {
-    "ko": { # 지배인님용: 한국어 + 영어 (중국어 0%)
-        "title": "🏨 Daily Pace Report",
-        "summary": "Performance Summary",
-        "budget": "Budget", "actual": "Actual", "variance": "Variance",
-        "segment": "Segment", "total": "TOTAL",
-        "pre": "Pre", "today": "Today", "var": "Var"
-    },
-    "zh": { # 회장님용: 중국어 + 영어 (한국어 0%)
-        "title": "🏨 酒店经营综合日报 (Daily Pace Report)",
-        "summary": "月度经营业绩摘要 (Performance Summary)",
-        "budget": "预算 (Budget)", "actual": "实际营收 (Actual)", "variance": "差异 (Variance)",
-        "segment": "客源细分 (Segment)", "total": "总计 (TOTAL)",
-        "pre": "昨日 (Pre)", "today": "今日 (Today)", "var": "增减 (Var)"
-    }
-}
-T = TRANS[lang_code]
-# ▲▲▲ [추가 끝] ▲▲▲
-
 st.markdown(textwrap.dedent("""
 <style>
     .block-container { padding-top: 0.5rem; padding-bottom: 2rem; }
@@ -299,7 +276,7 @@ if selected_page == "🎯 Forecasting":
     secret_forecasting.run_forecasting()
     st.stop()
 
-st.title(["🏨title"])
+st.title("🏨 Daily Pace Report")
 uploaded_files = st.file_uploader("엑셀 업로드", accept_multiple_files=True, type=['xlsx'])
 
 tabs = st.tabs([f"{i}월" for i in range(1, 13)])
@@ -339,34 +316,32 @@ for i, tab in enumerate(tabs):
         total_rms = sob_curr['FIT_RMS'] + sob_curr['GRP_RMS']
         
         # HTML S.O.B 대시보드 렌더링
-# ▼▼▼ [핀셋 수정 3] S.O.B 카드 텍스트 다국어화 ▼▼▼
         st.markdown(f"""
         <div class="sob-container">
-            <div class="sob-header">📊 {cur_m}월 {T['summary']}</div>
+            <div class="sob-header">📊 {cur_m}월 Performance Summary</div>
             <div class="sob-grid">
                 <div>
                     <table class="modern-table">
-                        <tr><td class="label">{T['budget']}</td><td>{budget:,.0f}</td></tr>
-                        <tr><td class="label">{T['actual']}</td><td style="font-weight:bold;">{total_rev:,.0f}</td></tr>
-                        <tr><td class="label">{T['variance']}</td><td style="color:{'green' if total_rev>=budget else 'red'}">{total_rev-budget:+,.0f}</td></tr>
+                        <tr><td class="label">Budget</td><td>{budget:,.0f}</td></tr>
+                        <tr><td class="label">Actual</td><td style="font-weight:bold;">{total_rev:,.0f}</td></tr>
+                        <tr><td class="label">Variance</td><td style="color:{'green' if total_rev>=budget else 'red'}">{total_rev-budget:+,.0f}</td></tr>
                     </table>
                     <div class="kpi-wrapper">
-                        <div class="kpi-card"><div class="kpi-title">OCC (入住率)</div><div class="kpi-value">{sob_curr['TOTAL_OCC']:.1f}%</div></div>
-                        <div class="kpi-card kpi-accent"><div class="kpi-title">ACHIEVEMENT (达成率)</div><div class="kpi-value">{(total_rev/budget*100):.1f}%</div></div>
+                        <div class="kpi-card"><div class="kpi-title">OCC</div><div class="kpi-value">{sob_curr['TOTAL_OCC']:.1f}%</div></div>
+                        <div class="kpi-card kpi-accent"><div class="kpi-title">ACHIEVEMENT</div><div class="kpi-value">{(total_rev/budget*100):.1f}%</div></div>
                     </div>
                 </div>
                 <div>
                     <table class="modern-table">
-                        <thead><tr><th>{T['segment']}</th><th>RMS (房数)</th><th>ADR (均价)</th><th>REV (营收)</th></tr></thead>
-                        <tr><td class="label">FIT (散客)</td><td>{sob_curr['FIT_RMS']:,.0f}</td><td>{(sob_curr['FIT_REV']/max(1,sob_curr['FIT_RMS'])):,.0f}</td><td>{sob_curr['FIT_REV']:,.0f}</td></tr>
-                        <tr><td class="label">GROUP (团队)</td><td>{sob_curr['GRP_RMS']:,.0f}</td><td>{(sob_curr['GRP_REV']/max(1,sob_curr['GRP_RMS'])):,.0f}</td><td>{sob_curr['GRP_REV']:,.0f}</td></tr>
-                        <tr style="background:#eff6ff; font-weight:bold;"><td>{T['total']}</td><td>{total_rms:,.0f}</td><td>{(total_rev/max(1,total_rms)):,.0f}</td><td>{total_rev:,.0f}</td></tr>
+                        <thead><tr><th>Segment</th><th>RMS</th><th>ADR</th><th>REV</th></tr></thead>
+                        <tr><td class="label">FIT</td><td>{sob_curr['FIT_RMS']:,.0f}</td><td>{(sob_curr['FIT_REV']/max(1,sob_curr['FIT_RMS'])):,.0f}</td><td>{sob_curr['FIT_REV']:,.0f}</td></tr>
+                        <tr><td class="label">GROUP</td><td>{sob_curr['GRP_RMS']:,.0f}</td><td>{(sob_curr['GRP_REV']/max(1,sob_curr['GRP_RMS'])):,.0f}</td><td>{sob_curr['GRP_REV']:,.0f}</td></tr>
+                        <tr style="background:#eff6ff; font-weight:bold;"><td>TOTAL</td><td>{total_rms:,.0f}</td><td>{(total_rev/max(1,total_rms)):,.0f}</td><td>{total_rev:,.0f}</td></tr>
                     </table>
                 </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
-        # ▲▲▲ [수정 끝] ▲▲▲
 
 # ----------------------------------------------------------------------
         # [B] 상세 리포트 데이터 병합 (어제 vs 오늘)
