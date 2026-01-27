@@ -19,14 +19,14 @@ st.set_page_config(layout="wide", page_title="ARI Management", initial_sidebar_s
 if 'lang' not in st.session_state:
     st.session_state.lang = 'ko'
 
-# 3. URL 파라미터 감지 및 세션 고정
-# URL에 ?lang=zh가 있으면 무조건 세션 금고를 업데이트합니다.
-params = st.query_params
-if "lang" in params:
-    if params["lang"] == "zh":
-        st.session_state.lang = "zh"
-    elif params["lang"] == "ko":
-        st.session_state.lang = "ko"
+# 3. URL 파라미터 감지 및 세션 고정 (무한 루프 방지 보강됨)
+try:
+    url_lang = st.query_params.get("lang")
+    # URL에 파라미터가 있고, 현재 세션과 다를 때만 업데이트 (rerun 방지)
+    if url_lang in ['zh', 'ko'] and url_lang != st.session_state.lang:
+        st.session_state.lang = url_lang
+except:
+    pass
 
 # 4. 최종 모드 결정 (URL이 아니라 '세션'을 바라봄)
 is_chairman_mode = (st.session_state.lang == "zh")
@@ -333,7 +333,6 @@ if st.session_state.get("authenticated"):
             st.rerun()
 
 if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting"):
-    # Forecasting 모듈 실행 시에도 T 함수 적용 가능하도록 로직 필요할 수 있음
     secret_forecasting.run_forecasting()
     st.stop()
 
@@ -348,7 +347,7 @@ if uploaded_files:
         if m: month_files_map[m].append({'name': f.name, 'data': df, 'sob': sob})
 
 # ==============================================================================
-# [4] 탭별 데이터 렌더링
+# [4] 탭별 데이터 렌더링 (메인 로직)
 # ==============================================================================
 for i, tab in enumerate(tabs):
     cur_m = i + 1
@@ -371,11 +370,12 @@ for i, tab in enumerate(tabs):
             st.info(f"{cur_m}{T('월')} {T('데이터를 업로드하거나 조회하세요.')}")
             continue
 
-        # S.O.B 대시보드
+        # S.O.B 대시보드 계산 및 출력
         budget = BUDGET_DATA.get(cur_m, 0)
         total_rev = sob_curr['FIT_REV'] + sob_curr['GRP_REV']
         total_rms = sob_curr['FIT_RMS'] + sob_curr['GRP_RMS']
         
+        # HTML S.O.B 대시보드 렌더링
         st.markdown(f"""
         <div class="sob-container">
             <div class="sob-header">📊 {cur_m}{T('월')} {T('Performance Summary')}</div>
@@ -403,24 +403,31 @@ for i, tab in enumerate(tabs):
         </div>
         """, unsafe_allow_html=True)
 
-        # 상세 리포트 병합
+        # ----------------------------------------------------------------------
+        # [B] 상세 리포트 데이터 병합 (어제 vs 오늘)
+        # ----------------------------------------------------------------------
         merged = df_curr.copy()
         if df_prev is not None:
             df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
             merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
         else:
+            # 비교 데이터가 없을 경우 현재 데이터를 기본값으로 설정
             for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
                 merged[f'{c}_prev'] = merged[c]
 
+        # 변화량(PickUp) 계산
         for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
             merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
 
+        # 합계(TOTAL) 행 추가 계산
         sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
         totals = merged[sum_items].sum()
         
+        # 비율 지표 가중평균 재계산 (TOTAL 행용)
         def get_total_rates(prefix_rms, prefix_rev, is_curr=True):
             s_rms = totals[prefix_rms]
             s_rev = totals[prefix_rev]
+            # 전체 가용객실수 역산 (RMS / (OCC/100))
             if is_curr:
                 avail = (merged['RMS'] / (merged['OCC'].replace(0, np.nan) / 100)).fillna(0).sum()
             else:
@@ -445,15 +452,22 @@ for i, tab in enumerate(tabs):
         
         merged = pd.concat([merged, total_row], ignore_index=True)
 
+        # ----------------------------------------------------------------------
+        # [C] Forecasting 연동 데이터 저장
+        # ----------------------------------------------------------------------
         st.session_state[f"sob_{cur_m}"] = sob_curr
+        # 실시간 픽업량(17박 등)을 세션에 전달
         st.session_state[f"pace_{cur_m}"] = totals['Pick_RMS']
 
+        # ----------------------------------------------------------------------
+        # [D] 테이블 스타일링 (히트맵/색상 로직 복구)
+        # ----------------------------------------------------------------------
         final_df = merged[['DateStr', 'WeekDay', 
                            'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
                            'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
                            'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_OCC', 'Pick_ADR', 'Pick_RevPAR', 'Pick_REV']]
 
-        # 헤더 이름 변경 (T 적용)
+        # 헤더 이름 변경 (줄바꿈 포함 및 T 적용)
         col_map = {'DateStr': T('Date'), 'WeekDay': T('Day')}
         items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
         for it in items:
@@ -462,19 +476,23 @@ for i, tab in enumerate(tabs):
             col_map[f'Pick_{it}'] = f'{T("Var")}\n{T(it)}'
         final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
+        # 숫자 포맷 설정
         fmt = {c: '{:,.0f}' for c in final_df.columns if 'OCC' not in c and T('Date') not in c and T('Day') not in c}
         for c in [c for c in final_df.columns if 'OCC' in c]: fmt[c] = '{:.1f}%'
 
         styler = final_df.style.format(fmt)
 
+        # 1. Pre(어제) 그룹 - 회색 파스텔 스타일
         pre_cols = [c for c in final_df.columns if T('Pre') in c]
         styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#9ca3af'})
 
+        # 2. Today(오늘) 그룹 - 블루/오렌지 히트맵
         curr_cols = [c for c in final_df.columns if T('Today') in c]
-        data_idx = final_df.index[:-1] 
+        data_idx = final_df.index[:-1] # TOTAL 제외
         styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.6)
         styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.7)
 
+        # 3. Var(변화) 그룹 - 색상 텍스트 (양수 초록 / 음수 빨강)
         var_cols = [c for c in final_df.columns if T('Var') in c]
         def color_pick(val):
             try:
@@ -484,11 +502,14 @@ for i, tab in enumerate(tabs):
         styler = styler.map(color_pick, subset=var_cols)
         styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
 
+        # 4. TOTAL 행 하이라이트
         styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
                                        **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
 
+        # 출력
         st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
+        # 저장 버튼
         if uploaded_files and st.button(f"💾 {cur_m}{T('월 데이터 DB 저장')}", key=f"btn_{cur_m}"):
             if save_data_with_sob(report_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr):
                 st.toast(f"✅ {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
