@@ -68,6 +68,7 @@ LANG_DICT = {
     "국적별 RN 비중": "分国籍间夜占比 (RN by Nation)",
     "국적별 매출 실적": "分国籍收入表现 (Rev by Nation)",
     "조식 포함 여부 비중(RN)": "含早/不含早占比 (Breakfast Ratio)",
+    "조식 상세 코드 비중": "含早代码明细 (Breakfast Code Detail)",
     "데이터 없음": "无数据",
     "기간 미선택": "未选择期间",
     "⚠️ 저장할 데이터가 없습니다.": "⚠️ 没有可保存的数据。",
@@ -219,11 +220,10 @@ def delete_otb():
     for d in docs:
         dd = d.to_dict()
         if dd.get('data_type') == 'OTB': d.reference.delete(); c+=1
-        elif 'data' in dd and any('OTB' in str(x.get('Segment','')) for x in dd['data']): d.reference.delete(); c+=1
     return c
 
 # ==============================================================================
-# 4. 파일 처리 로직 (헤더 찾기 & 합계 제거 & 조식 처리 강화)
+# 4. 파일 처리 로직 (Header 탐색)
 # ==============================================================================
 
 def load_and_fix_header(file):
@@ -257,7 +257,6 @@ def process_res_file(file):
             st.error("🚨 Header Error")
             return pd.DataFrame()
 
-        # [수정] 서비스코드(Service_Code) 매핑 추가
         col_map = {
             '상태': 'Status', '예약번호': 'Res_No', '고객명': 'Guest_Name',
             '입실일자': 'CheckIn', '도착일': 'CheckIn', '퇴실일자': 'CheckOut', '출발일': 'CheckOut',
@@ -315,11 +314,12 @@ def process_res_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
-        # [핵심 수정] 조식 여부 (서비스코드에 'BF'가 있으면 포함)
+        # [핀셋 수정] 조식 판별 로직: Service_Code에 'BF'가 있어야만 Included, 없거나 비었으면 Room Only
         if 'Service_Code' in df.columns:
-            df['Breakfast'] = np.where(df['Service_Code'].astype(str).str.upper().str.contains('BF'), 'Included', 'Not Included')
+            has_bf = df['Service_Code'].fillna('').astype(str).str.upper().str.contains('BF')
+            df['Breakfast'] = np.where(has_bf, 'Included', 'Room Only')
         else:
-            df['Breakfast'] = 'Not Included' # 서비스코드 없으면 미포함 처리
+            df['Breakfast'] = 'Room Only'
 
         with st.sidebar:
             st.caption(f"{T('📊 예약 처리')}: {len(df)}{T('건')}")
@@ -343,7 +343,7 @@ def process_cancel_file(file):
             '거래처': 'Account', '세그먼트': 'Segment', '국적': 'Nat_Orig',
             '예약일자': 'Booking_Date', '예약일': 'Booking_Date',
             '취소일자': 'Cancel_Date', '취소일': 'Cancel_Date',
-            '서비스코드': 'Service_Code' # 조식 판별용
+            '서비스코드': 'Service_Code'
         }
         df = df.rename(columns=col_map)
         
@@ -384,11 +384,12 @@ def process_cancel_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
-        # [핵심 수정] 조식 여부 (서비스코드에 'BF'가 있으면 포함)
+        # [핀셋 수정] 취소 리스트도 조식 판별 동일 적용
         if 'Service_Code' in df.columns:
-            df['Breakfast'] = np.where(df['Service_Code'].astype(str).str.upper().str.contains('BF'), 'Included', 'Not Included')
+            has_bf = df['Service_Code'].fillna('').astype(str).str.upper().str.contains('BF')
+            df['Breakfast'] = np.where(has_bf, 'Included', 'Room Only')
         else:
-            df['Breakfast'] = 'Not Included'
+            df['Breakfast'] = 'Room Only'
 
         with st.sidebar: st.caption(f"{T('📊 취소 처리')}: {len(df)}{T('건')}")
         return df
@@ -457,11 +458,7 @@ def render_tab(df, k):
             stay_dist = p_df.groupby('Stay_Month')['RN'].sum().reset_index()
             st.plotly_chart(px.bar(stay_dist, x='Stay_Month', y='RN', text_auto='.0f', title=T("투숙월별 총 RN")), use_container_width=True, key=f"{k}_stay_b")
         else: st.warning(T("페이싱 데이터 없음"))
-    with t3:
-        agg = df.groupby('Account').agg({'RN': 'sum', 'Room_Revenue': 'sum', 'Total_Revenue': 'sum'}).reset_index()
-        agg['ADR_Room'] = np.where(agg['RN']>0, agg['Room_Revenue']/agg['RN'], 0)
-        agg['ADR_Total'] = np.where(agg['RN']>0, agg['Total_Revenue']/agg['RN'], 0)
-        show_styled(add_total_with_adr(agg.sort_values('RN', ascending=False).head(50), 'Account'))
+    with t3: group_and_show(df, 'Account')
     with t4:
         df['LT_G'] = pd.cut(df['Lead_Time'], bins=[-999,0,3,7,14,30,60,90,999], labels=['0','1-3','4-7','8-14','15-30','31-60','61-90','90+'])
         l = group_and_show(df, 'LT_G')
@@ -480,8 +477,20 @@ def render_tab(df, k):
             c1.plotly_chart(px.pie(n, values='RN', names='Nat_Group', title=T("국적별 RN 비중")), use_container_width=True, key=f"{k}_n_p")
             c2.plotly_chart(px.bar(n, x='Nat_Group', y='Room_Revenue', title=T("국적별 매출 실적")), use_container_width=True, key=f"{k}_n_b")
     with t8:
+        # [핵심 수정] 조식 탭: 왼쪽 파이차트(비율) / 오른쪽 막대차트(코드 상세)
         b = group_and_show(df, 'Breakfast')
-        if not b.empty: st.plotly_chart(px.pie(b, values='RN', names='Breakfast', title=T("조식 포함 여부 비중(RN)")), use_container_width=True, key=f"{k}_bf")
+        if not b.empty:
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(px.pie(b, values='RN', names='Breakfast', title=T("조식 포함 여부 비중(RN)")), use_container_width=True, key=f"{k}_bf_pie")
+            
+            # 조식 포함(Included)인 건만 필터링하여 상세 코드별 막대 그래프 생성
+            bf_detail = df[df['Breakfast'] == 'Included']
+            if not bf_detail.empty and 'Service_Code' in bf_detail.columns:
+                # Service_Code별 집계
+                detail_agg = bf_detail.groupby('Service_Code')['RN'].sum().reset_index().sort_values('RN', ascending=False)
+                c2.plotly_chart(px.bar(detail_agg, x='Service_Code', y='RN', text_auto='.0f', title=T("조식 상세 코드 비중")), use_container_width=True, key=f"{k}_bf_bar")
+            else:
+                c2.info(T("조식 포함 내역이 없습니다."))
 
 # ==============================================================================
 # MAIN
@@ -504,7 +513,6 @@ try:
         st.subheader(T("📌 예약/취소 조회 (기준 vs 비교)"))
         yesterday = datetime.now().date() - timedelta(days=1)
         
-        # [수정] 기본값 설정
         default_val = (yesterday, yesterday)
         dates_selected = st.date_input(T("기준 기간 (어제까지 선택 가능)"), value=default_val, max_value=yesterday, format="YYYY-MM-DD")
         
@@ -529,7 +537,7 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
-    # 데이터 필터링 (누락된 df_o 정의 포함)
+    # 데이터 필터링
     if sel_start and sel_end and not df_all.empty:
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_start) & (df_all['Snapshot_Date'] <= sel_end)
         df_bk = df_all[mask_bk & (df_all['Total_Revenue']>0)].copy()
@@ -552,7 +560,6 @@ try:
         df_bk, df_zero, df_cn, df_tot = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         df_bk_comp, df_cn_comp = pd.DataFrame(), pd.DataFrame()
 
-    # [핵심] df_o (OTB 데이터) 정의 추가
     if sel_otb and not df_all.empty:
         df_o = df_all[(df_all['Snapshot_Date']==sel_otb) & (df_all['Data_Type']=='OTB')].copy()
     else:
@@ -564,8 +571,12 @@ try:
         st.header(f"{T('👑 GM 요약')} ({disp})")
         if df_bk.empty and df_cn.empty: st.info(T("데이터 없음"))
         else:
-            b_rn, b_rev, b_tot = df_bk['RN'].sum(), df_bk['Room_Revenue'].sum(), df_bk['Total_Revenue'].sum()
-            c_rn, c_rev, c_tot = df_cn['RN'].sum(), df_cn['Room_Revenue'].sum(), df_cn['Total_Revenue'].sum()
+            b_rn = df_bk['RN'].sum()
+            b_rev = df_bk['Room_Revenue'].sum()
+            b_tot = df_bk['Total_Revenue'].sum()
+            c_rn = df_cn['RN'].sum()
+            c_rev = df_cn['Room_Revenue'].sum()
+            c_tot = df_cn['Total_Revenue'].sum()
             
             b_rn_c = df_bk_comp['RN'].sum() if not df_bk_comp.empty else 0
             b_rev_c = df_bk_comp['Room_Revenue'].sum() if not df_bk_comp.empty else 0
@@ -613,16 +624,19 @@ try:
         st.header(f"{T('🎯 OTB 현황')} ({sel_otb})")
         if df_o.empty: st.warning(T("데이터 없음"))
         else:
+            # OTB 로직
             df_o['M'] = pd.to_datetime(df_o['CheckIn']).dt.month
             grp = df_o.groupby('M').agg({'Room_Revenue':'sum'}).reset_index()
             fin = pd.merge(pd.DataFrame({'M': range(1,13)}), grp, on='M', how='left').fillna(0)
             fin['Budget'] = fin['M'].map(BUDGET_DATA).fillna(0)
             fin['Name'] = fin['M'].astype(str) + "월"
             fin['Rate'] = np.where(fin['Budget']>0, (fin['Room_Revenue']/fin['Budget'])*100, 0)
+            
             fig = go.Figure()
             fig.add_trace(go.Bar(x=fin['Name'], y=fin['Room_Revenue'], name='OTB', text=fin['Rate'].apply(lambda x:f"{x:.1f}%")))
             fig.add_trace(go.Scatter(x=fin['Name'], y=fin['Budget'], name='Budget', line=dict(color='red', dash='dot')))
             st.plotly_chart(fig, use_container_width=True)
+            
             res = {}
             for _,r in fin.iterrows(): res[r['Name']] = [f"{r['Budget']:,.0f}", f"{r['Room_Revenue']:,.0f}", f"{r['Rate']:.1f}%"]
             st.dataframe(pd.DataFrame(res, index=['Budget','OTB','Achiev']).T, use_container_width=True)
