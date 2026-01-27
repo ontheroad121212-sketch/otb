@@ -11,20 +11,27 @@ import time
 import textwrap
 
 # ==============================================================================
-# 1. 기본 설정 및 회장님 모드(중국어) 감지 로직
+# 1. 기본 설정 및 회장님 모드(중국어) 강력 유지 로직 (Session State)
 # ==============================================================================
 st.set_page_config(page_title="ARI Final Integrity", layout="wide", initial_sidebar_state="expanded")
 
-# [핵심] URL 파라미터 감지 (?lang=zh) 및 유지
+# [핵심] 세션 스테이트를 활용한 언어 설정 유지
+if 'lang' not in st.session_state:
+    st.session_state.lang = 'ko' # 기본값 한국어
+
+# URL 파라미터 확인 (접속 순간 감지)
 try:
     query_params = st.query_params
-    is_chairman_mode = query_params.get("lang") == "zh"
-    # 페이지 이동 시 파라미터 유지 (Streamlit 최신 버전)
-    if is_chairman_mode:
-        st.query_params["lang"] = "zh"
+    url_lang = query_params.get("lang")
 except:
-    # 구버전 호환
-    is_chairman_mode = st.experimental_get_query_params().get("lang", [""])[0] == "zh"
+    url_lang = st.experimental_get_query_params().get("lang", [""])[0]
+
+# URL에 zh가 있으면 세션 상태를 중국어로 고정
+if url_lang == 'zh':
+    st.session_state.lang = 'zh'
+
+# 회장님 모드 변수 설정 (이제 세션을 바라봄)
+is_chairman_mode = (st.session_state.lang == 'zh')
 
 # [번역 사전]
 LANG_DICT = {
@@ -222,7 +229,7 @@ def delete_otb():
     return c
 
 # ==============================================================================
-# 4. 파일 처리 로직 (Header 탐색 및 조식 정밀 판별)
+# 4. 파일 처리 로직 (헤더 찾기 & 조식 완벽 수정)
 # ==============================================================================
 
 def load_and_fix_header(file):
@@ -237,6 +244,7 @@ def load_and_fix_header(file):
     header_idx = -1
     for r in range(min(30, len(df_raw))):
         row_str = df_raw.iloc[r].astype(str).str.cat()
+        # 헤더를 찾는 조건
         if "예약번호" in row_str and ("객실료" in row_str or "총금액" in row_str):
             header_idx = r
             break
@@ -255,7 +263,13 @@ def process_res_file(file):
             st.error("🚨 Header Error")
             return pd.DataFrame()
 
-        # 컬럼 매핑
+        # [수정] 1. 서비스코드 컬럼명 찾기 (한글 '서비스코드' -> 영어 'Service_Code' 매핑)
+        # 만약 컬럼명이 조금 다를 수도 있으니 동적으로 찾아서 바꿈
+        for col in df.columns:
+            if "서비스" in str(col) and "코드" in str(col):
+                df.rename(columns={col: 'Service_Code'}, inplace=True)
+                break
+
         col_map = {
             '상태': 'Status', '예약번호': 'Res_No', '고객명': 'Guest_Name',
             '입실일자': 'CheckIn', '도착일': 'CheckIn', '퇴실일자': 'CheckOut', '출발일': 'CheckOut',
@@ -263,7 +277,7 @@ def process_res_file(file):
             '객실료': 'Room_Revenue', '총금액': 'Total_Revenue', '총매출': 'Total_Revenue',
             '거래처': 'Account', '세그먼트': 'Segment', '국적': 'Nat_Orig',
             '예약일자': 'Booking_Date', '예약일': 'Booking_Date',
-            '서비스코드': 'Service_Code', '요금타입': 'Rate_Type'
+            # '서비스코드': 'Service_Code' # 위에서 동적으로 처리함
         }
         df = df.rename(columns=col_map)
         
@@ -271,8 +285,7 @@ def process_res_file(file):
         for c in required:
             if c not in df.columns: df[c] = np.nan
 
-        # [핵심] 예약번호 4자리 이상만 (합계 제거)
-        df = df[df['Res_No'].astype(str).str.len() > 3]
+        df = df[df['Res_No'].notna()]
         df = df[~df['Res_No'].astype(str).str.contains('합계|총계|Total', case=False, na=False)]
 
         df['CheckIn'] = safe_date_parse(df['CheckIn'])
@@ -286,7 +299,6 @@ def process_res_file(file):
             if c in df.columns: df[c] = df[c].apply(clean_num)
             else: df[c] = 0
 
-        # 매출 100억 이상 제거 (합계 방지)
         df = df[df['Room_Revenue'] < 10000000000]
 
         df['RN'] = df['Rooms'] * df['Nights']
@@ -315,12 +327,14 @@ def process_res_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
-        # [핵심] 조식 판별: Service_Code에 'BF'가 있으면 Included, 없으면 Room Only
+        # [핵심] 조식 판별 (Service_Code 컬럼이 존재하는지 확인 후 처리)
         if 'Service_Code' in df.columns:
+            # 대문자 변환 후 BF 포함 여부 확인
             df['Breakfast'] = df['Service_Code'].fillna('').astype(str).str.upper().apply(
                 lambda x: 'Included' if 'BF' in x else 'Room Only'
             )
         else:
+            # 서비스코드가 없으면 무조건 Room Only
             df['Breakfast'] = 'Room Only'
 
         with st.sidebar:
@@ -336,6 +350,12 @@ def process_cancel_file(file):
             st.error("🚨 Header Error")
             return pd.DataFrame()
 
+        # [수정] 서비스코드 동적 매핑
+        for col in df.columns:
+            if "서비스" in str(col) and "코드" in str(col):
+                df.rename(columns={col: 'Service_Code'}, inplace=True)
+                break
+
         col_map = {
             '상태': 'Status', '예약번호': 'Res_No', '고객명': 'Guest_Name',
             '입실일자': 'CheckIn', '도착일': 'CheckIn', '퇴실일자': 'CheckOut', '출발일': 'CheckOut',
@@ -344,12 +364,11 @@ def process_cancel_file(file):
             '거래처': 'Account', '세그먼트': 'Segment', '국적': 'Nat_Orig',
             '예약일자': 'Booking_Date', '예약일': 'Booking_Date',
             '취소일자': 'Cancel_Date', '취소일': 'Cancel_Date',
-            '서비스코드': 'Service_Code'
+            # '서비스코드': 'Service_Code' # 위에서 처리함
         }
         df = df.rename(columns=col_map)
         
-        # 합계 제거
-        df = df[df['Res_No'].astype(str).str.len() > 3]
+        df = df[df['Res_No'].notna()]
         df = df[~df['Res_No'].astype(str).str.contains('합계|총계|Total', case=False, na=False)]
 
         df['Cancel_Date'] = safe_date_parse(df.get('Cancel_Date'))
@@ -386,7 +405,7 @@ def process_cancel_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
-        # [핵심] 취소 리스트도 조식 판별 적용
+        # [핵심] 조식 판별 (취소 리스트도 동일 적용)
         if 'Service_Code' in df.columns:
             df['Breakfast'] = df['Service_Code'].fillna('').astype(str).str.upper().apply(
                 lambda x: 'Included' if 'BF' in x else 'Room Only'
@@ -491,14 +510,11 @@ def render_tab(df, k):
             c2.plotly_chart(px.bar(n, x='Nat_Group', y='Room_Revenue', title=T("국적별 매출 실적")), use_container_width=True, key=f"{k}_n_b")
     
     with t8:
-        # [핵심] 조식 분석 (왼쪽: 유무 파이 / 오른쪽: 상세 코드 막대)
-        # TOTAL 행이 섞이지 않게 순수 데이터로 차트 그림
+        # [복구] 조식 상세 분석
         b_raw = df.groupby('Breakfast').agg({'RN': 'sum'}).reset_index()
-        
         c1, c2 = st.columns(2)
         c1.plotly_chart(px.pie(b_raw, values='RN', names='Breakfast', title=T("조식 포함 여부 비중(RN)")), use_container_width=True, key=f"{k}_bf_pie")
         
-        # 상세 코드 분석
         bf_included = df[df['Breakfast'] == 'Included']
         if not bf_included.empty and 'Service_Code' in bf_included.columns:
             detail = bf_included.groupby('Service_Code')['RN'].sum().reset_index().sort_values('RN', ascending=False)
@@ -506,7 +522,6 @@ def render_tab(df, k):
         else:
             c2.info(T("조식 포함 내역이 없습니다."))
             
-        # 테이블은 group_and_show로 깔끔하게
         group_and_show(df, 'Breakfast')
 
 # ==============================================================================
