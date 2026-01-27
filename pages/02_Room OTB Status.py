@@ -208,14 +208,18 @@ with tab_upload:
                 st.error("⛔ 암호가 틀렸습니다!")
 
 # ==========================================================================
-# [TAB 2] 리포트 (수정됨: 자동 과거 날짜 매칭)
+# [TAB 2] 리포트 (수정됨: 자동 과거 날짜 매칭 + 한국 시간 기본값)
 # ==========================================================================
 with tab_dashboard:
     st.header("📊 객실 통합 리포트")
     
     col_sel, col_btn = st.columns([1, 4])
     with col_sel:
-        search_date = st.date_input("조회 기준일", datetime.date.today())
+        # [핵심 수정] 조회 달력의 기본값을 '한국 시간' 오늘로 변경
+        KST = pytz.timezone('Asia/Seoul')
+        today_kst = datetime.datetime.now(KST).date()
+        
+        search_date = st.date_input("조회 기준일", today_kst) # 이제 아침에도 28일로 뜹니다!
         search_str = search_date.strftime("%Y-%m-%d")
         yest_str = (search_date - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     
