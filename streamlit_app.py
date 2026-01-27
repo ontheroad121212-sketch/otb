@@ -35,9 +35,6 @@ is_chairman_mode = (st.session_state["lang"] == "zh")
 # [확인용 임시 코드] 배포 후 화면 맨 위에 이게 뜨는지 확인하세요.
 # st.write(f"접속 모드: {'중국어' if is_chairman_mode else '한국어'}")
 
-# 4. 최종 모드 결정 (URL이 아니라 '세션'을 바라봄)
-is_chairman_mode = (st.session_state.lang == "zh")
-
 # [번역 사전] 회장님 모드일 때만 사용되는 중국어 매핑 (대시보드 용어 완벽 포함)
 LANG_DICT = {
     # 사이드바 & 공통
