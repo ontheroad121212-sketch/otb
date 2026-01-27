@@ -97,13 +97,9 @@ def save_to_db(df, data_type='Reservation'):
                 sanitized_recs.append(new_r)
             
             # 문서 ID (Overwrite)
-            did = f"{d}_{data_type}_{int(time.time()*1000)}" # 타임스탬프 일단 유지하되, 로직상 문제는 해결됨
-            # (중복 방지를 위해 날짜_타입으로 덮어쓰기 하는 것이 좋으나, 
-            #  사용자가 "일주일치 한번에 올린다"고 했으므로, 파일 내 날짜별로 쪼개지는게 중요함.
-            #  여기서는 기존 로직 유지하되, 데이터 정제(process 함수)에서 걸러내는게 핵심)
-            
-            # [수정] 찌꺼기 방지를 위해 동일 날짜/타입 문서는 덮어쓰기
-            did = f"{d}_{data_type}" 
+            did = f"{d}_{data_type}_{int(time.time()*1000)}" 
+            # 중복 방지를 위한 덮어쓰기 로직
+            did = f"{d}_{data_type}"
 
             db.collection(COLLECTION_NAME).document(did).set({
                 'data': sanitized_recs, 'uploaded_at': datetime.now(), 'snapshot_date': d, 'data_type': data_type
@@ -150,14 +146,18 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (핀셋 수정: 합계 줄 제거 및 데이터 정제 강화)
+# 4. 파일 처리 로직 (핀셋 수정: 열 밀림 방지 & 예약번호 필수 체크)
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
+    """
+    [수정] 헤더 행을 찾을 때, 'Status'와 'Res_No' 같은 핵심 컬럼이 확실히 있는지 확인
+    """
     header_idx = None
     col_map = {}
     max_matches = 0
     
+    # 상위 20줄 탐색
     for r in range(min(20, len(df_raw))):
         row_vals = df_raw.iloc[r].astype(str).values
         match_count = 0
@@ -166,13 +166,17 @@ def find_header_and_cols(df_raw, keywords):
         for c_idx, val in enumerate(row_vals):
             for k, patterns in keywords.items():
                 if any(p in val for p in patterns):
-                    current_map[k] = c_idx
-                    match_count += 1
+                    # 이미 매핑된 키워드는 건너뜀 (중복 방지)
+                    if k not in current_map:
+                        current_map[k] = c_idx
+                        match_count += 1
         
-        if match_count > max_matches and match_count >= 3:
-            max_matches = match_count
-            header_idx = r
-            col_map = current_map
+        # [핵심] 예약번호(Res_No)와 객실료(Room_Revenue)는 필수적으로 포함되어야 헤더로 인정
+        if 'Res_No' in current_map and 'Room_Revenue' in current_map:
+            if match_count > max_matches:
+                max_matches = match_count
+                header_idx = r
+                col_map = current_map
             
     return header_idx, col_map
 
@@ -186,13 +190,13 @@ def process_res_file(file):
 
         keywords = {
             'Status': ['상태', 'Stat'],
-            'Res_No': ['번호', 'No', 'Res'],
+            'Res_No': ['번호', 'No', 'Res', 'Reservation No'],
             'Guest_Name': ['고객명', 'Name', 'Guest'],
             'CheckIn': ['도착', 'Arr', 'In', 'Check In'],
             'CheckOut': ['출발', 'Dep', 'Out', 'Check Out'],
             'Nights': ['박수', 'Ngt', 'Night'],
             'Room_Type': ['객실유형', 'Type', 'Room Type'],
-            'Rooms': ['객실수', 'Rm', 'Room'],
+            'Rooms': ['객실수', 'Rm', 'Room', 'Rms'],
             'Room_Revenue': ['객실료', '객실매출', 'Revenue', 'Room Rev'],
             'Total_Revenue': ['총매출', '합계', 'Total Rev'],
             'Account': ['거래처', 'Agent', 'Source'],
@@ -215,16 +219,19 @@ def process_res_file(file):
         
         df = pd.DataFrame(data_dict)
         
+        # 누락 컬럼 채우기
         for col in keywords.keys():
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        # 정제 전 필터링: 합계/Total 문자가 있는 행 제거
-        # (전체 컬럼을 문자열로 변환하여 'Total', '합계', '소계' 포함 여부 검사)
-        mask_garbage = df.apply(lambda x: x.astype(str).str.contains('Total|합계|소계|Grand', case=False).any(), axis=1)
-        df = df[~mask_garbage]
-
+        # [핀셋 수정] 강력한 필터링: 예약번호(Res_No)가 없으면 무조건 삭제 (합계행 제거)
+        # 1. 예약번호 없는 행 제거
+        df = df[df['Res_No'].astype(str).str.len() > 1]
+        
+        # 2. 체크인 날짜 없는 행 제거
         df['CheckIn'] = pd.to_datetime(df['CheckIn'], errors='coerce')
+        df = df[df['CheckIn'].notna()]
+
         df['CheckOut'] = pd.to_datetime(df['CheckOut'], errors='coerce')
         df['Booking_Date'] = pd.to_datetime(df['Booking_Date'], errors='coerce')
         
@@ -233,15 +240,9 @@ def process_res_file(file):
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        # [핀셋 수정] 강력한 데이터 정제 (합계행 킬러)
-        # 1. 예약일이 없는 데이터 삭제
-        df = df[df['Booking_Date'].notna()]
-        # 2. 객실수가 100개 이상이면 합계로 간주하고 삭제
-        df = df[pd.to_numeric(df['Rooms'], errors='coerce').fillna(0) < 100]
-        # 3. 매출액이 5억원 이상이면 합계로 간주하고 삭제
-        df = df[pd.to_numeric(df['Room_Revenue'], errors='coerce').fillna(0) < 500000000] 
-        # 4. 체크인 날짜 없는 행 삭제
-        df = df[df['CheckIn'].notna()]
+        # 3. 비정상 수치 제거 (객실수 > 500, 매출 > 10억 인 경우)
+        df = df[df['Rooms'] < 500]
+        df = df[df['Room_Revenue'] < 1000000000]
 
         df['Rooms'] = np.where(df['Rooms']<=0, 1, df['Rooms'])
         df['Nights'] = np.where(df['Nights']<=0, 1, df['Nights'])
@@ -250,7 +251,7 @@ def process_res_file(file):
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
         # 예약일 기준 Snapshot
-        df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d')
+        df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_Date'].dt.strftime('%Y-%m')
@@ -263,6 +264,9 @@ def process_res_file(file):
             if 'JPN' in val: return 'JPN'
             return 'OTH'
         df['Nat_Group'] = df['Nat_Orig'].apply(classify_nat)
+        
+        # 세그먼트 공백 제거
+        df['Segment'] = df['Segment'].astype(str).str.strip()
         
         raw_str = df_data.astype(str).agg(''.join, axis=1).str.upper()
         df['Breakfast'] = np.where(raw_str.str.contains('BF'), 'Included', 'Not Included')
@@ -314,9 +318,8 @@ def process_cancel_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        # 정제 전 필터링: 합계/Total 문자가 있는 행 제거
-        mask_garbage = df.apply(lambda x: x.astype(str).str.contains('Total|합계|소계|Grand', case=False).any(), axis=1)
-        df = df[~mask_garbage]
+        # [핀셋 수정] 1. 예약번호 없는 행 제거 (합계행 제거)
+        df = df[df['Res_No'].astype(str).str.len() > 1]
 
         df['CheckIn'] = pd.to_datetime(df['CheckIn'], errors='coerce')
         df['CheckOut'] = pd.to_datetime(df['CheckOut'], errors='coerce')
@@ -328,10 +331,9 @@ def process_cancel_file(file):
         df['Room_Revenue'] = df['Room_Revenue'].apply(clean_num)
         df['Total_Revenue'] = df['Total_Revenue'].apply(clean_num)
 
-        # [핀셋 수정] 강력한 데이터 정제 (합계행 킬러)
-        df = df[df['Cancel_Date'].notna()]
-        df = df[pd.to_numeric(df['Rooms'], errors='coerce').fillna(0) < 100] # 객실수 100개 이상 제거
-        df = df[pd.to_numeric(df['Room_Revenue'], errors='coerce').fillna(0) < 500000000] # 5억 이상 제거
+        # 2. 비정상 수치 제거
+        df = df[df['Rooms'] < 500]
+        df = df[df['Room_Revenue'] < 1000000000]
         df = df[df['CheckIn'].notna()]
 
         df['Rooms'] = np.where(df['Rooms']<=0, 1, df['Rooms'])
@@ -341,7 +343,7 @@ def process_cancel_file(file):
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
         # 취소일 기준 Snapshot
-        df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d')
+        df['Snapshot_Date'] = df['Cancel_Date'].dt.strftime('%Y-%m-%d').fillna(datetime.now().strftime('%Y-%m-%d'))
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
         df['Booking_Month'] = df['Booking_Date'].dt.strftime('%Y-%m')
@@ -352,6 +354,8 @@ def process_cancel_file(file):
             if 'KOR' in val: return 'KOR'
             return 'OTH'
         df['Nat_Group'] = df['Nat_Orig'].apply(classify_nat)
+        
+        df['Segment'] = df['Segment'].astype(str).str.strip()
         
         raw_str = df_data.astype(str).agg(''.join, axis=1).str.upper()
         df['Breakfast'] = np.where(raw_str.str.contains('BF'), 'Included', 'Not Included')
@@ -528,7 +532,7 @@ try:
             "기준 기간 (어제까지 선택 가능)",
             value=default_val,
             min_value=min_date,
-            max_value=yesterday_date,
+            max_value=yesterday_date, # 오늘 이후 선택 불가
             format="YYYY-MM-DD"
         )
         
@@ -569,7 +573,7 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
-    # 데이터 로드
+    # 데이터 로드 (기준 기간)
     if sel_res_start and sel_res_end and not df_all.empty:
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_res_start) & (df_all['Snapshot_Date'] <= sel_res_end)
         df_bk_raw = df_all[mask_bk].copy()
