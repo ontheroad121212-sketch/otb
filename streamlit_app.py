@@ -11,33 +11,32 @@ import secret_forecasting  # 포캐스팅 모듈 임포트
 # ==============================================================================
 # [1] 페이지 기본 설정 및 CSS 스타일링
 # ==============================================================================
-
-
-# 1. 기본 설정 (가장 최상단)
+# 1. 기본 설정 (가장 최상단 유지)
 st.set_page_config(
     layout="wide",
     page_title="Daily Pace Report & Forecasting",
     initial_sidebar_state="expanded"
 )
 
-# 2. [핵심] 전역 언어 설정 유지 로직
+# 2. [핵심] 전역 언어 설정 유지 및 강제 고정 로직
 if 'lang' not in st.session_state:
-    st.session_state.lang = 'ko'  # 기본값 한국어
+    st.session_state.lang = 'ko'  # 금고가 비어있으면 한국어로 시작
 
-# 현재 URL에서 파라미터 읽기
+# URL에서 파라미터 읽기 (감지)
 try:
-    url_lang = st.query_params.get("lang")
-    # URL에 직접적으로 zh나 ko가 찍혔을 때만 세션 금고를 업데이트
-    if url_lang in ['zh', 'ko']:
-        st.session_state.lang = url_lang
+    # 현재 URL에 ?lang=zh 등이 있는지 실시간 확인
+    query_params = st.query_params
+    if "lang" in query_params:
+        new_lang = query_params["lang"]
+        if new_lang in ['zh', 'ko']:
+            st.session_state.lang = new_lang # 발견 즉시 금고 교체
 except:
     pass
 
-# 최종 모드 결정 (서브 페이지들과 동일한 변수명 사용)
+# 3. 최종 모드 결정 (가장 중요!)
+# URL에 파라미터가 있든 없든, '세션 금고'에 저장된 값을 기준으로 결정합니다.
+# 이렇게 해야 메뉴를 눌러서 URL이 깨져도 중국어가 유지됩니다.
 is_chairman_mode = (st.session_state.lang == 'zh')
-
-# [참고] 이제부터는 모든 페이지에서 is_chairman_mode 변수 하나로 
-# 한국어/중국어 화면을 분기해서 보여주면 됩니다.
 
 st.markdown(textwrap.dedent("""
 <style>
