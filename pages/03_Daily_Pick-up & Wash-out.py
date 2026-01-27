@@ -15,11 +15,15 @@ import textwrap
 # ==============================================================================
 st.set_page_config(page_title="ARI Final Integrity", layout="wide", initial_sidebar_state="expanded")
 
-# [핵심] URL 파라미터 감지 (?lang=zh)
+# [핵심] URL 파라미터 감지 (?lang=zh) 및 유지
 try:
     query_params = st.query_params
     is_chairman_mode = query_params.get("lang") == "zh"
+    # 페이지 이동 시 파라미터 유지 (Streamlit 최신 버전)
+    if is_chairman_mode:
+        st.query_params["lang"] = "zh"
 except:
+    # 구버전 호환
     is_chairman_mode = st.experimental_get_query_params().get("lang", [""])[0] == "zh"
 
 # [번역 사전]
@@ -175,20 +179,15 @@ def save_to_db(df, data_type='Reservation'):
                 sanitized_recs.append(new_r)
             
             did = f"{d}_{data_type}"
-            
             db.collection(COLLECTION_NAME).document(did).set({
                 'data': sanitized_recs, 'uploaded_at': datetime.now(), 'snapshot_date': d, 'data_type': data_type
             })
             save_count += len(sanitized_recs)
             
         if save_count > 0:
-            msg = T("✅ 데이터 {save_count}건 저장 완료!").format(save_count=save_count)
-            st.toast(msg)
+            st.toast(T("✅ 데이터 {save_count}건 저장 완료!").format(save_count=save_count))
             return True
-        else:
-            st.error(T("⚠️ 날짜 문제로 저장된 데이터가 없습니다."))
-            return False
-            
+        return False
     except Exception as e: 
         st.error(f"Save Error: {e}")
         return False
@@ -223,7 +222,7 @@ def delete_otb():
     return c
 
 # ==============================================================================
-# 4. 파일 처리 로직
+# 4. 파일 처리 로직 (Header 탐색 및 조식 정밀 판별)
 # ==============================================================================
 
 def load_and_fix_header(file):
@@ -256,6 +255,7 @@ def process_res_file(file):
             st.error("🚨 Header Error")
             return pd.DataFrame()
 
+        # 컬럼 매핑
         col_map = {
             '상태': 'Status', '예약번호': 'Res_No', '고객명': 'Guest_Name',
             '입실일자': 'CheckIn', '도착일': 'CheckIn', '퇴실일자': 'CheckOut', '출발일': 'CheckOut',
@@ -263,7 +263,7 @@ def process_res_file(file):
             '객실료': 'Room_Revenue', '총금액': 'Total_Revenue', '총매출': 'Total_Revenue',
             '거래처': 'Account', '세그먼트': 'Segment', '국적': 'Nat_Orig',
             '예약일자': 'Booking_Date', '예약일': 'Booking_Date',
-            '서비스코드': 'Service_Code'
+            '서비스코드': 'Service_Code', '요금타입': 'Rate_Type'
         }
         df = df.rename(columns=col_map)
         
@@ -271,7 +271,8 @@ def process_res_file(file):
         for c in required:
             if c not in df.columns: df[c] = np.nan
 
-        df = df[df['Res_No'].notna()]
+        # [핵심] 예약번호 4자리 이상만 (합계 제거)
+        df = df[df['Res_No'].astype(str).str.len() > 3]
         df = df[~df['Res_No'].astype(str).str.contains('합계|총계|Total', case=False, na=False)]
 
         df['CheckIn'] = safe_date_parse(df['CheckIn'])
@@ -285,6 +286,7 @@ def process_res_file(file):
             if c in df.columns: df[c] = df[c].apply(clean_num)
             else: df[c] = 0
 
+        # 매출 100억 이상 제거 (합계 방지)
         df = df[df['Room_Revenue'] < 10000000000]
 
         df['RN'] = df['Rooms'] * df['Nights']
@@ -346,7 +348,8 @@ def process_cancel_file(file):
         }
         df = df.rename(columns=col_map)
         
-        df = df[df['Res_No'].notna()]
+        # 합계 제거
+        df = df[df['Res_No'].astype(str).str.len() > 3]
         df = df[~df['Res_No'].astype(str).str.contains('합계|총계|Total', case=False, na=False)]
 
         df['Cancel_Date'] = safe_date_parse(df.get('Cancel_Date'))
@@ -407,7 +410,7 @@ def process_otb(file):
     except: return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 및 번역 적용
+# 5. UI 및 번역 적용 (T 함수 활용)
 # ==============================================================================
 
 def add_total_with_adr(df, group_col_name="구분"):
@@ -488,11 +491,14 @@ def render_tab(df, k):
             c2.plotly_chart(px.bar(n, x='Nat_Group', y='Room_Revenue', title=T("국적별 매출 실적")), use_container_width=True, key=f"{k}_n_b")
     
     with t8:
-        # [복구] 조식 상세 분석
+        # [핵심] 조식 분석 (왼쪽: 유무 파이 / 오른쪽: 상세 코드 막대)
+        # TOTAL 행이 섞이지 않게 순수 데이터로 차트 그림
         b_raw = df.groupby('Breakfast').agg({'RN': 'sum'}).reset_index()
+        
         c1, c2 = st.columns(2)
         c1.plotly_chart(px.pie(b_raw, values='RN', names='Breakfast', title=T("조식 포함 여부 비중(RN)")), use_container_width=True, key=f"{k}_bf_pie")
         
+        # 상세 코드 분석
         bf_included = df[df['Breakfast'] == 'Included']
         if not bf_included.empty and 'Service_Code' in bf_included.columns:
             detail = bf_included.groupby('Service_Code')['RN'].sum().reset_index().sort_values('RN', ascending=False)
@@ -500,6 +506,7 @@ def render_tab(df, k):
         else:
             c2.info(T("조식 포함 내역이 없습니다."))
             
+        # 테이블은 group_and_show로 깔끔하게
         group_and_show(df, 'Breakfast')
 
 # ==============================================================================
@@ -547,6 +554,7 @@ try:
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
+    # 데이터 필터링
     if sel_start and sel_end and not df_all.empty:
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_start) & (df_all['Snapshot_Date'] <= sel_end)
         df_bk = df_all[mask_bk & (df_all['Total_Revenue']>0)].copy()
