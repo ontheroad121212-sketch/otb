@@ -58,29 +58,33 @@ def clean_num(val):
     except: return 0
 
 def safe_date_parse(series):
-    """[핵심] 날짜 변환 강화 함수 (점, 슬래시 처리)"""
+    """날짜 변환 강화 (점, 슬래시, 에러 처리)"""
+    # 1. 문자열 변환 -> 2. 점/슬래시를 대시로 -> 3. 변환
     return pd.to_datetime(series.astype(str).str.replace('.', '-', regex=False).str.replace('/', '-', regex=False), errors='coerce')
 
 def save_to_db(df, data_type='Reservation'):
     """데이터를 Snapshot_Date(예약일/취소일)별로 쪼개서 저장"""
     if df is None or df.empty:
-        st.error("❌ 저장할 데이터가 0건입니다. (필터링에서 모두 제외됨)")
+        st.error("❌ 저장할 데이터가 0건입니다.")
         return False
     try:
-        if 'Snapshot_Date' not in df.columns: 
-            # 비상시 오늘 날짜 사용
+        # [핵심 수정] Snapshot_Date를 무조건 문자열(YYYY-MM-DD)로 강제 변환
+        if 'Snapshot_Date' in df.columns:
+            df['Snapshot_Date'] = df['Snapshot_Date'].astype(str).str.slice(0, 10) # '2026-01-26' 형식 보장
+        else:
             df['Snapshot_Date'] = datetime.now().strftime('%Y-%m-%d')
             
         dates = df['Snapshot_Date'].unique()
         save_count = 0
         
         for d in dates:
-            if pd.isna(d) or str(d).lower() == 'nat': continue 
+            # 날짜 형식이 아니거나 NaT/nan이면 패스
+            if pd.isna(d) or str(d).lower() in ['nat', 'nan', 'none', '']: continue 
 
             sub = df[df['Snapshot_Date'] == d].copy()
             if sub.empty: continue
             
-            # 날짜 객체 문자열 변환
+            # 날짜 객체 문자열 변환 (JSON 직렬화 오류 방지)
             for c in sub.select_dtypes(include=['datetime64[ns]']).columns:
                 sub[c] = sub[c].astype(str)
             
@@ -89,7 +93,7 @@ def save_to_db(df, data_type='Reservation'):
             
             recs = sub.to_dict(orient='records')
             
-            # Sanitization
+            # Sanitization (Numpy 타입 제거)
             sanitized_recs = []
             for r in recs:
                 new_r = {}
@@ -114,10 +118,13 @@ def save_to_db(df, data_type='Reservation'):
             save_count += len(sanitized_recs)
             
         if save_count > 0:
-            st.toast(f"✅ 총 {save_count}건의 데이터가 DB({COLLECTION_NAME})에 저장되었습니다.")
+            # 사이드바에 저장 결과 표시
+            with st.sidebar:
+                st.success(f"💾 DB 저장 완료: {save_count}건")
+            st.toast(f"✅ 데이터 {save_count}건 저장 완료!")
             return True
         else:
-            st.warning("⚠️ 저장된 데이터가 없습니다.")
+            st.warning("⚠️ 저장된 데이터가 없습니다 (날짜 오류 가능성).")
             return False
             
     except Exception as e: 
@@ -161,7 +168,7 @@ def delete_otb():
     except: return 0
 
 # ==============================================================================
-# 4. 파일 처리 로직 (핀셋 수정: 날짜 파싱 강화)
+# 4. 파일 처리 로직 (핀셋 수정: 날짜 변환 강화)
 # ==============================================================================
 
 def find_header_and_cols(df_raw, keywords):
@@ -231,15 +238,12 @@ def process_res_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        # [디버깅] 초기 행 수
-        initial_count = len(df)
-
         # [필터링 1] 합계 텍스트 제거
         if 'Res_No' in df.columns:
             df = df[~df['Res_No'].astype(str).str.contains('합계|총계|누계|Total|Subtotal', case=False, na=False)]
             df = df[df['Res_No'].astype(str).str.len() > 1]
 
-        # [핀셋 수정] 2. 날짜 인식 강화 (점이 있든 슬래시가 있든 다 처리)
+        # [핀셋 수정] 2. 날짜 인식 강화 (safe_date_parse 사용)
         df['CheckIn'] = safe_date_parse(df['CheckIn'])
         df['CheckOut'] = safe_date_parse(df['CheckOut'])
         df['Booking_Date'] = safe_date_parse(df['Booking_Date'])
@@ -266,7 +270,7 @@ def process_res_file(file):
 
         df['Total_Revenue'] = np.where(df['Total_Revenue']==0, df['Room_Revenue'], df['Total_Revenue'])
         
-        # Snapshot (날짜 형식 보장)
+        # Snapshot (문자열 변환 보장)
         df['Snapshot_Date'] = df['Booking_Date'].dt.strftime('%Y-%m-%d')
         
         df['Stay_Month'] = df['CheckIn'].dt.strftime('%Y-%m')
@@ -288,7 +292,7 @@ def process_res_file(file):
 
         # [디버깅] 사이드바에 처리 결과 표시
         with st.sidebar:
-            st.caption(f"📊 예약 처리: {initial_count}건 -> {len(df)}건")
+            st.caption(f"📊 예약 처리: {len(df)}건")
 
         return df
     except Exception as e: st.error(f"예약 오류 상세: {e}"); return pd.DataFrame()
@@ -337,13 +341,12 @@ def process_cancel_file(file):
             if col not in df.columns:
                 df[col] = 0 if 'Revenue' in col or col in ['Rooms','Nights'] else ''
 
-        initial_count = len(df)
-
+        # [필터링 1] 합계 텍스트 제거
         if 'Res_No' in df.columns:
             df = df[~df['Res_No'].astype(str).str.contains('합계|총계|누계|Total', case=False, na=False)]
             df = df[df['Res_No'].astype(str).str.len() > 1]
 
-        # [핀셋 수정] 날짜 변환 강화 (점, 슬래시 처리)
+        # [핀셋 수정] 2. 날짜 변환 강화 (safe_date_parse)
         df['Cancel_Date'] = safe_date_parse(df['Cancel_Date'])
         df['CheckIn'] = safe_date_parse(df['CheckIn'])
         df['Booking_Date'] = safe_date_parse(df['Booking_Date'])
@@ -387,7 +390,7 @@ def process_cancel_file(file):
         df['Breakfast'] = np.where(raw_str.str.contains('BF'), 'Included', 'Not Included')
 
         with st.sidebar:
-            st.caption(f"📊 취소 처리: {initial_count}건 -> {len(df)}건")
+            st.caption(f"📊 취소 처리: {len(df)}건")
 
         return df
     except Exception as e: st.error(f"취소 오류 상세: {e}"); return pd.DataFrame()
