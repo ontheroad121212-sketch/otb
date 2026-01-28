@@ -503,7 +503,6 @@ for i, tab in enumerate(tabs):
             st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
         with sub_t2:
-            # [수정] try-except 추가로 에러가 나도 다른 탭에 영향 없게 처리
             try:
                 vis_df = merged.iloc[:-1].copy() # Total 행 제외
                 if not vis_df.empty:
@@ -532,7 +531,8 @@ for i, tab in enumerate(tabs):
                     heatmap_data.index = heatmap_data.index.astype(str)
                     heatmap_data.columns = heatmap_data.columns.astype(str)
                     
-                    fig_hm = px.imshow(heatmap_data, text_auto=True, color_continuous_scale='RdBu_r', midpoint=0,
+                    # [핵심 수정] midpoint 제거 (에러 원인)
+                    fig_hm = px.imshow(heatmap_data, text_auto=True, color_continuous_scale='RdBu_r',
                                        title=f"{T('요일별')} Pickup Heatmap")
                     st.plotly_chart(fig_hm, use_container_width=True)
                 else:
