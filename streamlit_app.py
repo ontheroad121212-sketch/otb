@@ -196,6 +196,14 @@ def load_all_historical_data():
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
     return dow_indices, repeat_rate
 
+# [핀셋 수정] 콤마(,) 있는 숫자도 처리하는 강력한 함수
+def clean_num(val):
+    try:
+        if pd.isna(val) or str(val).strip() == '': return 0
+        s = str(val).replace(',', '').replace('₩', '').replace(' ', '').strip()
+        return float(s)
+    except: return 0
+
 def find_header_and_process(file):
     try:
         file.seek(0)
@@ -212,7 +220,10 @@ def find_header_and_process(file):
         df_data = df_raw.iloc[header_row_idx+1:].copy()
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_data = df_data.dropna(subset=['Date'])
-        def safe_num(idx): return pd.to_numeric(df_data.iloc[:, idx], errors='coerce').fillna(0)
+        
+        # [핀셋 수정] 콤마 제거 로직 적용
+        def safe_num(idx): 
+            return df_data.iloc[:, idx].apply(clean_num)
         
         fit_rms_idx, fit_rev_idx = rms_indices[0], rev_indices[0]
         grp_rms_idx, grp_rev_idx = rms_indices[1], rev_indices[1]
@@ -408,28 +419,20 @@ for i, tab in enumerate(tabs):
         merged = df_curr.copy()
         if df_prev is not None:
             df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
-            # [수정] 컬럼 존재 여부 체크 후 할당 (안전장치)
             if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS']
-            else: df_prev_sub['FIT_RMS'] = 0
-            
             if 'GRP_RMS' in df_prev.columns: df_prev_sub['GRP_RMS'] = df_prev['GRP_RMS']
-            else: df_prev_sub['GRP_RMS'] = 0
-            
             merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
         else:
             for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'GRP_RMS']: 
                 if c in merged.columns: merged[f'{c}_prev'] = merged[c]
-                else: merged[f'{c}_prev'] = 0
 
-        # [수정] 안전한 컬럼 생성 및 NaN 처리 (AttributeError 원천 차단)
+        # [핀셋 수정] NaN 처리 및 컬럼 생성
         for col in ['FIT_RMS', 'FIT_RMS_prev', 'GRP_RMS', 'GRP_RMS_prev']:
             if col not in merged.columns: merged[col] = 0
             merged[col] = merged[col].fillna(0)
 
         for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
-            if c not in merged.columns: merged[c] = 0
-            if f'{c}_prev' not in merged.columns: merged[f'{c}_prev'] = 0
-            merged[f'Pick_{c}'] = merged[c].fillna(0) - merged[f'{c}_prev'].fillna(0)
+            merged[f'Pick_{c}'] = merged[c].fillna(0) - merged.get(f'{c}_prev', 0).fillna(0)
         
         merged['Pick_FIT_RMS'] = merged['FIT_RMS'] - merged['FIT_RMS_prev']
         merged['Pick_GRP_RMS'] = merged['GRP_RMS'] - merged['GRP_RMS_prev']
@@ -539,24 +542,27 @@ for i, tab in enumerate(tabs):
                     
                     heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
                     
-                    # [수정] 달력형 텍스트 생성
+                    # [수정] combine 에러 방지를 위해 반복문 사용 (안전제일)
                     heatmap_text_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Day', aggfunc='first').fillna(0).astype(int).astype(str)
                     heatmap_text_v = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0).astype(int).astype(str)
-                    
-                    # 0일(빈 날짜)은 빈칸으로 처리
                     heatmap_text_d = heatmap_text_d.replace('0', '')
                     
-                    def combine_txt(d, v):
-                        if d == '': return ""
-                        try:
-                            val = int(v)
-                            sign = "+" if val > 0 else ""
-                            # 0은 표시 안하거나 0으로 표시 (여기선 0 표시)
-                            return f"{d}일<br><b>{sign}{val}</b>"
-                        except: return ""
+                    final_text = heatmap_text_d.copy()
+                    for c in heatmap_text_d.columns:
+                        combined_col = []
+                        for d_val, v_val in zip(heatmap_text_d[c], heatmap_text_v[c]):
+                            if d_val == '': 
+                                combined_col.append("")
+                            else:
+                                try:
+                                    val = int(v_val)
+                                    sign = "+" if val > 0 else ""
+                                    # 0은 표시 안하거나 0으로 표시 (여기선 0 표시)
+                                    combined_col.append(f"{d_val}일<br><b>{sign}{val}</b>")
+                                except: 
+                                    combined_col.append("")
+                        final_text[c] = combined_col
 
-                    final_text = heatmap_text_d.combine(heatmap_text_v, combine_txt)
-                    
                     heatmap_z.index = heatmap_z.index.astype(str)
                     final_text.index = final_text.index.astype(str)
                     
