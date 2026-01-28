@@ -408,23 +408,30 @@ for i, tab in enumerate(tabs):
         merged = df_curr.copy()
         if df_prev is not None:
             df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
-            if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS']
-            if 'GRP_RMS' in df_prev.columns: df_prev_sub['GRP_RMS'] = df_prev['GRP_RMS']
+            # [핀셋 수정] NaN 방지를 위해 0으로 채움
+            if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS'].fillna(0)
+            else: df_prev_sub['FIT_RMS'] = 0
+            
+            if 'GRP_RMS' in df_prev.columns: df_prev_sub['GRP_RMS'] = df_prev['GRP_RMS'].fillna(0)
+            else: df_prev_sub['GRP_RMS'] = 0
+            
             merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
         else:
             for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'GRP_RMS']: 
                 if c in merged.columns: merged[f'{c}_prev'] = merged[c]
+                else: merged[f'{c}_prev'] = 0
 
         for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
-            merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
+            merged[f'Pick_{c}'] = merged[c].fillna(0) - merged[f'{c}_prev'].fillna(0)
         
-        if 'FIT_RMS' in merged.columns and 'FIT_RMS_prev' in merged.columns:
-            merged['Pick_FIT_RMS'] = merged['FIT_RMS'] - merged['FIT_RMS_prev']
-        else: merged['Pick_FIT_RMS'] = 0
+        # [핀셋 수정] 픽업 계산 시 안전장치 (NaN -> 0)
+        merged['FIT_RMS'] = merged.get('FIT_RMS', 0).fillna(0)
+        merged['FIT_RMS_prev'] = merged.get('FIT_RMS_prev', 0).fillna(0)
+        merged['Pick_FIT_RMS'] = merged['FIT_RMS'] - merged['FIT_RMS_prev']
         
-        if 'GRP_RMS' in merged.columns and 'GRP_RMS_prev' in merged.columns:
-            merged['Pick_GRP_RMS'] = merged['GRP_RMS'] - merged['GRP_RMS_prev']
-        else: merged['Pick_GRP_RMS'] = 0
+        merged['GRP_RMS'] = merged.get('GRP_RMS', 0).fillna(0)
+        merged['GRP_RMS_prev'] = merged.get('GRP_RMS_prev', 0).fillna(0)
+        merged['Pick_GRP_RMS'] = merged['GRP_RMS'] - merged['GRP_RMS_prev']
 
         sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
         totals = merged[sum_items].sum()
@@ -506,6 +513,7 @@ for i, tab in enumerate(tabs):
             try:
                 vis_df = merged.iloc[:-1].copy() # Total 행 제외
                 if not vis_df.empty:
+                    # 1. 막대 그래프
                     st.subheader(T("일자별 픽업 현황 (개인 vs 단체)"))
                     vis_df['Pick_FIT_RMS'] = vis_df.get('Pick_FIT_RMS', 0)
                     vis_df['Pick_GRP_RMS'] = vis_df.get('Pick_GRP_RMS', 0)
@@ -518,26 +526,63 @@ for i, tab in enumerate(tabs):
                                  color_discrete_map={T('FIT'): '#3b82f6', T('GROUP'): '#ef4444'})
                     st.plotly_chart(fig, use_container_width=True)
                     
+                    # 2. 히트맵
                     st.divider()
                     st.subheader(T("요일별 픽업 히트맵"))
+                    
+                    # [핀셋 수정] 히트맵용 달력 데이터 가공
                     vis_df['Date'] = pd.to_datetime(vis_df['DateStr'])
-                    vis_df['Week'] = vis_df['Date'].dt.isocalendar().week
+                    # 주차 계산 (매월 1일이 있는 주를 1주차로 계산)
+                    vis_df['Day'] = vis_df['Date'].dt.day
+                    vis_df['MonthWeek'] = (vis_df['Day'] - 1) // 7 + 1
+                    
+                    # 요일 순서 지정
                     days_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
                     vis_df['WeekDay'] = pd.Categorical(vis_df['WeekDay'], categories=days_order, ordered=True)
                     
-                    heatmap_data = vis_df.pivot_table(index='WeekDay', columns='Week', values='Pick_RMS', aggfunc='sum').fillna(0)
+                    # 2-1. 픽업값 히트맵 데이터 (Z값)
+                    heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum')
                     
-                    # [핵심 수정] 인덱스와 컬럼을 모두 문자열로 강제 변환하여 Plotly 에러 방지
-                    heatmap_data.index = heatmap_data.index.astype(str)
-                    heatmap_data.columns = heatmap_data.columns.astype(str)
+                    # 2-2. 날짜 텍스트 히트맵 데이터 (Text값) - "날짜\n(픽업)" 형태
+                    heatmap_text = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Day', aggfunc='first').astype(str)
+                    heatmap_val_text = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').astype(str)
                     
-                    # [핵심 수정] midpoint 제거 (에러 원인)
-                    fig_hm = px.imshow(heatmap_data, text_auto=True, color_continuous_scale='RdBu_r',
-                                       title=f"{T('요일별')} Pickup Heatmap")
+                    # 보기 좋게 날짜와 픽업량 합치기
+                    def combine_text(d, v):
+                        if d == 'nan' or d == '0.0': return ""
+                        try:
+                            val = float(v)
+                            sign = "+" if val > 0 else ""
+                            return f"{d.split('.')[0]}일\n({sign}{int(val)})"
+                        except: return d
+                    
+                    final_text = heatmap_text.combine(heatmap_val_text, combine_text)
+                    
+                    # 히트맵 그리기
+                    fig_hm = go.Figure(data=go.Heatmap(
+                        z=heatmap_z.values,
+                        x=days_order,
+                        y=heatmap_z.index,
+                        text=final_text.values,
+                        texttemplate="%{text}",
+                        textfont={"size": 12},
+                        colorscale='RdBu', # 빨강(취소)-흰색(0)-파랑(예약)
+                        midpoint=0, # go.Heatmap은 midpoint 지원함 (px.imshow와 다름)
+                        reversescale=True # RdBu에서 파랑이 증가, 빨강이 감소가 되도록 뒤집기
+                    ))
+                    
+                    fig_hm.update_layout(
+                        title=f"{cur_m}{T('월')} {T('요일별 픽업 히트맵')}",
+                        yaxis=dict(title='Week', autorange="reversed"), # 1주차가 위로 가게
+                        xaxis=dict(side="top"), # 요일을 위로
+                        height=400
+                    )
                     st.plotly_chart(fig_hm, use_container_width=True)
+                    
                 else:
                     st.info(T("시각화할 데이터가 없습니다."))
             except Exception as e:
+                # 에러가 나도 리포트는 보이게 예외 처리
                 st.error(f"Visualization Error in {cur_m}월: {e}")
 
         if uploaded_files:
