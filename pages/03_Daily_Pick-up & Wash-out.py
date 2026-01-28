@@ -130,7 +130,8 @@ LANG_DICT = {
     "📊 예약 처리": "📊 预订处理",
     "📊 취소 처리": "📊 取消处理",
     "건": "笔",
-    "조식 포함 내역이 없습니다.": "无含早记录"
+    "조식 포함 내역이 없습니다.": "无含早记录",
+    "📋 데이터 검증 (Raw Data)": "📋 数据验证 (Raw Data)"
 }
 
 def T(text):
@@ -461,11 +462,45 @@ def process_otb(file):
     try:
         if file.name.endswith('.csv'): df_raw = pd.read_csv(file, header=None, encoding='cp949')
         else: df_raw = pd.read_excel(file, header=None)
-        val = int(str(df_raw.dropna(how='all').dropna(axis=1, how='all').iloc[-1, -1]).replace(',', '').split('.')[0])
+        
+        # 파일명에서 날짜 추출 (스냅샷 기준일)
         snap = datetime.now().strftime('%Y-%m-%d')
         match = re.search(r'(\d{8})', file.name)
         if match: snap = f"{match.group(1)[:4]}-{match.group(1)[4:6]}-{match.group(1)[6:]}"
-        return pd.DataFrame([{'CheckIn': snap, 'Room_Revenue': val, 'Total_Revenue': val, 'RN': 0, 'Guest_Name': 'OTB', 'Segment': 'OTB', 'Snapshot_Date': snap, 'Status': 'Booked'}])
+        
+        data_list = []
+        
+        # [복구 및 수정] 행 단위로 순회하며 월별 데이터 추출
+        # 첫 번째 열을 날짜(투숙월)로, 마지막 열을 매출로 가정하고 파싱 시도
+        for i, row in df_raw.iterrows():
+            try:
+                date_val = row[0]
+                # 날짜 형식 파싱 시도 (YYYY-MM-DD, YYYY-MM 등)
+                ts = pd.to_datetime(date_val, errors='coerce')
+                
+                if pd.notnull(ts):
+                    # 마지막 열을 매출 값으로 가정
+                    rev_val = clean_num(row.iloc[-1])
+                    
+                    if rev_val > 0:
+                        data_list.append({
+                            'CheckIn': ts.strftime('%Y-%m-%d'), # 투숙월 기준
+                            'Room_Revenue': rev_val,
+                            'Total_Revenue': rev_val,
+                            'RN': 0, 
+                            'Guest_Name': 'OTB', 
+                            'Segment': 'OTB', 
+                            'Snapshot_Date': snap, # 이 파일이 업로드된 기준 날짜
+                            'Status': 'Booked'
+                        })
+            except: continue
+            
+        if not data_list:
+            # 리스트가 비어있다면 기존 방식(단일 합계)으로 시도 (안전장치)
+            val = int(str(df_raw.dropna(how='all').dropna(axis=1, how='all').iloc[-1, -1]).replace(',', '').split('.')[0])
+            return pd.DataFrame([{'CheckIn': snap, 'Room_Revenue': val, 'Total_Revenue': val, 'RN': 0, 'Guest_Name': 'OTB', 'Segment': 'OTB', 'Snapshot_Date': snap, 'Status': 'Booked'}])
+            
+        return pd.DataFrame(data_list)
     except: return pd.DataFrame()
 
 # ==============================================================================
@@ -573,6 +608,11 @@ def render_tab(df, k):
             c2.info(T("조식 포함 내역이 없습니다."))
             
         group_and_show(df, 'Breakfast')
+
+    # [요청 반영] 탭 하단에 검증 데이터 (Raw Data) 표시
+    st.markdown("---")
+    st.subheader(T("📋 데이터 검증 (Raw Data)"))
+    st.dataframe(df, use_container_width=True)
 
 # ==============================================================================
 # MAIN
