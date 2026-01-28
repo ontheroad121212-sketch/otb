@@ -205,6 +205,7 @@ def clean_num(val):
     except: return 0
 
 def find_header_and_process(file):
+    """지배인님이 짚어주신 열(C, F, H, K) 좌표를 고정하여 데이터 추출"""
     try:
         file.seek(0)
         df_raw = pd.read_excel(file, header=None)
@@ -218,9 +219,16 @@ def find_header_and_process(file):
         
         if main_header_row_idx is None: return None, None, None
         
+        # 데이터 영역 (헤더+2행부터)
         df_data = df_raw.iloc[main_header_row_idx + 2:].copy()
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_data = df_data.dropna(subset=['Date'])
+        
+        # [지배인님 확정 좌표]
+        # 인덱스는 0부터 시작: A=0, B=1, C=2 ...
+        # 개인(FIT): 객실수 C열(2), 매출 F열(5)
+        # 단체(GRP): 객실수 H열(7), 매출 K열(10)
+        # 합계(Total): 객실수 O열(14), 매출 S열(18)
         
         def safe_col(idx):
             return df_data.iloc[:, idx].apply(clean_num)
@@ -230,13 +238,15 @@ def find_header_and_process(file):
         df_clean['DateStr'] = df_data['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_data.iloc[:, 1].astype(str)
         
-        df_clean['FIT_RMS'] = safe_col(2)
-        df_clean['FIT_REV'] = safe_col(5)
-        df_clean['GRP_RMS'] = safe_col(7)
-        df_clean['GRP_REV'] = safe_col(10)
-        df_clean['RMS'] = safe_col(14)
-        df_clean['REV'] = safe_col(18)
+        # 중요: 여기 인덱스가 핵심입니다
+        df_clean['FIT_RMS'] = safe_col(2)  # C열
+        df_clean['FIT_REV'] = safe_col(5)  # F열
+        df_clean['GRP_RMS'] = safe_col(7)  # H열
+        df_clean['GRP_REV'] = safe_col(10) # K열
+        df_clean['RMS'] = safe_col(14)     # O열
+        df_clean['REV'] = safe_col(18)     # S열
         
+        # 보조 지표 (추정치)
         df_clean['HU'] = safe_col(12)
         df_clean['Comp'] = safe_col(13)
         df_clean['OCC'] = safe_col(15)
@@ -431,17 +441,12 @@ for i, tab in enumerate(tabs):
             """, unsafe_allow_html=True)
 
             merged = df_curr.copy()
-            
-            # [핵심 수정] DB에서 가져온 데이터(df_prev)에 FIT/GRP 컬럼이 없을 경우 대비 (Self-Healing)
             if df_prev is not None:
                 needed_cols = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
-                # FIT/GRP 컬럼이 있으면 가져오고, 없으면 0으로 생성
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     if c in df_prev.columns: needed_cols.append(c)
                 
                 p_sub = df_prev[needed_cols].copy()
-                
-                # 누락된 컬럼 0으로 채우기 (DB 데이터 무결성 보장)
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     if c not in p_sub.columns: p_sub[c] = 0
                 
@@ -449,11 +454,10 @@ for i, tab in enumerate(tabs):
             else:
                 for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
                     merged[f'{c}_prev'] = merged[c]
-                # FIT/GRP prev도 0으로 초기화
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     merged[f'{c}_prev'] = 0
 
-            # 모든 수치 컬럼 결측치 제거 및 안전한 계산
+            # 결측치 처리
             num_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
             for c in num_cols:
                 if c not in merged.columns: merged[c] = 0
