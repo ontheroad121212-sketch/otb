@@ -7,6 +7,8 @@ import io
 import numpy as np
 import textwrap
 import secret_forecasting  # 포캐스팅 모듈 임포트
+import plotly.express as px
+import plotly.graph_objects as go
 
 # ==============================================================================
 # [1] 페이지 기본 설정 및 다국어(중국어) 세션 고정 로직
@@ -110,7 +112,13 @@ LANG_DICT = {
     "건 수신 완료! 지표 계산 시작...": "条接收完成！开始计算指标...",
     
     # [추가] 핀셋 조정용 번역
-    "저장할 기준 일자 선택": "选择保存日期 (Select Save Date)"
+    "저장할 기준 일자 선택": "选择保存日期 (Select Save Date)",
+    "📊 리포트": "📊 报表 (Report)",
+    "📈 시각화": "📈 可视化 (Visual)",
+    "일자별 픽업 현황 (개인 vs 단체)": "每日增量 (FIT vs Group)",
+    "요일별 픽업 히트맵": "星期增量热力图 (Day Heatmap)",
+    "시각화할 데이터가 없습니다.": "没有可视化数据 (No Data)",
+    "요일별": "星期别"
 }
 
 def T(text):
@@ -231,7 +239,7 @@ def load_all_historical_data():
     return dow_indices, repeat_rate
 
 def find_header_and_process(file):
-    """엑셀 파일 헤더 감지 및 S.O.B/상세 데이터 추출"""
+    """엑셀 파일 헤더 감지 및 S.O.B/상세 데이터 추출 (FIT/GRP 분리 강화)"""
     try:
         file.seek(0)
         df_raw = pd.read_excel(file, header=None)
@@ -249,11 +257,17 @@ def find_header_and_process(file):
         df_data = df_data.dropna(subset=['Date'])
         def safe_num(idx): return pd.to_numeric(df_data.iloc[:, idx], errors='coerce').fillna(0)
         
+        # [수정] 인덱스 매핑 (개인=0, 단체=1, 합계=-1)
         fit_rms_idx, fit_rev_idx = rms_indices[0], rev_indices[0]
         grp_rms_idx, grp_rev_idx = rms_indices[1], rev_indices[1]
         total_rms_idx, total_rev_idx = rms_indices[-1], rev_indices[-1]
 
         df_clean = pd.DataFrame({'Date': df_data['Date'], 'DateStr': df_data['Date'].dt.strftime('%Y-%m-%d'), 'WeekDay': df_data['Date'].dt.strftime('%a')})
+        
+        # [수정] FIT, GRP 데이터도 df_clean에 저장 (시각화용)
+        df_clean['FIT_RMS'] = safe_num(fit_rms_idx)
+        df_clean['GRP_RMS'] = safe_num(grp_rms_idx)
+        
         df_clean['RMS'], df_clean['OCC'], df_clean['ADR'] = safe_num(total_rms_idx), safe_num(total_rms_idx+1), safe_num(total_rms_idx+2)
         df_clean['RevPAR'], df_clean['REV'] = safe_num(total_rms_idx+3), safe_num(total_rms_idx+4)
         df_clean['HU'], df_clean['Comp'] = safe_num(total_rms_idx-2), safe_num(total_rms_idx-1)
@@ -471,13 +485,25 @@ for i, tab in enumerate(tabs):
         merged = df_curr.copy()
         if df_prev is not None:
             df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
+            # [수정] FIT, GRP 컬럼도 가져오기 (시각화용)
+            if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS']
+            if 'GRP_RMS' in df_prev.columns: df_prev_sub['GRP_RMS'] = df_prev['GRP_RMS']
             merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
         else:
-            for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
-                merged[f'{c}_prev'] = merged[c]
+            for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'GRP_RMS']: 
+                if c in merged.columns: merged[f'{c}_prev'] = merged[c]
 
         for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
             merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
+        
+        # [수정] FIT/GRP 픽업 계산
+        if 'FIT_RMS' in merged.columns and 'FIT_RMS_prev' in merged.columns:
+            merged['Pick_FIT_RMS'] = merged['FIT_RMS'] - merged['FIT_RMS_prev']
+        else: merged['Pick_FIT_RMS'] = 0
+        
+        if 'GRP_RMS' in merged.columns and 'GRP_RMS_prev' in merged.columns:
+            merged['Pick_GRP_RMS'] = merged['GRP_RMS'] - merged['GRP_RMS_prev']
+        else: merged['Pick_GRP_RMS'] = 0
 
         sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
         totals = merged[sum_items].sum()
@@ -512,52 +538,95 @@ for i, tab in enumerate(tabs):
         st.session_state[f"sob_{cur_m}"] = sob_curr
         st.session_state[f"pace_{cur_m}"] = totals['Pick_RMS']
 
-        final_df = merged[['DateStr', 'WeekDay', 
-                           'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
-                           'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
-                           'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_OCC', 'Pick_ADR', 'Pick_RevPAR', 'Pick_REV']]
+        # [핀셋 추가] 탭 분리: 리포트 / 시각화
+        sub_t1, sub_t2 = st.tabs([T("📊 리포트"), T("📈 시각화")])
+        
+        with sub_t1:
+            final_df = merged[['DateStr', 'WeekDay', 
+                               'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
+                               'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
+                               'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_OCC', 'Pick_ADR', 'Pick_RevPAR', 'Pick_REV']]
 
-        # 헤더 이름 변경 (줄바꿈 포함 및 T 적용)
-        col_map = {'DateStr': T('Date'), 'WeekDay': T('Day')}
-        items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
-        for it in items:
-            col_map[f'{it}_prev'] = f'{T("Pre")}\n{T(it)}'
-            col_map[it] = f'{T("Today")}\n{T(it)}'
-            col_map[f'Pick_{it}'] = f'{T("Var")}\n{T(it)}'
-        final_df.columns = [col_map.get(c, c) for c in final_df.columns]
+            # 헤더 이름 변경 (줄바꿈 포함 및 T 적용)
+            col_map = {'DateStr': T('Date'), 'WeekDay': T('Day')}
+            items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
+            for it in items:
+                col_map[f'{it}_prev'] = f'{T("Pre")}\n{T(it)}'
+                col_map[it] = f'{T("Today")}\n{T(it)}'
+                col_map[f'Pick_{it}'] = f'{T("Var")}\n{T(it)}'
+            final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
-        # 숫자 포맷 설정
-        fmt = {c: '{:,.0f}' for c in final_df.columns if 'OCC' not in c and T('Date') not in c and T('Day') not in c}
-        for c in [c for c in final_df.columns if 'OCC' in c]: fmt[c] = '{:.1f}%'
+            # 숫자 포맷 설정
+            fmt = {c: '{:,.0f}' for c in final_df.columns if 'OCC' not in c and T('Date') not in c and T('Day') not in c}
+            for c in [c for c in final_df.columns if 'OCC' in c]: fmt[c] = '{:.1f}%'
 
-        styler = final_df.style.format(fmt)
+            styler = final_df.style.format(fmt)
 
-        # 1. Pre(어제) 그룹 - 회색 파스텔 스타일
-        pre_cols = [c for c in final_df.columns if T('Pre') in c]
-        styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#9ca3af'})
+            # 1. Pre(어제) 그룹 - 회색 파스텔 스타일
+            pre_cols = [c for c in final_df.columns if T('Pre') in c]
+            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#9ca3af'})
 
-        # 2. Today(오늘) 그룹 - 블루/오렌지 히트맵
-        curr_cols = [c for c in final_df.columns if T('Today') in c]
-        data_idx = final_df.index[:-1] # TOTAL 제외
-        styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.6)
-        styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.7)
+            # 2. Today(오늘) 그룹 - 블루/오렌지 히트맵
+            curr_cols = [c for c in final_df.columns if T('Today') in c]
+            data_idx = final_df.index[:-1] # TOTAL 제외
+            styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.6)
+            styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.7)
 
-        # 3. Var(변화) 그룹 - 색상 텍스트 (양수 초록 / 음수 빨강)
-        var_cols = [c for c in final_df.columns if T('Var') in c]
-        def color_pick(val):
-            try:
-                v = float(str(val).replace('%','').replace(',',''))
-                return 'color: #166534; font-weight: bold;' if v > 0 else 'color: #dc2626; font-weight: bold;' if v < 0 else 'color: #374151;'
-            except: return ''
-        styler = styler.map(color_pick, subset=var_cols)
-        styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
+            # 3. Var(변화) 그룹 - 색상 텍스트 (양수 초록 / 음수 빨강)
+            var_cols = [c for c in final_df.columns if T('Var') in c]
+            def color_pick(val):
+                try:
+                    v = float(str(val).replace('%','').replace(',',''))
+                    return 'color: #166534; font-weight: bold;' if v > 0 else 'color: #dc2626; font-weight: bold;' if v < 0 else 'color: #374151;'
+                except: return ''
+            styler = styler.map(color_pick, subset=var_cols)
+            styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
 
-        # 4. TOTAL 행 하이라이트
-        styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
-                                     **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
+            # 4. TOTAL 행 하이라이트
+            styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
+                                         **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
 
-        # 출력
-        st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
+            # 출력
+            st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
+
+        with sub_t2:
+            # [핀셋 추가] 시각화 차트 구현
+            # 1. 일자별 픽업 (Stacked Bar)
+            vis_df = merged.iloc[:-1].copy() # Total 행 제외
+            if not vis_df.empty:
+                st.subheader(T("일자별 픽업 현황 (개인 vs 단체)"))
+                
+                # 데이터 변환 (Long Format)
+                # 데이터가 없는 경우를 대비해 fillna 처리
+                vis_df['Pick_FIT_RMS'] = vis_df.get('Pick_FIT_RMS', 0)
+                vis_df['Pick_GRP_RMS'] = vis_df.get('Pick_GRP_RMS', 0)
+                
+                melted = vis_df.melt(id_vars=['DateStr'], value_vars=['Pick_FIT_RMS', 'Pick_GRP_RMS'], 
+                                     var_name='Segment', value_name='Pickup')
+                melted['Segment'] = melted['Segment'].map({'Pick_FIT_RMS': T('FIT'), 'Pick_GRP_RMS': T('GROUP')})
+                
+                fig = px.bar(melted, x='DateStr', y='Pickup', color='Segment', 
+                             title=f"{cur_m}{T('월')} Daily Pickup", 
+                             color_discrete_map={T('FIT'): '#3b82f6', T('GROUP'): '#ef4444'})
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.divider()
+                
+                # 2. 요일별 히트맵
+                st.subheader(T("요일별 픽업 히트맵"))
+                vis_df['Date'] = pd.to_datetime(vis_df['DateStr'])
+                vis_df['Week'] = vis_df['Date'].dt.isocalendar().week
+                # 요일 정렬 (월~일)
+                days_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                vis_df['WeekDay'] = pd.Categorical(vis_df['WeekDay'], categories=days_order, ordered=True)
+                
+                heatmap_data = vis_df.pivot_table(index='WeekDay', columns='Week', values='Pick_RMS', aggfunc='sum').fillna(0)
+                
+                fig_hm = px.imshow(heatmap_data, text_auto=True, color_continuous_scale='RdBu_r', midpoint=0,
+                                   title=f"{T('요일별')} Pickup Heatmap")
+                st.plotly_chart(fig_hm, use_container_width=True)
+            else:
+                st.info(T("시각화할 데이터가 없습니다."))
 
         # [핀셋 수정] 저장 버튼 로직: 업로드 파일이 있는 경우에만 날짜 선택 및 저장 버튼 노출
         if uploaded_files:
