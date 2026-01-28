@@ -54,7 +54,7 @@ LANG_DICT = {
     "📊 4만건 히스토리 전체 분석 시작": "📊 开始全量历史数据分析",
     "데이터 고속 도로 개통 중...": "正在建立数据通道...",
     "파이어베이스 서버에 접속 중...": "正在连接 Firebase 服务器...",
-    "'hotel_bookings' 데이터를 수색합니다...": "正在搜索 'hotel_bookings' 数据...",
+    "'hotel_bookings' 데이터를 수색합니다...": "正在搜索 'hotel_bookings' 데이터...",
     "데이터를 업로드하거나 조회하세요.": "请上传或查询数据。",
     "필드를 찾지 못했습니다.": "未找到字段。",
     "실제 데이터 필드명:": "实际数据字段名:",
@@ -81,7 +81,7 @@ LANG_DICT = {
     "RMS": "房晚 (RMS)",
     "ADR": "房价 (ADR)",
     "REV": "收入 (REV)",
-    "FIT": "散客 (FIT)",
+    "FIT": "散객 (FIT)",
     "GROUP": "团队 (GROUP)",
     "TOTAL": "总计 (TOTAL)",
     "Date": "日期",
@@ -196,13 +196,13 @@ def load_all_historical_data():
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
     return dow_indices, repeat_rate
 
+# [강력한 숫자 변환 함수]
 def clean_num(val):
     try:
         # 값이 없으면 0
         if pd.isna(val) or str(val).strip() == '': return 0
         # 문자열로 변환 후 콤마, 원화, 퍼센트, 공백 제거
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').replace('%', '').strip()
-        # 소수점 처리를 위해 float 변환
         return float(s)
     except: 
         return 0
@@ -436,36 +436,32 @@ for i, tab in enumerate(tabs):
 
             merged = df_curr.copy()
             if df_prev is not None:
-                # 병합할 때 필요한 컬럼만 선택
-                cols = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']
-                # 실제 존재하는 컬럼만 필터링
-                avail_cols = [c for c in cols if c in df_prev.columns]
+                needed_cols = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
+                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
+                    if c in df_prev.columns: needed_cols.append(c)
                 
-                # 없는 컬럼은 0으로 생성 후 병합
-                p_sub = df_prev[avail_cols].copy()
+                p_sub = df_prev[needed_cols].copy()
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     if c not in p_sub.columns: p_sub[c] = 0
                 
                 merged = pd.merge(merged, p_sub, on='DateStr', how='left', suffixes=('', '_prev'))
             else:
-                # 비교 데이터가 없으면 모두 0으로 처리
-                for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']: 
+                for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
+                    merged[f'{c}_prev'] = merged[c]
+                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     merged[f'{c}_prev'] = 0
 
-            # 픽업 데이터 계산 (결측치 0 처리 필수)
-            all_metrics = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
-            for c in all_metrics:
+            # 결측치 처리
+            num_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
+            for c in num_cols:
                 if c not in merged.columns: merged[c] = 0
                 if f'{c}_prev' not in merged.columns: merged[f'{c}_prev'] = 0
-                
                 merged[c] = merged[c].fillna(0)
                 merged[f'{c}_prev'] = merged[f'{c}_prev'].fillna(0)
-                
                 merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
 
             sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
-            valid_sums = [x for x in sum_items if x in merged.columns]
-            totals = merged[valid_sums].sum()
+            totals = merged[sum_items].sum()
             
             def get_total_rates(prefix_rms, prefix_rev, is_curr=True):
                 s_rms = totals.get(prefix_rms, 0)
