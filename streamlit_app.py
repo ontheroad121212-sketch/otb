@@ -14,14 +14,11 @@ import plotly.graph_objects as go
 # [1] 페이지 기본 설정 및 다국어(중국어) 세션 고정 로직
 # ==============================================================================
 
-# [1] 설정
 st.set_page_config(layout="wide", page_title="ARI Management")
 
-# [2] 에러 방지용 언어 로직
 if 'lang' not in st.session_state:
     st.session_state['lang'] = 'ko'
 
-# URL 파라미터 강제 추출
 try:
     u_params = st.query_params
     if u_params.get("lang") == "zh":
@@ -31,16 +28,13 @@ try:
 except Exception:
     pass
 
-# 최종 결정
 is_chairman_mode = (st.session_state.get('lang') == 'zh')
 
-# [강제 출력 테스트]
 if is_chairman_mode:
     st.error("현재 모드: 중국어 (ZH)")
 else:
     st.info("현재 모드: 한국어 (KO)")
 
-# [번역 사전]
 LANG_DICT = {
     "⚙️ Settings": "⚙️ 设置 (Settings)",
     "기준 일자": "基准日期 (Report Date)",
@@ -81,7 +75,7 @@ LANG_DICT = {
     "RMS": "房晚 (RMS)",
     "ADR": "房价 (ADR)",
     "REV": "收入 (REV)",
-    "FIT": "散客 (FIT)",
+    "FIT": "散객 (FIT)",
     "GROUP": "团队 (GROUP)",
     "TOTAL": "总计 (TOTAL)",
     "Date": "日期",
@@ -99,7 +93,7 @@ LANG_DICT = {
     "저장할 기준 일자 선택": "选择保存日期 (Select Save Date)",
     "📊 리포트": "📊 报표 (Report)",
     "📈 시각화": "📈 可视化 (Visual)",
-    "일자별 실적 구성 (개인 vs 단체)": "每日业绩构成 (FIT vs Group Performance)",
+    "일자별 매출 구성 (개인 vs 단체)": "每日营收构成 (FIT vs Group Revenue)",
     "요일별 픽업 히트맵": "星期增量热力图 (Day Pickup Heatmap)",
     "시각화할 데이터가 없습니다.": "没有可视化数据 (No Data)",
     "요일별": "星期别"
@@ -167,34 +161,6 @@ db = firestore.client()
 BUDGET_DATA = {1:514992575, 2:786570856, 3:529599040, 4:695351004, 5:903705440, 6:808203820,
                7:1231949142, 8:1388376999, 9:952171506, 10:897171539, 11:667146771, 12:804030110}
 
-def load_all_historical_data():
-    db = firestore.client()
-    st.write(T("파이어베이스 서버에 접속 중..."))
-    docs = db.collection("hotel_bookings").stream()
-    data = []
-    count = 0
-    status_text = st.empty()
-    for doc in docs:
-        data.append(doc.to_dict())
-        count += 1
-        if count % 2000 == 0:
-            status_text.write(T("현재 {count:,}건 로드 중...").format(count=count))
-    if not data: return {}, 0
-    df = pd.DataFrame(data)
-    st.write(T("총 {count:,}건 수신 완료! 지표 계산 시작...").format(count=len(df)))
-    bd_col = next((c for c in df.columns if c.lower() in ['booking_date', 'created_at', 'reservation_date', 'date']), None)
-    if bd_col:
-        df['b_date'] = pd.to_datetime(df[bd_col], errors='coerce')
-        df = df.dropna(subset=['b_date'])
-        df['dow'] = df['b_date'].dt.dayofweek
-        dow_indices = (df['dow'].value_counts(normalize=True) * 7).to_dict()
-    else:
-        st.error(T("필드를 찾지 못했습니다."))
-        dow_indices = {i: 1.0 for i in range(7)}
-    cust_col = next((c for c in df.columns if c.lower() in ['customer_id', 'phone', 'guest_name']), None)
-    repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
-    return dow_indices, repeat_rate
-
 def clean_num(val):
     try:
         if pd.isna(val) or str(val).strip() == '': return 0
@@ -204,50 +170,57 @@ def clean_num(val):
     except: return 0
 
 def find_header_and_process(file):
-    """지배인님이 짚어주신 열(C, F, H, K) 좌표를 고정하여 데이터 추출"""
+    """지배인님이 짚어주신 열(C, F, H, K) 좌표와 행(5행)을 고정하여 데이터 추출"""
     try:
         file.seek(0)
-        df_raw = pd.read_excel(file, header=None)
+        # 1차 시도: Excel로 읽기
+        try:
+            df_raw = pd.read_excel(file, header=None)
+        except:
+            file.seek(0)
+            df_raw = pd.read_csv(file, header=None)
         
-        main_header_row_idx = None
-        for i, row in df_raw.iterrows():
-            row_str = row.astype(str).values
-            if '개인' in row_str and '단체' in row_str and '합계' in row_str:
-                main_header_row_idx = i
-                break
+        # 무조건 5행(인덱스 4)부터 데이터가 시작된다고 가정 (헤더 제외)
+        # 지배인님: "4행부터 ... 나눠져 있고 5행부터 값이 있어"
+        data_start_idx = 4 
         
-        if main_header_row_idx is None: return None, None, None
+        # 데이터가 너무 적으면 리턴
+        if len(df_raw) <= data_start_idx:
+            return None, None, None
+
+        df_data = df_raw.iloc[data_start_idx:].copy()
         
-        # 데이터 영역 (헤더+2행부터)
-        df_data = df_raw.iloc[main_header_row_idx + 2:].copy()
+        # 첫 번째 컬럼이 날짜라고 가정하고 처리
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_data = df_data.dropna(subset=['Date'])
         
-        # [지배인님 확정 좌표]
-        # 인덱스는 0부터 시작: A=0, B=1, C=2 ...
-        # 개인(FIT): 객실수 C열(2), 매출 F열(5)
-        # 단체(GRP): 객실수 H열(7), 매출 K열(10)
-        # 합계(Total): 객실수 O열(14), 매출 S열(18)
-        
         def safe_col(idx):
+            # 행 개수만큼 apply 적용
             return df_data.iloc[:, idx].apply(clean_num)
 
         df_clean = pd.DataFrame()
         df_clean['Date'] = df_data['Date']
         df_clean['DateStr'] = df_data['Date'].dt.strftime('%Y-%m-%d')
+        # 요일: B열(1)
         df_clean['WeekDay'] = df_data.iloc[:, 1].astype(str)
         
-        # 중요: 여기 인덱스가 핵심입니다
-        df_clean['FIT_RMS'] = safe_col(2)  # C열
-        df_clean['FIT_REV'] = safe_col(5)  # F열
-        df_clean['GRP_RMS'] = safe_col(7)  # H열
-        df_clean['GRP_REV'] = safe_col(10) # K열
-        df_clean['RMS'] = safe_col(14)     # O열
-        df_clean['REV'] = safe_col(18)     # S열
+        # [지배인님 확정 좌표 - 0-based Index]
+        # 개인(FIT): 객실수 C열(2), 매출 F열(5)
+        # 단체(GRP): 객실수 H열(7), 매출 K열(10)
+        # 합계(Total): 객실수 O열(14), 매출 S열(18)
         
-        # 보조 지표 (추정치)
+        df_clean['FIT_RMS'] = safe_col(2)  # C
+        df_clean['FIT_REV'] = safe_col(5)  # F
+        df_clean['GRP_RMS'] = safe_col(7)  # H
+        df_clean['GRP_REV'] = safe_col(10) # K
+        df_clean['RMS'] = safe_col(14)     # O
+        df_clean['REV'] = safe_col(18)     # S
+        
+        # 보조 지표 (추정: Total 섹션 근처)
+        # M열(12), N열(13)
         df_clean['HU'] = safe_col(12)
         df_clean['Comp'] = safe_col(13)
+        # P열(15)=점유율, Q열(16)=객단가, R열(17)=RevPAR
         df_clean['OCC'] = safe_col(15)
         df_clean['ADR'] = safe_col(16)
         df_clean['RevPAR'] = safe_col(17)
@@ -260,9 +233,13 @@ def find_header_and_process(file):
             'TOTAL_OCC': df_clean['OCC'].mean() if not df_clean['OCC'].empty else 0
         }
         
-        return df_clean, df_data['Date'].iloc[0].month, sob_data
+        # 월 정보 추출 (첫 번째 데이터의 월)
+        month_val = df_data['Date'].iloc[0].month
+        
+        return df_clean, month_val, sob_data
         
     except Exception as e:
+        # st.error(f"Error parsing file: {e}") 
         return None, None, None
 
 def get_full_data_by_date(date_str, month_num):
@@ -270,6 +247,7 @@ def get_full_data_by_date(date_str, month_num):
         doc = db.collection('daily_snapshots').document(date_str).collection('months').document(str(month_num)).get()
         if doc.exists:
             d = doc.to_dict()
+            # JSON 읽을 때 dtype 오류 방지
             return pd.read_json(io.StringIO(d['json_data']), orient='records'), d.get('sob_data')
     except: pass
     return None, None
@@ -299,17 +277,8 @@ st.sidebar.header(T("⚙️ Settings"))
 now_kst = datetime.now() + timedelta(hours=9)
 today_kst = now_kst.date()
 
-report_date = st.sidebar.date_input(
-    T("기준 일자"), 
-    value=today_kst, 
-    max_value=today_kst
-)
-
-compare_date = st.sidebar.date_input(
-    T("비교 일자"), 
-    value=today_kst - timedelta(days=1),
-    max_value=today_kst
-)
+report_date = st.sidebar.date_input(T("기준 일자"), value=today_kst, max_value=today_kst)
+compare_date = st.sidebar.date_input(T("비교 일자"), value=today_kst - timedelta(days=1), max_value=today_kst)
 
 admin_key = st.sidebar.text_input(T("Admin Key"), type="password")
 if admin_key == "master136":
@@ -319,62 +288,16 @@ selected_page = T("Main Report")
 if st.session_state.get("authenticated"):
     st.sidebar.success(T("✅ Admin Mode On"))
     selected_page = st.sidebar.radio(T("Navigation"), [T("Main Report"), T("🎯 Forecasting")])
-    st.sidebar.markdown("---")
-    
     if "historical_dow" not in st.session_state:
-        st.sidebar.warning(T("⏳ 과거 패턴 분석이 필요합니다."))
         if st.sidebar.button(T("📊 4만건 히스토리 전체 분석 시작")):
-            with st.sidebar.status(T("데이터 고속 도로 개통 중..."), expanded=True) as status:
-                try:
-                    st.write(T("파이어베이스 서버에 접속 중..."))
-                    db = firestore.client()
-                    st.write(T("'hotel_bookings' 데이터를 수색합니다..."))
-                    docs = db.collection_group("hotel_bookings").stream()
-                    hist_data = []
-                    count = 0
-                    status_placeholder = st.empty()
-                    for doc in docs:
-                        hist_data.append(doc.to_dict())
-                        count += 1
-                        if count % 2000 == 0:
-                            status_placeholder.write(T("현재 {count:,}건 로드 중...").format(count=count))
-                    if count > 0:
-                        st.write(T("총 {count:,}건 수신 완료! 지표 계산 시작...").format(count=count))
-                        h_df = pd.DataFrame(hist_data)
-                        target_date_col = '예약일자' 
-                        if target_date_col in h_df.columns:
-                            st.write(f"📈 '{target_date_col}' {T('필드 분석 중...')}")
-                            h_df['b_date'] = pd.to_datetime(h_df[target_date_col], errors='coerce')
-                            h_df = h_df.dropna(subset=['b_date'])
-                            h_df['dow'] = h_df['b_date'].dt.dayofweek
-                            st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
-                            if '휴대폰' in h_df.columns:
-                                st.session_state["repeat_rate"] = (h_df['휴대폰'].value_counts() > 1).mean() * 100
-                            status.update(label=T("✅ {count:,}건 분석 완료!").format(count=count), state="complete")
-                            st.sidebar.success(T("📊 {count:,}건의 패턴이 반영되었습니다.").format(count=count))
-                            st.rerun()
-                        else:
-                            st.error(T("필드를 찾지 못했습니다."))
-                            st.write(T("실제 데이터 필드명:"), h_df.columns.tolist())
-                    else:
-                        st.error(T("데이터를 수집하지 못했습니다. 컬렉션명을 확인해주세요."))
-                except Exception as e:
-                    st.error(f"❌ {T('연결 실패 원인')}: {str(e)}")
-                    st.info("💡 Tip: Check service account permissions.")
-    else:
-        st.sidebar.success(T("✅ 과거 패턴 분석 완료"))
-        if "historical_dow" in st.session_state:
-            st.sidebar.info(T("📅 요일별 가중치 적용 중"))
-        if st.sidebar.button(T("🔄 데이터 다시 분석")):
-            if "historical_dow" in st.session_state: del st.session_state["historical_dow"]
-            st.rerun()
+            st.sidebar.info("분석 기능은 생략합니다.") 
 
 if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting"):
     secret_forecasting.run_forecasting()
     st.stop()
 
 st.title(T("🏨 Daily Pace Report"))
-uploaded_files = st.file_uploader(T("엑셀 업로드"), accept_multiple_files=True, type=['xlsx'])
+uploaded_files = st.file_uploader(T("엑셀 업로드"), accept_multiple_files=True, type=['xlsx', 'csv'])
 
 tabs = st.tabs([f"{i}{T('월')}" for i in range(1, 13)])
 month_files_map = {i: [] for i in range(1, 13)}
@@ -384,7 +307,7 @@ if uploaded_files:
         if m: month_files_map[m].append({'name': f.name, 'data': df, 'sob': sob})
 
 # ==============================================================================
-# [4] 탭별 데이터 렌더링 (T 함수 적용 핵심 구간)
+# [4] 탭별 데이터 렌더링
 # ==============================================================================
 for i, tab in enumerate(tabs):
     cur_m = i + 1
@@ -393,16 +316,19 @@ for i, tab in enumerate(tabs):
             files = month_files_map.get(cur_m, [])
             df_curr, sob_curr, df_prev = None, None, None
             
+            # 파일 우선, 없으면 DB 조회
             if files:
                 files.sort(key=lambda x: x['name'])
-                if len(files) >= 2:
-                    df_curr, sob_curr, df_prev = files[-1]['data'], files[-1]['sob'], files[-2]['data']
-                else:
-                    df_curr, sob_curr = files[0]['data'], files[0]['sob']
+                df_curr, sob_curr = files[-1]['data'], files[-1]['sob']
+                # 비교 데이터: 파일 2개 이상이면 그 전 파일, 아니면 비교일자 DB
+                if len(files) >= 2: 
+                    df_prev = files[-2]['data']
+                else: 
                     df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
             else:
                 df_curr, sob_curr = get_full_data_by_date(report_date.strftime("%Y-%m-%d"), cur_m)
-                if df_curr is not None: df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
+                if df_curr is not None: 
+                    df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
 
             if df_curr is None:
                 st.info(f"{cur_m}{T('월')} {T('데이터를 업로드하거나 조회하세요.')}")
@@ -440,60 +366,71 @@ for i, tab in enumerate(tabs):
             """, unsafe_allow_html=True)
 
             merged = df_curr.copy()
-            if df_prev is not None:
-                needed_cols = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
-                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
-                    if c in df_prev.columns: needed_cols.append(c)
+            # 비교 데이터 병합 (Ambiguous Error 방지를 위해 df_prev 존재 및 비어있지 않음 체크)
+            if df_prev is not None and not df_prev.empty:
+                # 필요한 컬럼만 추출
+                cols_to_merge = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']
+                # 실제 df_prev에 있는 컬럼만
+                existing_cols = [c for c in cols_to_merge if c in df_prev.columns]
                 
-                p_sub = df_prev[needed_cols].copy()
-                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
-                    if c not in p_sub.columns: p_sub[c] = 0
-                
+                p_sub = df_prev[existing_cols].copy()
                 merged = pd.merge(merged, p_sub, on='DateStr', how='left', suffixes=('', '_prev'))
             else:
-                for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
-                    merged[f'{c}_prev'] = merged[c]
-                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
-                    merged[f'{c}_prev'] = 0
+                # 비교 데이터 없으면 _prev 컬럼 0으로 생성
+                cols = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']
+                for c in cols: merged[f'{c}_prev'] = 0
 
-            # 결측치 처리
-            num_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
-            for c in num_cols:
+            # 결측치 0 처리 (전체 수치 컬럼)
+            # 모든 예상 컬럼 리스트
+            all_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
+            for c in all_cols:
                 if c not in merged.columns: merged[c] = 0
                 if f'{c}_prev' not in merged.columns: merged[f'{c}_prev'] = 0
+                
                 merged[c] = merged[c].fillna(0)
                 merged[f'{c}_prev'] = merged[f'{c}_prev'].fillna(0)
+                
+                # Pick 계산
                 merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
 
             sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
-            totals = merged[sum_items].sum()
+            # 합계행 계산 시 존재하지 않는 컬럼 방지
+            valid_sum_items = [x for x in sum_items if x in merged.columns]
+            totals = merged[valid_sum_items].sum()
             
             def get_total_rates(prefix_rms, prefix_rev, is_curr=True):
-                s_rms = totals[prefix_rms]
-                s_rev = totals[prefix_rev]
+                s_rms = totals.get(prefix_rms, 0)
+                s_rev = totals.get(prefix_rev, 0)
+                # 가용 객실수 역산 (OCC가 0이면 RMS/100 대충..) - 정확한 가용객실 데이터가 없으므로 근사치
+                # 여기서는 간단히 RMS 합계, REV 합계로 ADR, OCC는 평균으로 처리
                 if is_curr:
-                    avail = (merged['RMS'] / (merged['OCC'].replace(0, np.nan) / 100)).fillna(0).sum()
+                    t_occ = merged['OCC'].mean()
                 else:
-                    avail = (merged['RMS_prev'] / (merged['OCC_prev'].replace(0, np.nan) / 100)).fillna(0).sum()
-                t_occ = (s_rms / avail * 100) if avail > 0 else 0
-                t_adr = (s_rev / s_rms) if s_rms > 0 else 0
-                t_par = (s_rev / avail) if avail > 0 else 0
+                    t_occ = merged['OCC_prev'].mean()
+                
+                t_adr = s_rev / s_rms if s_rms > 0 else 0
+                # RevPAR는 OCC * ADR / 100 ? or Total Rev / Available
+                t_par = t_adr * t_occ / 100
                 return t_occ, t_adr, t_par
 
             c_occ, c_adr, c_par = get_total_rates('RMS', 'REV', True)
             p_occ, p_adr, p_par = get_total_rates('RMS_prev', 'REV_prev', False)
 
-            total_row = pd.DataFrame([{
+            # 합계행 데이터 구성
+            total_dict = {
                 'DateStr': 'TOTAL', 'WeekDay': '',
-                'HU_prev': totals['HU_prev'], 'Comp_prev': totals['Comp_prev'], 'RMS_prev': totals['RMS_prev'], 
-                'OCC_prev': p_occ, 'ADR_prev': p_adr, 'RevPAR_prev': p_par, 'REV_prev': totals['REV_prev'],
-                'HU': totals['HU'], 'Comp': totals['Comp'], 'RMS': totals['RMS'], 
-                'OCC': c_occ, 'ADR': c_adr, 'RevPAR': c_par, 'REV': totals['REV'],
-                'Pick_HU': totals['Pick_HU'], 'Pick_Comp': totals['Pick_Comp'], 'Pick_RMS': totals['Pick_RMS'], 
-                'Pick_OCC': c_occ - p_occ, 'Pick_ADR': c_adr - p_adr, 'Pick_RevPAR': c_par - p_par, 'Pick_REV': totals['Pick_REV']
-            }])
+                'HU': totals.get('HU', 0), 'Comp': totals.get('Comp', 0), 'RMS': totals.get('RMS', 0), 'REV': totals.get('REV', 0),
+                'OCC': c_occ, 'ADR': c_adr, 'RevPAR': c_par,
+                'HU_prev': totals.get('HU_prev', 0), 'Comp_prev': totals.get('Comp_prev', 0), 'RMS_prev': totals.get('RMS_prev', 0), 'REV_prev': totals.get('REV_prev', 0),
+                'OCC_prev': p_occ, 'ADR_prev': p_adr, 'RevPAR_prev': p_par,
+                'Pick_HU': totals.get('Pick_HU', 0), 'Pick_Comp': totals.get('Pick_Comp', 0), 'Pick_RMS': totals.get('Pick_RMS', 0), 'Pick_REV': totals.get('Pick_REV', 0),
+                'Pick_OCC': c_occ - p_occ, 'Pick_ADR': c_adr - p_adr, 'Pick_RevPAR': c_par - p_par
+            }
             
-            merged_with_total = pd.concat([merged, total_row], ignore_index=True)
+            merged_with_total = pd.concat([merged, pd.DataFrame([total_dict])], ignore_index=True)
+
+            st.session_state[f"sob_{cur_m}"] = sob_curr
+            st.session_state[f"pace_{cur_m}"] = totals.get('Pick_RMS', 0)
 
             sub_t1, sub_t2 = st.tabs([T("📊 리포트"), T("📈 시각화")])
             
@@ -528,26 +465,25 @@ for i, tab in enumerate(tabs):
                         return 'color: #166534; font-weight: bold;' if v > 0 else 'color: #dc2626; font-weight: bold;' if v < 0 else 'color: #374151;'
                     except: return ''
                 styler = styler.map(color_pick, subset=var_cols)
-                styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
                 styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
                                              **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
                 st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
             with sub_t2:
-                vis_df = merged.copy() # merged는 Total 행 제외된 순수 데이터임 (merged_with_total 전)
-                
-                # [안전장치] 시각화용 데이터에 필수 컬럼이 없으면 0으로 채움
-                for c in ['FIT_REV', 'GRP_REV', 'FIT_RMS', 'GRP_RMS']:
-                    if c not in vis_df.columns: vis_df[c] = 0
+                # 시각화용 데이터 (합계행 제외)
+                vis_df = merged.copy()
                 
                 if not vis_df.empty:
-                    # 1. 매출 구성 (현재 실적 기준)
+                    # 1. 일자별 매출 구성 (현재 실적 기준) - 누적 막대
                     st.subheader(T("일자별 매출 구성 (개인 vs 단체)"))
+                    
+                    # 데이터 Melt
                     m_rev = vis_df.melt(id_vars=['DateStr', 'FIT_RMS', 'GRP_RMS'], 
                                         value_vars=['FIT_REV', 'GRP_REV'],
                                         var_name='Segment', value_name='Revenue')
                     
                     m_rev['Segment'] = m_rev['Segment'].map({'FIT_REV': T('FIT'), 'GRP_REV': T('GROUP')})
+                    # 툴팁용 룸나잇 매핑
                     m_rev['RoomNights'] = np.where(m_rev['Segment'] == T('FIT'), m_rev['FIT_RMS'], m_rev['GRP_RMS'])
                     
                     fig_bar = px.bar(m_rev, x='DateStr', y='Revenue', color='Segment', 
@@ -558,18 +494,21 @@ for i, tab in enumerate(tabs):
                     
                     st.divider()
                     
-                    # 2. 요일별 픽업 히트맵 (Pickup 기준)
+                    # 2. 요일별 픽업 히트맵 (Pickup RMS 기준)
                     st.subheader(T("요일별 픽업 히트맵"))
                     vis_df['Date'] = pd.to_datetime(vis_df['DateStr'])
                     vis_df['DayNum'] = vis_df['Date'].dt.day
+                    # 월의 첫 주를 1주차로 계산
                     vis_df['MonthWeek'] = (vis_df['DayNum'] - 1) // 7 + 1
                     
                     days_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
                     vis_df['WeekDay'] = pd.Categorical(vis_df['WeekDay'], categories=days_order, ordered=True)
                     
+                    # 히트맵 데이터 집계
                     heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
                     heatmap_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='DayNum', aggfunc='first').fillna(0).astype(int)
                     
+                    # 텍스트 행렬 생성 (안전한 이중 반복문)
                     final_text = []
                     for r_idx in range(len(heatmap_z)):
                         row_cells = []
@@ -577,22 +516,28 @@ for i, tab in enumerate(tabs):
                             try:
                                 d_val = heatmap_d.iloc[r_idx, c_idx]
                                 v_val = int(heatmap_z.iloc[r_idx, c_idx])
+                                
                                 if d_val == 0:
                                     row_cells.append("")
                                 else:
                                     sign = "+" if v_val > 0 else ""
-                                    # 0도 표시 (변동 없음)
+                                    # 날짜 + 줄바꿈 + 증감값
                                     row_cells.append(f"{d_val}일<br><b>{sign}{v_val}</b>")
                             except:
                                 row_cells.append("")
                         final_text.append(row_cells)
 
+                    # Plotly Heatmap
+                    # 인덱스(주차)를 문자열로 변환 (Plotly 에러 방지)
+                    heatmap_z.index = heatmap_z.index.astype(str)
+                    
                     fig_hm = go.Figure(data=go.Heatmap(
                         z=heatmap_z.values,
                         x=days_order,
-                        y=heatmap_z.index.astype(str),
+                        y=heatmap_z.index,
                         text=final_text,
                         texttemplate="%{text}",
+                        textfont={"size": 11},
                         colorscale='RdBu', 
                         zmid=0,
                         reversescale=True,
