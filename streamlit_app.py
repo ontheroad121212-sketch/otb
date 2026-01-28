@@ -135,6 +135,12 @@ st.markdown(textwrap.dedent("""
     }
     .modern-table td { padding: 14px 10px; font-size: 16px; text-align: right; border-bottom: 1px solid #f3f4f6; }
     .modern-table td.label { text-align: left; font-weight: 700; }
+    .kpi-wrapper { display: flex; gap: 20px; margin-top: 25px; }
+    .kpi-card { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; text-align: center; }
+    .kpi-title { font-size: 14px; color: #64748b; font-weight: 800; }
+    .kpi-value { font-size: 32px; color: #0f172a; font-weight: 900; }
+    .kpi-accent { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; }
+    .kpi-accent .kpi-title, .kpi-accent .kpi-value { color: white; }
     .compact-table-wrapper { overflow-x: auto; margin-bottom: 50px; border: 1px solid #e5e7eb; }
     .compact-table-wrapper table { width: 100%; border-collapse: collapse; font-size: 10px !important; }
     .compact-table-wrapper th { 
@@ -142,12 +148,6 @@ st.markdown(textwrap.dedent("""
         font-size: 10px !important; line-height: 1.2; text-align: center;
     }
     .compact-table-wrapper td { padding: 4px 3px !important; border: 1px solid #e2e8f0; text-align: right; }
-    .kpi-wrapper { display: flex; gap: 20px; margin-top: 25px; }
-    .kpi-card { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; text-align: center; }
-    .kpi-title { font-size: 14px; color: #64748b; font-weight: 800; }
-    .kpi-value { font-size: 32px; color: #0f172a; font-weight: 900; }
-    .kpi-accent { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; }
-    .kpi-accent .kpi-title, .kpi-accent .kpi-value { color: white; }
 </style>
 """), unsafe_allow_html=True)
 
@@ -199,30 +199,34 @@ def load_all_historical_data():
 # [강력한 숫자 변환 함수]
 def clean_num(val):
     try:
+        # 값이 없으면 0
         if pd.isna(val) or str(val).strip() == '': return 0
+        # 문자열로 변환 후 콤마, 원화, 퍼센트, 공백 제거
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').replace('%', '').strip()
         return float(s)
     except: return 0
 
 def find_header_and_process(file):
     """
-    [지배인님 요청 반영: 좌표 강제 고정]
+    [지배인님 확정 좌표 강제 추출]
+    - 파일 형식 자동 감지
     - 5행(Index 4)부터 데이터 시작
-    - C열(2): 개인 객실수, F열(5): 개인 매출
-    - H열(7): 단체 객실수, K열(10): 단체 매출
-    - O열(14): 합계 객실수, S열(18): 합계 매출
+    - C열(2), F열(5), H열(7), K열(10) 고정
     """
     try:
         file.seek(0)
         df_raw = None
         
-        # 파일 형식 자동 감지 (Excel -> CSV utf-8 -> CSV cp949)
-        try: df_raw = pd.read_excel(file, header=None)
+        # 1차 시도: 엑셀로 읽기
+        try:
+            df_raw = pd.read_excel(file, header=None)
         except:
+            # 2차 시도: CSV로 읽기 (utf-8)
             try:
                 file.seek(0)
                 df_raw = pd.read_csv(file, header=None)
             except:
+                # 3차 시도: CSV로 읽기 (cp949 - 한글 인코딩)
                 file.seek(0)
                 df_raw = pd.read_csv(file, header=None, encoding='cp949')
         
@@ -232,13 +236,13 @@ def find_header_and_process(file):
         # [핵심] 5행(Index 4)부터 데이터 시작
         df_data = df_raw.iloc[4:].copy()
         
+        # 첫 번째 컬럼(A열, Index 0)이 날짜라고 가정
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
-        df_data = df_data.dropna(subset=['Date']) # 날짜 없는 행 제거
+        df_data = df_data.dropna(subset=['Date']) # 날짜가 없는 행은 제거
         
         if df_data.empty: return None, None, None
 
         def safe_col(idx):
-            # 인덱스 범위 체크 후 변환
             if idx >= len(df_data.columns): return pd.Series(0, index=df_data.index)
             return df_data.iloc[:, idx].apply(clean_num)
 
@@ -247,15 +251,15 @@ def find_header_and_process(file):
         df_clean['DateStr'] = df_data['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_data.iloc[:, 1].astype(str)
         
-        # [핵심] 좌표 강제 고정
-        df_clean['FIT_RMS'] = safe_col(2)  # C열
-        df_clean['FIT_REV'] = safe_col(5)  # F열
-        df_clean['GRP_RMS'] = safe_col(7)  # H열
-        df_clean['GRP_REV'] = safe_col(10) # K열
-        df_clean['RMS'] = safe_col(14)     # O열
-        df_clean['REV'] = safe_col(18)     # S열
+        # [지배인님 확정 좌표]
+        df_clean['FIT_RMS'] = safe_col(2)  # C
+        df_clean['FIT_REV'] = safe_col(5)  # F
+        df_clean['GRP_RMS'] = safe_col(7)  # H
+        df_clean['GRP_REV'] = safe_col(10) # K
+        df_clean['RMS'] = safe_col(14)     # O
+        df_clean['REV'] = safe_col(18)     # S
         
-        # 보조 지표
+        # 보조 지표 (추정)
         df_clean['HU'] = safe_col(12)
         df_clean['Comp'] = safe_col(13)
         df_clean['OCC'] = safe_col(15)
@@ -280,12 +284,10 @@ def get_full_data_by_date(date_str, month_num):
         if doc.exists:
             d = doc.to_dict()
             df = pd.read_json(io.StringIO(d['json_data']), orient='records')
-            
             # [DB 데이터 복구] 과거 데이터에 필드가 없으면 0으로 생성
-            required_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV']
+            required_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
             for c in required_cols:
                 if c not in df.columns: df[c] = 0
-            
             return df, d.get('sob_data')
     except: pass
     return None, None
@@ -387,8 +389,8 @@ for i, tab in enumerate(tabs):
                 continue
 
             budget = BUDGET_DATA.get(cur_m, 0)
-            total_rev = sob_curr['FIT_REV'] + sob_curr['GRP_REV']
-            total_rms = sob_curr['FIT_RMS'] + sob_curr['GRP_RMS']
+            total_rev = sob_curr.get('FIT_REV', 0) + sob_curr.get('GRP_REV', 0)
+            total_rms = sob_curr.get('FIT_RMS', 0) + sob_curr.get('GRP_RMS', 0)
             
             st.markdown(f"""
             <div class="sob-container">
@@ -401,15 +403,15 @@ for i, tab in enumerate(tabs):
                             <tr><td class="label">{T('Variance')}</td><td style="color:{'green' if total_rev>=budget else 'red'}">{total_rev-budget:+,.0f}</td></tr>
                         </table>
                         <div class="kpi-wrapper">
-                            <div class="kpi-card"><div class="kpi-title">{T('OCC')}</div><div class="kpi-value">{sob_curr['TOTAL_OCC']:.1f}%</div></div>
+                            <div class="kpi-card"><div class="kpi-title">{T('OCC')}</div><div class="kpi-value">{sob_curr.get('TOTAL_OCC',0):.1f}%</div></div>
                             <div class="kpi-card kpi-accent"><div class="kpi-title">{T('ACHIEVEMENT')}</div><div class="kpi-value">{(total_rev/budget*100):.1f}%</div></div>
                         </div>
                     </div>
                     <div>
                         <table class="modern-table">
                             <thead><tr><th>{T('Segment')}</th><th>{T('RMS')}</th><th>{T('ADR')}</th><th>{T('REV')}</th></tr></thead>
-                            <tr><td class="label">{T('FIT')}</td><td>{sob_curr['FIT_RMS']:,.0f}</td><td>{(sob_curr['FIT_REV']/max(1,sob_curr['FIT_RMS'])):,.0f}</td><td>{sob_curr['FIT_REV']:,.0f}</td></tr>
-                            <tr><td class="label">{T('GROUP')}</td><td>{sob_curr['GRP_RMS']:,.0f}</td><td>{(sob_curr['GRP_REV']/max(1,sob_curr['GRP_RMS'])):,.0f}</td><td>{sob_curr['GRP_REV']:,.0f}</td></tr>
+                            <tr><td class="label">{T('FIT')}</td><td>{sob_curr.get('FIT_RMS',0):,.0f}</td><td>{(sob_curr.get('FIT_REV',0)/max(1,sob_curr.get('FIT_RMS',1))):,.0f}</td><td>{sob_curr.get('FIT_REV',0):,.0f}</td></tr>
+                            <tr><td class="label">{T('GROUP')}</td><td>{sob_curr.get('GRP_RMS',0):,.0f}</td><td>{(sob_curr.get('GRP_REV',0)/max(1,sob_curr.get('GRP_RMS',1))):,.0f}</td><td>{sob_curr.get('GRP_REV',0):,.0f}</td></tr>
                             <tr style="background:#eff6ff; font-weight:bold;"><td>{T('TOTAL')}</td><td>{total_rms:,.0f}</td><td>{(total_rev/max(1,total_rms)):,.0f}</td><td>{total_rev:,.0f}</td></tr>
                         </table>
                     </div>
@@ -421,12 +423,10 @@ for i, tab in enumerate(tabs):
             if df_prev is not None:
                 # [DB 데이터 복구] FIT/GRP 컬럼이 DB에 없으면 0으로 채워서 병합
                 cols_to_use = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
-                # FIT/GRP 컬럼 존재 여부 체크
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     if c in df_prev.columns: cols_to_use.append(c)
                 
                 p_sub = df_prev[cols_to_use].copy()
-                # 없는 컬럼은 0으로
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     if c not in p_sub.columns: p_sub[c] = 0
                 
@@ -435,7 +435,7 @@ for i, tab in enumerate(tabs):
                 for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']: 
                     merged[f'{c}_prev'] = 0
 
-            # 결측치 처리 및 계산
+            # 결측치 0 처리 및 픽업 계산
             all_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
             for c in all_cols:
                 if c not in merged.columns: merged[c] = 0
@@ -516,7 +516,7 @@ for i, tab in enumerate(tabs):
             with sub_t2:
                 vis_df = merged.copy()
                 if not vis_df.empty:
-                    # 1. 매출 구성 (현재 실적 기준) - 누적 막대
+                    # 1. 일자별 매출 구성 (현재 실적 기준) - 누적 막대
                     st.subheader(T("일자별 매출 구성 (개인 vs 단체)"))
                     m_rev = vis_df.melt(id_vars=['DateStr', 'FIT_RMS', 'GRP_RMS'], 
                                         value_vars=['FIT_REV', 'GRP_REV'],
