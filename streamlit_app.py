@@ -196,11 +196,14 @@ def load_all_historical_data():
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
     return dow_indices, repeat_rate
 
-# [핀셋 수정] 콤마(,) 있는 숫자도 처리하는 강력한 함수
+# [핀셋 수정] 콤마(,) 및 공백 제거 숫자 변환 함수 (초강력 버전)
 def clean_num(val):
     try:
         if pd.isna(val) or str(val).strip() == '': return 0
+        # 콤마, 원화기호, 공백 모두 제거
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').strip()
+        # 퍼센트 제거
+        s = s.replace('%', '')
         return float(s)
     except: return 0
 
@@ -209,7 +212,7 @@ def find_header_and_process(file):
         file.seek(0)
         df_raw = pd.read_excel(file, header=None)
         
-        # [핵심] 헤더 행 찾기 (개인, 단체, 합계 키워드 기반)
+        # [핵심] 헤더 행 찾기 (개인, 단체, 합계 키워드)
         main_header_row_idx = None
         for i, row in df_raw.iterrows():
             row_str = row.astype(str).values
@@ -217,94 +220,100 @@ def find_header_and_process(file):
                 main_header_row_idx = i
                 break
         
-        if main_header_row_idx is None: return None, None, None
+        if main_header_row_idx is None: 
+            return None, None, None
         
-        # 헤더와 서브헤더(그 다음 행) 가져오기
+        # 헤더와 서브헤더
         headers = df_raw.iloc[main_header_row_idx].astype(str).values
         sub_headers = df_raw.iloc[main_header_row_idx + 1].astype(str).values
         
-        # 각 섹션의 시작 인덱스 찾기
-        fit_start_idx = np.where(headers == '개인')[0][0]
-        grp_start_idx = np.where(headers == '단체')[0][0]
-        total_start_idx = np.where(headers == '합계')[0][0]
-        
-        # 범위 내에서 '객실수'와 '매출' 컬럼 찾기 함수
-        def get_col_idx(start, end, keyword):
-            for i in range(start, end):
-                if keyword in sub_headers[i]:
-                    return i
-            return -1
-            
-        fit_rms_idx = get_col_idx(fit_start_idx, grp_start_idx, '객실수')
-        fit_rev_idx = get_col_idx(fit_start_idx, grp_start_idx, '매출')
-        
-        grp_rms_idx = get_col_idx(grp_start_idx, total_start_idx, '객실수')
-        grp_rev_idx = get_col_idx(grp_start_idx, total_start_idx, '매출')
-        
-        total_rms_idx = get_col_idx(total_start_idx, len(sub_headers), '객실수')
-        total_rev_idx = get_col_idx(total_start_idx, len(sub_headers), '매출')
-        
-        # 데이터 영역 추출
+        # 데이터 영역 (헤더+2행부터)
         df_data = df_raw.iloc[main_header_row_idx + 2:].copy()
-        
-        # 날짜 컬럼 처리 (첫 번째 컬럼이라고 가정)
+        # 첫 번째 컬럼이 날짜라고 가정하고 처리
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_data = df_data.dropna(subset=['Date'])
         
-        # [핵심] 콤마 제거 및 숫자 변환 적용
-        def safe_num(idx): 
-            if idx == -1: return pd.Series(0, index=df_data.index)
-            return df_data.iloc[:, idx].apply(clean_num)
+        # [핵심] 컬럼 위치 찾기 (Index lookup)
+        # 1. '개인' 시작 위치 찾기
+        try: fit_start = np.where(headers == '개인')[0][0]
+        except: fit_start = 2 # 기본값
         
+        # 2. '단체' 시작 위치 찾기
+        try: grp_start = np.where(headers == '단체')[0][0]
+        except: grp_start = 7 # 기본값
+        
+        # 3. '합계' 시작 위치 찾기
+        try: total_start = np.where(headers == '합계')[0][0]
+        except: total_start = 12 # 기본값
+        
+        # 범위 내에서 '객실수'와 '매출' 찾기 (offset 계산)
+        def find_sub_col(start_idx, end_idx, keyword):
+            for i in range(start_idx, end_idx):
+                if keyword in str(sub_headers[i]):
+                    return i
+            return start_idx # 못 찾으면 시작점 반환 (fallback)
+
+        fit_rms_idx = find_sub_col(fit_start, grp_start, '객실수')
+        fit_rev_idx = find_sub_col(fit_start, grp_start, '매출')
+        
+        grp_rms_idx = find_sub_col(grp_start, total_start, '객실수')
+        grp_rev_idx = find_sub_col(grp_start, total_start, '매출')
+        
+        total_rms_idx = find_sub_col(total_start, len(sub_headers), '객실수')
+        total_rev_idx = find_sub_col(total_start, len(sub_headers), '매출')
+        
+        # 데이터 추출 및 변환
+        def get_series(idx):
+            return df_data.iloc[:, idx].apply(clean_num)
+
         df_clean = pd.DataFrame()
         df_clean['Date'] = df_data['Date']
         df_clean['DateStr'] = df_data['Date'].dt.strftime('%Y-%m-%d')
-        # 요일 (두 번째 컬럼)
+        # 요일은 날짜 바로 다음 컬럼(1)
         df_clean['WeekDay'] = df_data.iloc[:, 1].astype(str)
-
-        # 정확한 인덱스로 데이터 추출
-        df_clean['FIT_RMS'] = safe_num(fit_rms_idx)
-        df_clean['FIT_REV'] = safe_num(fit_rev_idx)
-        df_clean['GRP_RMS'] = safe_num(grp_rms_idx)
-        df_clean['GRP_REV'] = safe_num(grp_rev_idx)
-        df_clean['RMS'] = safe_num(total_rms_idx)
-        df_clean['REV'] = safe_num(total_rev_idx)
         
-        # 추가 지표 (전체 섹션 기준 상대 위치 대신 안전하게 Total 섹션 활용하거나 0 처리)
-        # 여기서는 Total RMS 앞쪽 컬럼들을 내부이용/무료로 추정 (Total Start 이전 2개)
+        df_clean['FIT_RMS'] = get_series(fit_rms_idx)
+        df_clean['FIT_REV'] = get_series(fit_rev_idx)
+        df_clean['GRP_RMS'] = get_series(grp_rms_idx)
+        df_clean['GRP_REV'] = get_series(grp_rev_idx)
+        df_clean['RMS'] = get_series(total_rms_idx)
+        df_clean['REV'] = get_series(total_rev_idx)
+        
+        # 내부이용, 무료 등은 합계(total_start) 바로 앞쪽이라고 가정
+        # 예: 합계가 12라면 10, 11일 가능성 높음.
+        # 혹은 서브헤더 검색
         try:
-            df_clean['HU'] = safe_num(total_start_idx - 2)
-            df_clean['Comp'] = safe_num(total_start_idx - 1)
+            hu_idx = find_sub_col(grp_start, total_start + 5, '내부이용') # 범위 넓게 잡음
+            comp_idx = find_sub_col(grp_start, total_start + 5, '무료')
+            df_clean['HU'] = get_series(hu_idx) if hu_idx != grp_start else 0
+            df_clean['Comp'] = get_series(comp_idx) if comp_idx != grp_start else 0
         except:
             df_clean['HU'] = 0
             df_clean['Comp'] = 0
-            
-        # OCC, ADR 등 계산
-        df_clean['OCC'] = 0 # 추후 계산
-        # df_clean['ADR'] = df_clean['REV'] / df_clean['RMS'] # 0 나누기 방지 필요
-        df_clean['ADR'] = np.where(df_clean['RMS'] > 0, df_clean['REV'] / df_clean['RMS'], 0)
-        df_clean['RevPAR'] = 0 # 추후 계산
+
+        # 계산 파생 컬럼
+        df_clean['OCC'] = 0
+        # ADR 계산 (0 나누기 방지)
+        df_clean['ADR'] = df_clean.apply(lambda r: r['REV']/r['RMS'] if r['RMS'] > 0 else 0, axis=1)
+        df_clean['RevPAR'] = 0 
+
+        # 점유율 컬럼이 있다면 가져오기
+        occ_idx = find_sub_col(total_start, len(sub_headers), '점유율')
+        if occ_idx != total_start:
+            df_clean['OCC'] = get_series(occ_idx)
 
         sob_data = {
             'FIT_RMS': int(df_clean['FIT_RMS'].sum()),
             'FIT_REV': int(df_clean['FIT_REV'].sum()),
             'GRP_RMS': int(df_clean['GRP_RMS'].sum()),
             'GRP_REV': int(df_clean['GRP_REV'].sum()),
-            'TOTAL_OCC': 0 # 임시
+            'TOTAL_OCC': df_clean['OCC'].mean() if not df_clean['OCC'].empty else 0
         }
         
-        # Total OCC 재계산 (Total RMS / 가용객실수) - 가용객실수 역산 필요하지만 일단 단순 합계
-        # 파일에 '점유율' 컬럼이 있다면 가져오는게 좋음. total_rms_idx + 1
-        occ_idx = get_col_idx(total_start_idx, len(sub_headers), '점유율')
-        if occ_idx != -1:
-             df_clean['OCC'] = safe_num(occ_idx)
-             # 가중 평균 OCC 계산
-             total_avail = df_clean['RMS'].sum() / (df_clean['OCC'].replace(0, np.nan).mean() / 100) if df_clean['OCC'].mean() > 0 else 0
-             sob_data['TOTAL_OCC'] = df_clean['OCC'].mean() # 단순 평균으로 대체하거나 로직 보강 가능
-
         return df_clean, df_data['Date'].iloc[0].month, sob_data
+        
     except Exception as e:
-        st.error(f"File Processing Error: {e}")
+        print(f"Error parsing file: {e}") # 디버깅용
         return None, None, None
 
 def get_full_data_by_date(date_str, month_num):
@@ -484,7 +493,7 @@ for i, tab in enumerate(tabs):
         merged = df_curr.copy()
         if df_prev is not None:
             df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
-            # [수정] 컬럼 존재 여부 체크 후 할당 (안전장치)
+            # [핀셋 수정] 컬럼 존재 여부 체크 후 할당 (안전장치)
             if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS']
             else: df_prev_sub['FIT_RMS'] = 0
             
@@ -612,31 +621,30 @@ for i, tab in enumerate(tabs):
                     
                     heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
                     
-                    # [수정] 안전한 반복문 방식으로 텍스트 생성 (combine 에러 방지)
+                    # [수정] 텍스트 안전 조립 (반복문 사용)
                     heatmap_text_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Day', aggfunc='first').fillna(0).astype(int).astype(str)
                     heatmap_text_v = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0).astype(int).astype(str)
                     heatmap_text_d = heatmap_text_d.replace('0', '')
                     
                     final_text = []
-                    for i in range(len(heatmap_z)):
+                    for r in range(len(heatmap_z)):
                         row_txt = []
-                        for j in range(len(heatmap_z.columns)):
+                        for c_idx in range(len(heatmap_z.columns)):
                             try:
-                                d_val = heatmap_text_d.iloc[i, j]
-                                v_val = heatmap_text_v.iloc[i, j]
+                                d_val = heatmap_text_d.iloc[r, c_idx]
+                                v_val = heatmap_text_v.iloc[r, c_idx]
                                 if d_val == '' or d_val == '0':
                                     row_txt.append("")
                                 else:
                                     val = int(v_val)
                                     sign = "+" if val > 0 else ""
-                                    # 값이 0이어도 표시 (선택사항)
+                                    # 0은 표시하지 않거나 0으로 표시 (여기선 표시)
                                     row_txt.append(f"{d_val}일<br><b>{sign}{val}</b>")
                             except:
                                 row_txt.append("")
                         final_text.append(row_txt)
 
                     heatmap_z.index = heatmap_z.index.astype(str)
-                    # final_text is list of lists, OK for Plotly
                     
                     fig_hm = go.Figure(data=go.Heatmap(
                         z=heatmap_z.values,
