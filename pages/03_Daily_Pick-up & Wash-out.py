@@ -11,7 +11,7 @@ import time
 import textwrap
 
 # ==============================================================================
-# [1] 설정 및 언어 세션 고정 (무한로딩 방지 & 파라미터 유지)
+# [1] 설정 및 언어 세션 고정
 # ==============================================================================
 st.set_page_config(page_title="Daily Pick-up & Wash-out", layout="wide")
 
@@ -34,10 +34,9 @@ if is_chairman_mode:
     st.sidebar.success("Chairman Mode Active (ZH)")
 
 # ==============================================================================
-# [번역 사전] - 거래처명 및 탭 메뉴 등 상세 추가 완료
+# [번역 사전]
 # ==============================================================================
 LANG_DICT = {
-    # UI 및 보고서 제목
     "ARI Final Integrity": "ARI 最终数据完整性报告",
     "🏛️ 앰버 호텔 경영 리포트 (Final Integrity)": "🏛️ 琥珀酒店经营报告 (Amber Hotel Management Report)",
     "설정": "设置 (Settings)",
@@ -62,8 +61,6 @@ LANG_DICT = {
     "🎯 OTB 현황": "🎯 OTB 现状 (Pacing)",
     "✅ 예약 (Reservation List)": "✅ 预订 (Reservation List)",
     "❌ 취소 (Cancellation List)": "❌ 取消 (Cancellation List)",
-    
-    # 지표 및 컬럼
     "RN": "间夜量 (RN)",
     "객실료": "客房收入 (Room Rev)",
     "총매출": "总收入 (Total Rev)",
@@ -85,8 +82,6 @@ LANG_DICT = {
     "국적별 매출 실적": "分国籍收入表现 (Rev by Nation)",
     "조식 포함 여부 비중(RN)": "含早/不含早占比 (Breakfast Ratio)",
     "조식 상세 코드 비중": "含早代码明细 (Breakfast Code Detail)",
-    
-    # [탭 메뉴 번역 추가]
     "📊 세그먼트": "📊 市场细分 (Segment)",
     "📅 Pacing": "📅 预订进度 (Pacing)",
     "🏢 거래처": "🏢 代理商/客户 (Account)",
@@ -95,8 +90,6 @@ LANG_DICT = {
     "🗓️ 요일": "🗓️ 星期 (Day of Week)",
     "🌐 국적": "🌐 国籍 (Nationality)",
     "🍳 조식": "🍳 早餐 (Breakfast)",
-    
-    # [거래처명 데이터 번역 추가]
     "네이버": "Naver",
     "아고다": "Agoda",
     "부킹닷컴": "Booking.com",
@@ -113,14 +106,10 @@ LANG_DICT = {
     "기업": "Corporate",
     "여행사": "Travel Agency",
     "OTA": "OTA",
-    
-    # [필터 관련 번역 추가 - 정밀 이식용]
     "🏢 거래처 필터": "🏢 代理商筛选 (Filter)",
     "전체 거래처": "全部代理商 (All Accounts)",
     "거래처 선택": "选择代理商 (Select)",
     "거래처 필터 적용 중": "当前筛选 (Filtering by)",
-    
-    # 기타 메시지
     "데이터 없음": "无数据",
     "기간 미선택": "未选择期间",
     "⚠️ 저장할 데이터가 없습니다.": "⚠️ 没有可保存的数据。",
@@ -231,7 +220,12 @@ def save_to_db(df, data_type='Reservation'):
                     else: new_r[clean_k] = v
                 sanitized_recs.append(new_r)
             
-            did = f"{d}_{data_type}"
+            # [핀셋 수정] OTB일 경우에만 타임스탬프를 붙여서 개별 파일로 저장 (덮어쓰기 방지)
+            if data_type == 'OTB':
+                did = f"{d}_{data_type}_{int(time.time()*1000)}"
+            else:
+                did = f"{d}_{data_type}"
+            
             db.collection(COLLECTION_NAME).document(did).set({
                 'data': sanitized_recs, 'uploaded_at': datetime.now(), 'snapshot_date': d, 'data_type': data_type
             })
@@ -253,6 +247,7 @@ def load_db():
             dd = d.to_dict()
             snap = dd.get('snapshot_date', '')
             dtype = dd.get('data_type', 'Reservation')
+            # OTB 데이터 타입 감지 강화
             if dtype == 'Reservation' and len(dd['data']) > 0 and 'OTB' in str(dd['data'][0].get('Segment', '')):
                 dtype = 'OTB'
             for r in dd['data']:
@@ -275,7 +270,7 @@ def delete_otb():
     return c
 
 # ==============================================================================
-# 4. 파일 처리 로직 (헤더 찾기 & 조식 완벽 수정)
+# 4. 파일 처리 로직
 # ==============================================================================
 
 def load_and_fix_header(file):
@@ -290,7 +285,6 @@ def load_and_fix_header(file):
     header_idx = -1
     for r in range(min(30, len(df_raw))):
         row_str = df_raw.iloc[r].astype(str).str.cat()
-        # 헤더를 찾는 조건
         if "예약번호" in row_str and ("객실료" in row_str or "총금액" in row_str):
             header_idx = r
             break
@@ -309,7 +303,6 @@ def process_res_file(file):
             st.error("🚨 Header Error")
             return pd.DataFrame()
 
-        # [수정] 1. 서비스코드 컬럼명 찾기 (한글 '서비스코드' -> 영어 'Service_Code' 매핑)
         for col in df.columns:
             if "서비스" in str(col) and "코드" in str(col):
                 df.rename(columns={col: 'Service_Code'}, inplace=True)
@@ -322,7 +315,6 @@ def process_res_file(file):
             '객실료': 'Room_Revenue', '총금액': 'Total_Revenue', '총매출': 'Total_Revenue',
             '거래처': 'Account', '세그먼트': 'Segment', '국적': 'Nat_Orig',
             '예약일자': 'Booking_Date', '예약일': 'Booking_Date',
-            # '서비스코드': 'Service_Code' # 위에서 동적으로 처리함
         }
         df = df.rename(columns=col_map)
         
@@ -372,7 +364,6 @@ def process_res_file(file):
         if 'Segment' in df.columns: df['Segment'] = df['Segment'].astype(str).str.strip()
         else: df['Segment'] = 'Unknown'
             
-        # [핵심] 조식 판별
         if 'Service_Code' in df.columns:
             df['Breakfast'] = df['Service_Code'].fillna('').astype(str).str.upper().apply(
                 lambda x: 'Included' if 'BF' in x else 'Room Only'
@@ -406,7 +397,6 @@ def process_cancel_file(file):
             '거래처': 'Account', '세그먼트': 'Segment', '국적': 'Nat_Orig',
             '예약일자': 'Booking_Date', '예약일': 'Booking_Date',
             '취소일자': 'Cancel_Date', '취소일': 'Cancel_Date',
-            # '서비스코드': 'Service_Code'
         }
         df = df.rename(columns=col_map)
         
@@ -463,40 +453,32 @@ def process_otb(file):
         if file.name.endswith('.csv'): df_raw = pd.read_csv(file, header=None, encoding='cp949')
         else: df_raw = pd.read_excel(file, header=None)
         
-        # 파일명에서 날짜 추출 (스냅샷 기준일)
         snap = datetime.now().strftime('%Y-%m-%d')
         match = re.search(r'(\d{8})', file.name)
         if match: snap = f"{match.group(1)[:4]}-{match.group(1)[4:6]}-{match.group(1)[6:]}"
         
         data_list = []
-        
-        # [복구 및 수정] 행 단위로 순회하며 월별 데이터 추출
-        # 첫 번째 열을 날짜(투숙월)로, 마지막 열을 매출로 가정하고 파싱 시도
         for i, row in df_raw.iterrows():
             try:
                 date_val = row[0]
-                # 날짜 형식 파싱 시도 (YYYY-MM-DD, YYYY-MM 등)
                 ts = pd.to_datetime(date_val, errors='coerce')
                 
                 if pd.notnull(ts):
-                    # 마지막 열을 매출 값으로 가정
                     rev_val = clean_num(row.iloc[-1])
-                    
                     if rev_val > 0:
                         data_list.append({
-                            'CheckIn': ts.strftime('%Y-%m-%d'), # 투숙월 기준
+                            'CheckIn': ts.strftime('%Y-%m-%d'),
                             'Room_Revenue': rev_val,
                             'Total_Revenue': rev_val,
                             'RN': 0, 
                             'Guest_Name': 'OTB', 
                             'Segment': 'OTB', 
-                            'Snapshot_Date': snap, # 이 파일이 업로드된 기준 날짜
+                            'Snapshot_Date': snap,
                             'Status': 'Booked'
                         })
             except: continue
             
         if not data_list:
-            # 리스트가 비어있다면 기존 방식(단일 합계)으로 시도 (안전장치)
             val = int(str(df_raw.dropna(how='all').dropna(axis=1, how='all').iloc[-1, -1]).replace(',', '').split('.')[0])
             return pd.DataFrame([{'CheckIn': snap, 'Room_Revenue': val, 'Total_Revenue': val, 'RN': 0, 'Guest_Name': 'OTB', 'Segment': 'OTB', 'Snapshot_Date': snap, 'Status': 'Booked'}])
             
@@ -504,7 +486,7 @@ def process_otb(file):
     except: return pd.DataFrame()
 
 # ==============================================================================
-# 5. UI 및 번역 적용 (T 함수 활용)
+# 5. UI 및 번역 적용
 # ==============================================================================
 
 def add_total_with_adr(df, group_col_name="구분"):
@@ -521,7 +503,6 @@ def show_styled(df):
     if df.empty: st.info(T("데이터 없음")); return
     df = df.reset_index(drop=True)
     cols = df.select_dtypes(include=[np.number]).columns
-    # [핵심] 숫자 포맷팅 (콤마 추가)
     st.dataframe(df.style.format({c: "{:,.0f}" for c in cols}).apply(lambda r: ['background-color: #fff9c4; font-weight: bold; border-top: 2px solid black']*len(r) if str(r[0])=="TOTAL" else ['']*len(r), axis=1), hide_index=True, use_container_width=True)
 
 def group_and_show(df, group_col):
@@ -531,7 +512,6 @@ def group_and_show(df, group_col):
     agg['ADR_Total'] = np.where(agg['RN']>0, agg['Total_Revenue']/agg['RN'], 0)
     final_df = add_total_with_adr(agg, group_col)
     
-    # [데이터 번역 적용] 회장님 모드일 때만, 그룹 컬럼의 값(예: 네이버, 아고다)을 번역
     if is_chairman_mode:
         final_df[group_col] = final_df[group_col].apply(lambda x: LANG_DICT.get(str(x), str(x)))
         
@@ -540,7 +520,7 @@ def group_and_show(df, group_col):
 
 def render_tab(df, k):
     if df.empty: st.info(T("데이터 없음")); return
-    # 탭 이름 번역 적용
+    
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         T("📊 세그먼트"), T("📅 Pacing"), T("🏢 거래처"), 
         T("⏳ 리드타임"), T("🛏️ 객실타입"), T("🗓️ 요일"), 
@@ -595,7 +575,6 @@ def render_tab(df, k):
             c2.plotly_chart(px.bar(n, x='Nat_Group', y='Room_Revenue', title=T("국적별 매출 실적")), use_container_width=True, key=f"{k}_n_b")
     
     with t8:
-        # [복구] 조식 상세 분석
         b_raw = df.groupby('Breakfast').agg({'RN': 'sum'}).reset_index()
         c1, c2 = st.columns(2)
         c1.plotly_chart(px.pie(b_raw, values='RN', names='Breakfast', title=T("조식 포함 여부 비중(RN)")), use_container_width=True, key=f"{k}_bf_pie")
@@ -634,7 +613,6 @@ try:
         st.divider()
         st.subheader(T("📌 예약/취소 조회 (기준 vs 비교)"))
         
-        # [핀셋 수정] KST(UTC+9) 기준 날짜 보정: 오늘(28일) 기준 어제(27일)를 계산
         now_kst = datetime.now() + timedelta(hours=9)
         yesterday = now_kst.date() - timedelta(days=1)
         
@@ -654,19 +632,16 @@ try:
         st.divider()
         st.subheader(T("🏢 거래처 필터"))
         all_accounts = ["전체 거래처"]
-        # DB에서 불러온 전체 데이터에서 거래처 목록 추출 (중복 제거)
         if not df_all.empty and 'Account' in df_all.columns:
             raw_accs = sorted(df_all['Account'].dropna().astype(str).unique().tolist())
             all_accounts.extend(raw_accs)
         
-        # 선택 박스 (중국어 모드라면 '전체 거래처'만 번역되고 나머지는 원문 유지)
-        # 실제 데이터 필터링을 위해 인덱스를 활용하거나 값을 매핑
         acc_idx = st.selectbox(
             T("거래처 선택"), 
             range(len(all_accounts)), 
-            format_func=lambda x: T(all_accounts[x]) # T 함수가 '전체 거래처'만 번역함
+            format_func=lambda x: T(all_accounts[x])
         )
-        selected_acc = all_accounts[acc_idx] # 실제 필터링에 쓸 값 (예: '네이버')
+        selected_acc = all_accounts[acc_idx]
 
         st.divider()
         sel_otb = st.selectbox(T("📈 OTB 조회"), otb_dates) if otb_dates else None
@@ -678,16 +653,15 @@ try:
         if f2 and st.button(T("취소 저장")):
             if save_to_db(process_cancel_file(f2), 'Cancellation'): st.rerun()
         f3 = st.file_uploader(T("OTB 파일"), type=['xlsx','csv'], accept_multiple_files=True)
+        # [핀셋 수정] OTB 저장 시 개별 저장으로 복구 (타임스탬프 ID 생성으로 덮어쓰기 방지)
         if f3 and st.button(T("OTB 저장")):
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
 
-    # 데이터 필터링 (거래처 필터 로직 추가됨)
+    # 데이터 필터링
     if sel_start and sel_end and not df_all.empty:
-        # 1. 기본 날짜 필터
         mask_bk = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= sel_start) & (df_all['Snapshot_Date'] <= sel_end)
         
-        # 2. [핵심] 거래처 필터 적용 (선택된 경우에만)
         if selected_acc != "전체 거래처":
             mask_bk = mask_bk & (df_all['Account'] == selected_acc)
             
@@ -696,13 +670,11 @@ try:
         
         mask_cn = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= sel_start) & (df_all['Snapshot_Date'] <= sel_end)
         
-        # 3. [핵심] 취소 데이터에도 거래처 필터 적용
         if selected_acc != "전체 거래처":
             mask_cn = mask_cn & (df_all['Account'] == selected_acc)
             
         df_cn = df_all[mask_cn].copy()
         if df_cn.empty and not df_bk.empty: 
-            # 이중 RC 로직에도 필터 적용 고려 (bk 데이터에서 가져오므로 이미 적용됨)
             df_cn = df_all[mask_bk & (df_all['Status']=='RC')].copy()
         
         df_tot = pd.concat([df_bk, df_cn])
@@ -712,7 +684,6 @@ try:
             mask_bk_c = (df_all['Data_Type']=='Reservation') & (df_all['Snapshot_Date'] >= c_start) & (df_all['Snapshot_Date'] <= c_end)
             mask_cn_c = (df_all['Data_Type']=='Cancellation') & (df_all['Snapshot_Date'] >= c_start) & (df_all['Snapshot_Date'] <= c_end)
             
-            # 4. [핵심] 비교 기간 데이터에도 거래처 필터 적용
             if selected_acc != "전체 거래처":
                 mask_bk_c = mask_bk_c & (df_all['Account'] == selected_acc)
                 mask_cn_c = mask_cn_c & (df_all['Account'] == selected_acc)
@@ -734,7 +705,6 @@ try:
         disp = f"{sel_start}~{sel_end}" if sel_start else T("기간 미선택")
         st.header(f"{T('👑 GM 요약')} ({disp})")
         
-        # [UI 추가] 현재 필터링 상태 표시
         if selected_acc != "전체 거래처":
             st.caption(f"🎯 {T('거래처 필터 적용 중')}: {T(selected_acc)}")
             
