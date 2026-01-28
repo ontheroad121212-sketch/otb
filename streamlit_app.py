@@ -74,7 +74,7 @@ LANG_DICT = {
     "🏨 Daily Pace Report": "🏨 每日进度报告 (Daily Pace Report)",
     "엑셀 업로드": "上传 Excel (Upload)",
     "월": "月",
-    "월 데이터를 업로드하거나 조회하세요.": "月 请上传或查询数据。",
+    "월 데이터를 업로드하거나 조회하세요.": "月 请上传 or 查询数据。",
     
     # [핵심] 대시보드 텍스트
     "Performance Summary": "绩效摘要 (Performance Summary)",
@@ -303,22 +303,22 @@ if is_chairman_mode:
 # 이하 기존 사이드바 로직 유지
 st.sidebar.header(T("⚙️ Settings"))
 
-# [핀셋 수정] 한국 시간(KST) 기준 어제 날짜 계산 (서버 시간 오차 보정)
+# [핀셋 수정] 한국 시간(KST) 기준 오늘 날짜 계산 (서버 시간 오차 보정)
 now_kst = datetime.now() + timedelta(hours=9)
-yesterday = now_kst.date() - timedelta(days=1)
+today_kst = now_kst.date()
 
-# [핀셋 수정] 기준 일자: 기본값 어제, 최대 선택 가능 어제
+# [핀셋 수정] 기준 일자: 오늘까지 선택 가능, 기본값 오늘
 report_date = st.sidebar.date_input(
     T("기준 일자"), 
-    value=yesterday, 
-    max_value=yesterday
+    value=today_kst, 
+    max_value=today_kst
 )
 
-# [핀셋 수정] 비교 일자: 기본값 어제-1일, 최대 선택 가능 어제
+# [핀셋 수정] 비교 일자: 오늘까지 선택 가능
 compare_date = st.sidebar.date_input(
     T("비교 일자"), 
-    value=report_date - timedelta(days=1),
-    max_value=yesterday
+    value=today_kst - timedelta(days=1),
+    max_value=today_kst
 )
 
 admin_key = st.sidebar.text_input(T("Admin Key"), type="password")
@@ -562,10 +562,10 @@ for i, tab in enumerate(tabs):
         # [핀셋 수정] 저장 버튼 로직: 업로드 파일이 있는 경우에만 날짜 선택 및 저장 버튼 노출
         if uploaded_files:
             st.divider()
-            # 저장할 날짜 선택 (기본값은 사이드바 기준일자)
+            # [핀셋 수정] 저장 기준 날짜 기본값도 한국 시간 오늘(28일)로 자동 뜨게 조정
             save_date = st.date_input(
                 T("저장할 기준 일자 선택"), 
-                value=report_date, 
+                value=today_kst, 
                 key=f"save_date_{cur_m}"
             )
             
