@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import io
 import numpy as np
 import textwrap
-import secret_forecasting  # 포캐스팅 모듈 (기존 유지)
+import secret_forecasting  # 포캐스팅 모듈 임포트
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -14,11 +14,14 @@ import plotly.graph_objects as go
 # [1] 페이지 기본 설정 및 다국어(중국어) 세션 고정 로직
 # ==============================================================================
 
+# [1] 설정
 st.set_page_config(layout="wide", page_title="ARI Management")
 
+# [2] 에러 방지용 언어 로직
 if 'lang' not in st.session_state:
     st.session_state['lang'] = 'ko'
 
+# URL 파라미터 강제 추출
 try:
     u_params = st.query_params
     if u_params.get("lang") == "zh":
@@ -28,13 +31,16 @@ try:
 except Exception:
     pass
 
+# 최종 결정
 is_chairman_mode = (st.session_state.get('lang') == 'zh')
 
+# [강제 출력 테스트]
 if is_chairman_mode:
     st.error("현재 모드: 중국어 (ZH)")
 else:
     st.info("현재 모드: 한국어 (KO)")
 
+# [번역 사전]
 LANG_DICT = {
     "⚙️ Settings": "⚙️ 设置 (Settings)",
     "기준 일자": "基准日期 (Report Date)",
@@ -48,7 +54,7 @@ LANG_DICT = {
     "📊 4만건 히스토리 전체 분석 시작": "📊 开始全量历史数据分析",
     "데이터 고속 도로 개통 중...": "正在建立数据通道...",
     "파이어베이스 서버에 접속 중...": "正在连接 Firebase 服务器...",
-    "'hotel_bookings' 데이터를 수색합니다...": "正在搜索 'hotel_bookings' 데이터...",
+    "'hotel_bookings' 데이터를 수색합니다...": "正在搜索 'hotel_bookings' 数据...",
     "데이터를 업로드하거나 조회하세요.": "请上传或查询数据。",
     "필드를 찾지 못했습니다.": "未找到字段。",
     "실제 데이터 필드명:": "实际数据字段名:",
@@ -75,7 +81,7 @@ LANG_DICT = {
     "RMS": "房晚 (RMS)",
     "ADR": "房价 (ADR)",
     "REV": "收入 (REV)",
-    "FIT": "散객 (FIT)",
+    "FIT": "散客 (FIT)",
     "GROUP": "团队 (GROUP)",
     "TOTAL": "总计 (TOTAL)",
     "Date": "日期",
@@ -108,6 +114,7 @@ def T(text):
                 return str(text).replace(k, v)
     return text
 
+# CSS 스타일링
 st.markdown(textwrap.dedent("""
 <style>
     .block-container { padding-top: 0.5rem; padding-bottom: 2rem; }
@@ -189,50 +196,51 @@ def load_all_historical_data():
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
     return dow_indices, repeat_rate
 
-# [강력한 숫자 변환 함수]
 def clean_num(val):
     try:
         # 값이 없으면 0
         if pd.isna(val) or str(val).strip() == '': return 0
         # 문자열로 변환 후 콤마, 원화, 퍼센트, 공백 제거
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').replace('%', '').strip()
+        # 소수점 처리를 위해 float 변환
         return float(s)
     except: 
         return 0
 
 def find_header_and_process(file):
     """
-    [지배인님 요청 반영]
-    - 파일 형식 자동 감지 (Excel or CSV)
-    - 무조건 5행(Index 4)부터 데이터 시작
-    - C열, F열, H열, K열 좌표 고정
+    [최종 해결책] 
+    1. 파일 형식을 엑셀/CSV 가리지 않고 강제로 읽기
+    2. 5번째 줄(Index 4)부터 무조건 데이터로 인식
+    3. C열, F열, H열, K열 좌표 강제 고정
     """
     try:
         file.seek(0)
         df_raw = None
         
-        # 1. 엑셀로 시도
+        # 1차 시도: 엑셀로 읽기
         try:
             df_raw = pd.read_excel(file, header=None)
         except:
-            # 2. CSV로 시도 (utf-8)
+            # 2차 시도: CSV로 읽기 (utf-8)
             try:
                 file.seek(0)
                 df_raw = pd.read_csv(file, header=None)
             except:
-                # 3. CSV로 시도 (cp949 - 한글)
+                # 3차 시도: CSV로 읽기 (cp949 - 한글 인코딩)
                 file.seek(0)
                 df_raw = pd.read_csv(file, header=None, encoding='cp949')
         
         if df_raw is None or len(df_raw) < 5:
+            # 데이터가 너무 적으면 실패
             return None, None, None
 
-        # [핵심] 5행부터 데이터 시작 (Index 4)
+        # [핵심] 5행(Index 4)부터 데이터 시작
         df_data = df_raw.iloc[4:].copy()
         
-        # 첫 번째 컬럼(A열, Index 0)이 날짜
+        # 첫 번째 컬럼(A열, Index 0)이 날짜라고 가정
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
-        df_data = df_data.dropna(subset=['Date']) # 날짜 없는 합계 행 등 제거
+        df_data = df_data.dropna(subset=['Date']) # 날짜가 없는 행은 제거
         
         if df_data.empty:
             return None, None, None
@@ -271,7 +279,7 @@ def find_header_and_process(file):
         df_clean['ADR'] = df_data.iloc[:, 16].apply(clean_num)
         df_clean['RevPAR'] = df_data.iloc[:, 17].apply(clean_num)
 
-        # SOB 데이터 요약
+        # SOB 데이터 요약 (상단 KPI용)
         sob_data = {
             'FIT_RMS': int(df_clean['FIT_RMS'].sum()),
             'FIT_REV': int(df_clean['FIT_REV'].sum()),
@@ -280,12 +288,13 @@ def find_header_and_process(file):
             'TOTAL_OCC': df_clean['OCC'].mean() if not df_clean['OCC'].empty else 0
         }
         
-        # 월 정보 (첫 데이터 기준)
+        # 월 정보 (첫 번째 데이터 기준)
         month_val = df_data['Date'].iloc[0].month
         
         return df_clean, month_val, sob_data
         
     except Exception:
+        # 어떤 에러가 나도 일단 None 반환하여 프로그램 다운 방지
         return None, None, None
 
 def get_full_data_by_date(date_str, month_num):
@@ -293,6 +302,7 @@ def get_full_data_by_date(date_str, month_num):
         doc = db.collection('daily_snapshots').document(date_str).collection('months').document(str(month_num)).get()
         if doc.exists:
             d = doc.to_dict()
+            # JSON 읽을 때 에러 방지
             return pd.read_json(io.StringIO(d['json_data']), orient='records'), d.get('sob_data')
     except: pass
     return None, None
@@ -369,7 +379,7 @@ if uploaded_files:
         if m: month_files_map[m].append({'name': f.name, 'data': df, 'sob': sob})
 
 # ==============================================================================
-# [4] 탭별 데이터 렌더링
+# [4] 탭별 데이터 렌더링 (T 함수 적용 핵심 구간)
 # ==============================================================================
 for i, tab in enumerate(tabs):
     cur_m = i + 1
@@ -425,27 +435,37 @@ for i, tab in enumerate(tabs):
             """, unsafe_allow_html=True)
 
             merged = df_curr.copy()
-            if df_prev is not None and not df_prev.empty:
-                cols_to_merge = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']
-                existing_cols = [c for c in cols_to_merge if c in df_prev.columns]
-                p_sub = df_prev[existing_cols].copy()
+            if df_prev is not None:
+                # 병합할 때 필요한 컬럼만 선택
+                cols = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']
+                # 실제 존재하는 컬럼만 필터링
+                avail_cols = [c for c in cols if c in df_prev.columns]
+                
+                # 없는 컬럼은 0으로 생성 후 병합
+                p_sub = df_prev[avail_cols].copy()
+                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
+                    if c not in p_sub.columns: p_sub[c] = 0
+                
                 merged = pd.merge(merged, p_sub, on='DateStr', how='left', suffixes=('', '_prev'))
             else:
-                cols = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']
-                for c in cols: merged[f'{c}_prev'] = 0
+                # 비교 데이터가 없으면 모두 0으로 처리
+                for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']: 
+                    merged[f'{c}_prev'] = 0
 
-            # 결측치 처리
-            all_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
-            for c in all_cols:
+            # 픽업 데이터 계산 (결측치 0 처리 필수)
+            all_metrics = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
+            for c in all_metrics:
                 if c not in merged.columns: merged[c] = 0
                 if f'{c}_prev' not in merged.columns: merged[f'{c}_prev'] = 0
+                
                 merged[c] = merged[c].fillna(0)
                 merged[f'{c}_prev'] = merged[f'{c}_prev'].fillna(0)
+                
                 merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
 
             sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
-            valid_sum_items = [x for x in sum_items if x in merged.columns]
-            totals = merged[valid_sum_items].sum()
+            valid_sums = [x for x in sum_items if x in merged.columns]
+            totals = merged[valid_sums].sum()
             
             def get_total_rates(prefix_rms, prefix_rev, is_curr=True):
                 s_rms = totals.get(prefix_rms, 0)
@@ -510,14 +530,23 @@ for i, tab in enumerate(tabs):
                 st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
             with sub_t2:
-                vis_df = merged.copy()
+                vis_df = merged.copy() # merged는 Total 행 제외된 순수 데이터임 (merged_with_total 전)
+                
+                # 안전장치: 컬럼 없으면 생성
+                for c in ['FIT_REV', 'GRP_REV', 'FIT_RMS', 'GRP_RMS']:
+                    if c not in vis_df.columns: vis_df[c] = 0
+                
                 if not vis_df.empty:
-                    # 1. 일자별 매출 구성 (현재 실적 기준)
+                    # 1. 매출 구성 (현재 실적 기준) - 누적 막대
                     st.subheader(T("일자별 매출 구성 (개인 vs 단체)"))
+                    
+                    # 데이터 Melt
                     m_rev = vis_df.melt(id_vars=['DateStr', 'FIT_RMS', 'GRP_RMS'], 
                                         value_vars=['FIT_REV', 'GRP_REV'],
                                         var_name='Segment', value_name='Revenue')
+                    
                     m_rev['Segment'] = m_rev['Segment'].map({'FIT_REV': T('FIT'), 'GRP_REV': T('GROUP')})
+                    # 툴팁용 룸나잇 매핑
                     m_rev['RoomNights'] = np.where(m_rev['Segment'] == T('FIT'), m_rev['FIT_RMS'], m_rev['GRP_RMS'])
                     
                     fig_bar = px.bar(m_rev, x='DateStr', y='Revenue', color='Segment', 
@@ -528,17 +557,19 @@ for i, tab in enumerate(tabs):
                     
                     st.divider()
                     
-                    # 2. 요일별 픽업 히트맵
+                    # 2. 요일별 픽업 히트맵 (Pickup RMS 기준)
                     st.subheader(T("요일별 픽업 히트맵"))
                     vis_df['Date'] = pd.to_datetime(vis_df['DateStr'])
                     vis_df['DayNum'] = vis_df['Date'].dt.day
                     vis_df['MonthWeek'] = (vis_df['DayNum'] - 1) // 7 + 1
+                    
                     days_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
                     vis_df['WeekDay'] = pd.Categorical(vis_df['WeekDay'], categories=days_order, ordered=True)
                     
                     heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
                     heatmap_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='DayNum', aggfunc='first').fillna(0).astype(int)
                     
+                    # 텍스트 생성 (안전한 이중 반복문)
                     final_text = []
                     for r_idx in range(len(heatmap_z)):
                         row_cells = []
@@ -553,6 +584,9 @@ for i, tab in enumerate(tabs):
                             except: row_cells.append("")
                         final_text.append(row_cells)
 
+                    # Plotly Heatmap
+                    heatmap_z.index = heatmap_z.index.astype(str)
+                    
                     fig_hm = go.Figure(data=go.Heatmap(
                         z=heatmap_z.values, x=days_order, y=heatmap_z.index.astype(str),
                         text=final_text, texttemplate="%{text}", textfont={"size": 11},
