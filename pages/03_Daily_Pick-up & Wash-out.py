@@ -590,8 +590,8 @@ def render_tab(df, k):
 
     # [요청 반영] 탭 하단에 검증 데이터 (Raw Data) 표시
     st.markdown("---")
-    st.subheader(T("📋 데이터 검증 (Raw Data)"))
-    st.dataframe(df, use_container_width=True)
+    with st.expander(T("📋 데이터 검증 (Raw Data)")):
+        st.dataframe(df, use_container_width=True)
 
 # ==============================================================================
 # MAIN
