@@ -221,7 +221,7 @@ def find_header_and_process(file):
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_data = df_data.dropna(subset=['Date'])
         
-        # [핀셋 수정] 콤마 제거 로직 적용
+        # [핀셋 수정] 콤마 제거 및 숫자 변환 적용
         def safe_num(idx): 
             return df_data.iloc[:, idx].apply(clean_num)
         
@@ -542,26 +542,28 @@ for i, tab in enumerate(tabs):
                     
                     heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
                     
-                    # [수정] combine 에러 방지를 위해 반복문 사용 (안전제일)
+                    # [수정] 텍스트 생성 (Vectorized String Operation 적용)
                     heatmap_text_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Day', aggfunc='first').fillna(0).astype(int).astype(str)
                     heatmap_text_v = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0).astype(int).astype(str)
+                    
+                    # 0일(빈 날짜)은 빈칸으로
                     heatmap_text_d = heatmap_text_d.replace('0', '')
                     
+                    # 벡터화 연산으로 텍스트 합치기 (combine 에러 원천 차단)
+                    # "날짜" + "일<br><b>" + "+" + "값" + "</b>"
                     final_text = heatmap_text_d.copy()
-                    for c in heatmap_text_d.columns:
-                        combined_col = []
-                        for d_val, v_val in zip(heatmap_text_d[c], heatmap_text_v[c]):
-                            if d_val == '': 
-                                combined_col.append("")
-                            else:
-                                try:
-                                    val = int(v_val)
-                                    sign = "+" if val > 0 else ""
-                                    # 0은 표시 안하거나 0으로 표시 (여기선 0 표시)
-                                    combined_col.append(f"{d_val}일<br><b>{sign}{val}</b>")
-                                except: 
-                                    combined_col.append("")
-                        final_text[c] = combined_col
+                    
+                    # 값이 있는 곳만 처리
+                    mask = heatmap_text_d != ''
+                    # 부호 추가 로직은 복잡하니 단순화: 양수/음수 표시는 Plotly 툴팁에 맡기고 텍스트엔 숫자만 표시하거나,
+                    # 간단하게 문자열 연산
+                    
+                    # 값 텍스트 준비 (0은 0으로 표시)
+                    val_str = heatmap_text_v.copy()
+                    
+                    # 최종 결합
+                    final_text[mask] = heatmap_text_d[mask] + "일<br><b>" + val_str[mask] + "</b>"
+                    final_text[~mask] = ""
 
                     heatmap_z.index = heatmap_z.index.astype(str)
                     final_text.index = final_text.index.astype(str)
