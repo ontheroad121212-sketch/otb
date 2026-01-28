@@ -100,7 +100,7 @@ LANG_DICT = {
     "📊 리포트": "📊 报表 (Report)",
     "📈 시각화": "📈 可视化 (Visual)",
     "일자별 매출 구성 (개인 vs 단체)": "每日营收构成 (FIT vs Group Revenue)",
-    "요일별 픽업 히트맵": "星期增量热力图 (Day Heatmap)",
+    "요일별 픽업 히트맵": "星期增量热力图 (Day Pickup Heatmap)",
     "시각화할 데이터가 없습니다.": "没有可视化数据 (No Data)",
     "요일별": "星期别"
 }
@@ -196,11 +196,11 @@ def load_all_historical_data():
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
     return dow_indices, repeat_rate
 
-# [핀셋 수정] 콤마(,) 있는 숫자도 처리하는 강력한 함수
 def clean_num(val):
     try:
         if pd.isna(val) or str(val).strip() == '': return 0
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').strip()
+        s = s.replace('%', '')
         return float(s)
     except: return 0
 
@@ -209,7 +209,6 @@ def find_header_and_process(file):
         file.seek(0)
         df_raw = pd.read_excel(file, header=None)
         
-        # [핵심] 헤더 행 찾기 (개인, 단체, 합계 키워드)
         main_header_row_idx = None
         for i, row in df_raw.iterrows():
             row_str = row.astype(str).values
@@ -217,82 +216,32 @@ def find_header_and_process(file):
                 main_header_row_idx = i
                 break
         
-        if main_header_row_idx is None: 
-            return None, None, None
+        if main_header_row_idx is None: return None, None, None
         
-        # 헤더와 서브헤더
-        headers = df_raw.iloc[main_header_row_idx].astype(str).values
-        sub_headers = df_raw.iloc[main_header_row_idx + 1].astype(str).values
-        
-        # 데이터 영역 (헤더+2행부터)
         df_data = df_raw.iloc[main_header_row_idx + 2:].copy()
-        # 첫 번째 컬럼이 날짜라고 가정하고 처리
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
         df_data = df_data.dropna(subset=['Date'])
         
-        # [핵심] 컬럼 위치 찾기 (Index lookup)
-        try: fit_start = np.where(headers == '개인')[0][0]
-        except: fit_start = 2 # 기본값
-        
-        try: grp_start = np.where(headers == '단체')[0][0]
-        except: grp_start = 7 # 기본값
-        
-        try: total_start = np.where(headers == '합계')[0][0]
-        except: total_start = 12 # 기본값
-        
-        # 범위 내에서 '객실수'와 '매출' 찾기 (offset 계산)
-        def find_sub_col(start_idx, end_idx, keyword):
-            for i in range(start_idx, end_idx):
-                if keyword in str(sub_headers[i]):
-                    return i
-            return start_idx # 못 찾으면 시작점 반환 (fallback)
-
-        fit_rms_idx = find_sub_col(fit_start, grp_start, '객실수')
-        fit_rev_idx = find_sub_col(fit_start, grp_start, '매출')
-        
-        grp_rms_idx = find_sub_col(grp_start, total_start, '객실수')
-        grp_rev_idx = find_sub_col(grp_start, total_start, '매출')
-        
-        total_rms_idx = find_sub_col(total_start, len(sub_headers), '객실수')
-        total_rev_idx = find_sub_col(total_start, len(sub_headers), '매출')
-        
-        # 데이터 추출 및 변환
-        def get_series(idx):
+        def safe_col(idx):
             return df_data.iloc[:, idx].apply(clean_num)
 
         df_clean = pd.DataFrame()
         df_clean['Date'] = df_data['Date']
         df_clean['DateStr'] = df_data['Date'].dt.strftime('%Y-%m-%d')
-        # 요일은 날짜 바로 다음 컬럼(1)
         df_clean['WeekDay'] = df_data.iloc[:, 1].astype(str)
         
-        df_clean['FIT_RMS'] = get_series(fit_rms_idx)
-        df_clean['FIT_REV'] = get_series(fit_rev_idx)
-        df_clean['GRP_RMS'] = get_series(grp_rms_idx)
-        df_clean['GRP_REV'] = get_series(grp_rev_idx)
-        df_clean['RMS'] = get_series(total_rms_idx)
-        df_clean['REV'] = get_series(total_rev_idx)
+        df_clean['FIT_RMS'] = safe_col(2)
+        df_clean['FIT_REV'] = safe_col(5)
+        df_clean['GRP_RMS'] = safe_col(7)
+        df_clean['GRP_REV'] = safe_col(10)
+        df_clean['RMS'] = safe_col(14)
+        df_clean['REV'] = safe_col(18)
         
-        # 내부이용, 무료 등은 합계(total_start) 바로 앞쪽이라고 가정
-        try:
-            hu_idx = find_sub_col(grp_start, total_start + 5, '내부이용') 
-            comp_idx = find_sub_col(grp_start, total_start + 5, '무료')
-            df_clean['HU'] = get_series(hu_idx) if hu_idx != grp_start else 0
-            df_clean['Comp'] = get_series(comp_idx) if comp_idx != grp_start else 0
-        except:
-            df_clean['HU'] = 0
-            df_clean['Comp'] = 0
-
-        # 계산 파생 컬럼
-        df_clean['OCC'] = 0
-        # ADR 계산 (0 나누기 방지)
-        df_clean['ADR'] = df_clean.apply(lambda r: r['REV']/r['RMS'] if r['RMS'] > 0 else 0, axis=1)
-        df_clean['RevPAR'] = 0 
-
-        # 점유율 컬럼이 있다면 가져오기
-        occ_idx = find_sub_col(total_start, len(sub_headers), '점유율')
-        if occ_idx != total_start:
-            df_clean['OCC'] = get_series(occ_idx)
+        df_clean['HU'] = safe_col(12)
+        df_clean['Comp'] = safe_col(13)
+        df_clean['OCC'] = safe_col(15)
+        df_clean['ADR'] = safe_col(16)
+        df_clean['RevPAR'] = safe_col(17)
 
         sob_data = {
             'FIT_RMS': int(df_clean['FIT_RMS'].sum()),
@@ -354,7 +303,6 @@ compare_date = st.sidebar.date_input(
 )
 
 admin_key = st.sidebar.text_input(T("Admin Key"), type="password")
-
 if admin_key == "master136":
     st.session_state["authenticated"] = True
 
@@ -483,29 +431,36 @@ for i, tab in enumerate(tabs):
             """, unsafe_allow_html=True)
 
             merged = df_curr.copy()
-            if df_prev is not None:
-                df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
-                if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS']
-                else: df_prev_sub['FIT_RMS'] = 0
-                
-                if 'GRP_RMS' in df_prev.columns: df_prev_sub['GRP_RMS'] = df_prev['GRP_RMS']
-                else: df_prev_sub['GRP_RMS'] = 0
-                
-                merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
-            else:
-                for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'GRP_RMS']: 
-                    if c in merged.columns: merged[f'{c}_prev'] = merged[c]
-
-            # [핀셋 수정] NaN 처리 및 컬럼 생성
-            for col in ['FIT_RMS', 'FIT_RMS_prev', 'GRP_RMS', 'GRP_RMS_prev']:
-                if col not in merged.columns: merged[col] = 0
-                merged[col] = merged[col].fillna(0)
-
-            for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
-                merged[f'Pick_{c}'] = merged[c].fillna(0) - merged.get(f'{c}_prev', 0).fillna(0)
             
-            merged['Pick_FIT_RMS'] = merged['FIT_RMS'] - merged['FIT_RMS_prev']
-            merged['Pick_GRP_RMS'] = merged['GRP_RMS'] - merged['GRP_RMS_prev']
+            # [핵심 수정] DB에서 가져온 데이터(df_prev)에 FIT/GRP 컬럼이 없을 경우 대비 (Self-Healing)
+            if df_prev is not None:
+                needed_cols = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
+                # FIT/GRP 컬럼이 있으면 가져오고, 없으면 0으로 생성
+                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
+                    if c in df_prev.columns: needed_cols.append(c)
+                
+                p_sub = df_prev[needed_cols].copy()
+                
+                # 누락된 컬럼 0으로 채우기 (DB 데이터 무결성 보장)
+                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
+                    if c not in p_sub.columns: p_sub[c] = 0
+                
+                merged = pd.merge(merged, p_sub, on='DateStr', how='left', suffixes=('', '_prev'))
+            else:
+                for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
+                    merged[f'{c}_prev'] = merged[c]
+                # FIT/GRP prev도 0으로 초기화
+                for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
+                    merged[f'{c}_prev'] = 0
+
+            # 모든 수치 컬럼 결측치 제거 및 안전한 계산
+            num_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
+            for c in num_cols:
+                if c not in merged.columns: merged[c] = 0
+                if f'{c}_prev' not in merged.columns: merged[f'{c}_prev'] = 0
+                merged[c] = merged[c].fillna(0)
+                merged[f'{c}_prev'] = merged[f'{c}_prev'].fillna(0)
+                merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
 
             sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
             totals = merged[sum_items].sum()
@@ -576,29 +531,31 @@ for i, tab in enumerate(tabs):
                 st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
             with sub_t2:
-                vis_df = merged.copy() # Total 행 제외는 앞에서 처리됨 (merged는 순수 데이터)
+                vis_df = merged.copy() # merged는 Total 행 제외된 순수 데이터임 (merged_with_total 전)
+                
+                # [안전장치] 시각화용 데이터에 필수 컬럼이 없으면 0으로 채움
+                for c in ['FIT_REV', 'GRP_REV', 'FIT_RMS', 'GRP_RMS']:
+                    if c not in vis_df.columns: vis_df[c] = 0
+                
                 if not vis_df.empty:
+                    # 1. 매출 구성 (현재 실적 기준)
                     st.subheader(T("일자별 매출 구성 (개인 vs 단체)"))
-                    
-                    # 데이터 재가공 (Long-form)
                     m_rev = vis_df.melt(id_vars=['DateStr', 'FIT_RMS', 'GRP_RMS'], 
                                         value_vars=['FIT_REV', 'GRP_REV'],
                                         var_name='Segment', value_name='Revenue')
                     
                     m_rev['Segment'] = m_rev['Segment'].map({'FIT_REV': T('FIT'), 'GRP_REV': T('GROUP')})
-                    # 룸나잇 정보 매칭 (툴팁용)
                     m_rev['RoomNights'] = np.where(m_rev['Segment'] == T('FIT'), m_rev['FIT_RMS'], m_rev['GRP_RMS'])
                     
                     fig_bar = px.bar(m_rev, x='DateStr', y='Revenue', color='Segment', 
                                      hover_data={'DateStr': False, 'Revenue': ':,.0f', 'RoomNights': ':,.0f'},
                                      color_discrete_map={T('FIT'): '#3b82f6', T('GROUP'): '#ef4444'})
-                    
                     fig_bar.update_layout(xaxis_title="", yaxis_title=T("REV"), legend_title="", height=450)
                     st.plotly_chart(fig_bar, use_container_width=True)
                     
                     st.divider()
                     
-                    # 2. 요일별 픽업 히트맵 (기존 로직 유지)
+                    # 2. 요일별 픽업 히트맵 (Pickup 기준)
                     st.subheader(T("요일별 픽업 히트맵"))
                     vis_df['Date'] = pd.to_datetime(vis_df['DateStr'])
                     vis_df['DayNum'] = vis_df['Date'].dt.day
@@ -610,7 +567,6 @@ for i, tab in enumerate(tabs):
                     heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
                     heatmap_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='DayNum', aggfunc='first').fillna(0).astype(int)
                     
-                    # 텍스트 행렬 생성 (안전한 반복문 방식)
                     final_text = []
                     for r_idx in range(len(heatmap_z)):
                         row_cells = []
@@ -622,7 +578,7 @@ for i, tab in enumerate(tabs):
                                     row_cells.append("")
                                 else:
                                     sign = "+" if v_val > 0 else ""
-                                    # 0도 표시 (증감 없음을 의미)
+                                    # 0도 표시 (변동 없음)
                                     row_cells.append(f"{d_val}일<br><b>{sign}{v_val}</b>")
                             except:
                                 row_cells.append("")
@@ -639,7 +595,6 @@ for i, tab in enumerate(tabs):
                         reversescale=True,
                         xgap=2, ygap=2
                     ))
-                    
                     fig_hm.update_layout(
                         yaxis=dict(title='Week', autorange="reversed", showgrid=False),
                         xaxis=dict(side="top", showgrid=False),
