@@ -54,7 +54,7 @@ LANG_DICT = {
     "📊 4만건 히스토리 전체 분석 시작": "📊 开始全量历史数据分析",
     "데이터 고속 도로 개통 중...": "正在建立数据通道...",
     "파이어베이스 서버에 접속 중...": "正在连接 Firebase 服务器...",
-    "'hotel_bookings' 데이터를 수색합니다...": "正在搜索 'hotel_bookings' 数据...",
+    "'hotel_bookings' 데이터를 수색합니다...": "正在搜索 'hotel_bookings' 데이터...",
     "데이터를 업로드하거나 조회하세요.": "请上传或查询数据。",
     "필드를 찾지 못했습니다.": "未找到字段。",
     "실제 데이터 필드명:": "实际数据字段名:",
@@ -97,9 +97,9 @@ LANG_DICT = {
     "총": "总计",
     "건 수신 완료! 지표 계산 시작...": "条接收完成！开始计算指标...",
     "저장할 기준 일자 선택": "选择保存日期 (Select Save Date)",
-    "📊 리포트": "📊 报表 (Report)",
+    "📊 리포트": "📊 报표 (Report)",
     "📈 시각화": "📈 可视化 (Visual)",
-    "일자별 매출 구성 (개인 vs 단체)": "每日营收构成 (FIT vs Group Revenue)",
+    "일자별 실적 구성 (개인 vs 단체)": "每日业绩构成 (FIT vs Group Performance)",
     "요일별 픽업 히트맵": "星期增量热力图 (Day Pickup Heatmap)",
     "시각화할 데이터가 없습니다.": "没有可视化数据 (No Data)",
     "요일별": "星期别"
@@ -114,7 +114,6 @@ def T(text):
                 return str(text).replace(k, v)
     return text
 
-# CSS 스타일링
 st.markdown(textwrap.dedent("""
 <style>
     .block-container { padding-top: 0.5rem; padding-bottom: 2rem; }
