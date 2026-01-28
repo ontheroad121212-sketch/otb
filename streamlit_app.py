@@ -99,7 +99,7 @@ LANG_DICT = {
     "저장할 기준 일자 선택": "选择保存日期 (Select Save Date)",
     "📊 리포트": "📊 报表 (Report)",
     "📈 시각화": "📈 可视化 (Visual)",
-    "일자별 픽업 현황 (개인 vs 단체)": "每日增量 (FIT vs Group)",
+    "일자별 매출 구성 (개인 vs 단체)": "每日营收构成 (FIT vs Group Revenue)",
     "요일별 픽업 히트맵": "星期增量热力图 (Day Heatmap)",
     "시각화할 데이터가 없습니다.": "没有可视化数据 (No Data)",
     "요일별": "星期别"
@@ -196,14 +196,11 @@ def load_all_historical_data():
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
     return dow_indices, repeat_rate
 
-# [핀셋 수정] 콤마(,) 및 공백 제거 숫자 변환 함수 (초강력 버전)
+# [핀셋 수정] 콤마(,) 있는 숫자도 처리하는 강력한 함수
 def clean_num(val):
     try:
         if pd.isna(val) or str(val).strip() == '': return 0
-        # 콤마, 원화기호, 공백 모두 제거
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').strip()
-        # 퍼센트 제거
-        s = s.replace('%', '')
         return float(s)
     except: return 0
 
@@ -234,15 +231,12 @@ def find_header_and_process(file):
         df_data = df_data.dropna(subset=['Date'])
         
         # [핵심] 컬럼 위치 찾기 (Index lookup)
-        # 1. '개인' 시작 위치 찾기
         try: fit_start = np.where(headers == '개인')[0][0]
         except: fit_start = 2 # 기본값
         
-        # 2. '단체' 시작 위치 찾기
         try: grp_start = np.where(headers == '단체')[0][0]
         except: grp_start = 7 # 기본값
         
-        # 3. '합계' 시작 위치 찾기
         try: total_start = np.where(headers == '합계')[0][0]
         except: total_start = 12 # 기본값
         
@@ -280,10 +274,8 @@ def find_header_and_process(file):
         df_clean['REV'] = get_series(total_rev_idx)
         
         # 내부이용, 무료 등은 합계(total_start) 바로 앞쪽이라고 가정
-        # 예: 합계가 12라면 10, 11일 가능성 높음.
-        # 혹은 서브헤더 검색
         try:
-            hu_idx = find_sub_col(grp_start, total_start + 5, '내부이용') # 범위 넓게 잡음
+            hu_idx = find_sub_col(grp_start, total_start + 5, '내부이용') 
             comp_idx = find_sub_col(grp_start, total_start + 5, '무료')
             df_clean['HU'] = get_series(hu_idx) if hu_idx != grp_start else 0
             df_clean['Comp'] = get_series(comp_idx) if comp_idx != grp_start else 0
@@ -313,7 +305,6 @@ def find_header_and_process(file):
         return df_clean, df_data['Date'].iloc[0].month, sob_data
         
     except Exception as e:
-        print(f"Error parsing file: {e}") # 디버깅용
         return None, None, None
 
 def get_full_data_by_date(date_str, month_num):
@@ -441,244 +432,228 @@ if uploaded_files:
 for i, tab in enumerate(tabs):
     cur_m = i + 1
     with tab:
-        files = month_files_map.get(cur_m, [])
-        df_curr, sob_curr, df_prev = None, None, None
-        
-        if files:
-            files.sort(key=lambda x: x['name'])
-            if len(files) >= 2:
-                df_curr, sob_curr, df_prev = files[-1]['data'], files[-1]['sob'], files[-2]['data']
+        try:
+            files = month_files_map.get(cur_m, [])
+            df_curr, sob_curr, df_prev = None, None, None
+            
+            if files:
+                files.sort(key=lambda x: x['name'])
+                if len(files) >= 2:
+                    df_curr, sob_curr, df_prev = files[-1]['data'], files[-1]['sob'], files[-2]['data']
+                else:
+                    df_curr, sob_curr = files[0]['data'], files[0]['sob']
+                    df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
             else:
-                df_curr, sob_curr = files[0]['data'], files[0]['sob']
-                df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
-        else:
-            df_curr, sob_curr = get_full_data_by_date(report_date.strftime("%Y-%m-%d"), cur_m)
-            if df_curr is not None: df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
+                df_curr, sob_curr = get_full_data_by_date(report_date.strftime("%Y-%m-%d"), cur_m)
+                if df_curr is not None: df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
 
-        if df_curr is None:
-            st.info(f"{cur_m}{T('월')} {T('데이터를 업로드하거나 조회하세요.')}")
-            continue
+            if df_curr is None:
+                st.info(f"{cur_m}{T('월')} {T('데이터를 업로드하거나 조회하세요.')}")
+                continue
 
-        budget = BUDGET_DATA.get(cur_m, 0)
-        total_rev = sob_curr['FIT_REV'] + sob_curr['GRP_REV']
-        total_rms = sob_curr['FIT_RMS'] + sob_curr['GRP_RMS']
-        
-        st.markdown(f"""
-        <div class="sob-container">
-            <div class="sob-header">📊 {cur_m}{T('월')} {T('Performance Summary')}</div>
-            <div class="sob-grid">
-                <div>
-                    <table class="modern-table">
-                        <tr><td class="label">{T('Budget')}</td><td>{budget:,.0f}</td></tr>
-                        <tr><td class="label">{T('Actual')}</td><td style="font-weight:bold;">{total_rev:,.0f}</td></tr>
-                        <tr><td class="label">{T('Variance')}</td><td style="color:{'green' if total_rev>=budget else 'red'}">{total_rev-budget:+,.0f}</td></tr>
-                    </table>
-                    <div class="kpi-wrapper">
-                        <div class="kpi-card"><div class="kpi-title">{T('OCC')}</div><div class="kpi-value">{sob_curr['TOTAL_OCC']:.1f}%</div></div>
-                        <div class="kpi-card kpi-accent"><div class="kpi-title">{T('ACHIEVEMENT')}</div><div class="kpi-value">{(total_rev/budget*100):.1f}%</div></div>
+            budget = BUDGET_DATA.get(cur_m, 0)
+            total_rev = sob_curr['FIT_REV'] + sob_curr['GRP_REV']
+            total_rms = sob_curr['FIT_RMS'] + sob_curr['GRP_RMS']
+            
+            st.markdown(f"""
+            <div class="sob-container">
+                <div class="sob-header">📊 {cur_m}{T('월')} {T('Performance Summary')}</div>
+                <div class="sob-grid">
+                    <div>
+                        <table class="modern-table">
+                            <tr><td class="label">{T('Budget')}</td><td>{budget:,.0f}</td></tr>
+                            <tr><td class="label">{T('Actual')}</td><td style="font-weight:bold;">{total_rev:,.0f}</td></tr>
+                            <tr><td class="label">{T('Variance')}</td><td style="color:{'green' if total_rev>=budget else 'red'}">{total_rev-budget:+,.0f}</td></tr>
+                        </table>
+                        <div class="kpi-wrapper">
+                            <div class="kpi-card"><div class="kpi-title">{T('OCC')}</div><div class="kpi-value">{sob_curr['TOTAL_OCC']:.1f}%</div></div>
+                            <div class="kpi-card kpi-accent"><div class="kpi-title">{T('ACHIEVEMENT')}</div><div class="kpi-value">{(total_rev/budget*100):.1f}%</div></div>
+                        </div>
+                    </div>
+                    <div>
+                        <table class="modern-table">
+                            <thead><tr><th>{T('Segment')}</th><th>{T('RMS')}</th><th>{T('ADR')}</th><th>{T('REV')}</th></tr></thead>
+                            <tr><td class="label">{T('FIT')}</td><td>{sob_curr['FIT_RMS']:,.0f}</td><td>{(sob_curr['FIT_REV']/max(1,sob_curr['FIT_RMS'])):,.0f}</td><td>{sob_curr['FIT_REV']:,.0f}</td></tr>
+                            <tr><td class="label">{T('GROUP')}</td><td>{sob_curr['GRP_RMS']:,.0f}</td><td>{(sob_curr['GRP_REV']/max(1,sob_curr['GRP_RMS'])):,.0f}</td><td>{sob_curr['GRP_REV']:,.0f}</td></tr>
+                            <tr style="background:#eff6ff; font-weight:bold;"><td>{T('TOTAL')}</td><td>{total_rms:,.0f}</td><td>{(total_rev/max(1,total_rms)):,.0f}</td><td>{total_rev:,.0f}</td></tr>
+                        </table>
                     </div>
                 </div>
-                <div>
-                    <table class="modern-table">
-                        <thead><tr><th>{T('Segment')}</th><th>{T('RMS')}</th><th>{T('ADR')}</th><th>{T('REV')}</th></tr></thead>
-                        <tr><td class="label">{T('FIT')}</td><td>{sob_curr['FIT_RMS']:,.0f}</td><td>{(sob_curr['FIT_REV']/max(1,sob_curr['FIT_RMS'])):,.0f}</td><td>{sob_curr['FIT_REV']:,.0f}</td></tr>
-                        <tr><td class="label">{T('GROUP')}</td><td>{sob_curr['GRP_RMS']:,.0f}</td><td>{(sob_curr['GRP_REV']/max(1,sob_curr['GRP_RMS'])):,.0f}</td><td>{sob_curr['GRP_REV']:,.0f}</td></tr>
-                        <tr style="background:#eff6ff; font-weight:bold;"><td>{T('TOTAL')}</td><td>{total_rms:,.0f}</td><td>{(total_rev/max(1,total_rms)):,.0f}</td><td>{total_rev:,.0f}</td></tr>
-                    </table>
-                </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-        merged = df_curr.copy()
-        if df_prev is not None:
-            df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
-            # [핀셋 수정] 컬럼 존재 여부 체크 후 할당 (안전장치)
-            if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS']
-            else: df_prev_sub['FIT_RMS'] = 0
-            
-            if 'GRP_RMS' in df_prev.columns: df_prev_sub['GRP_RMS'] = df_prev['GRP_RMS']
-            else: df_prev_sub['GRP_RMS'] = 0
-            
-            merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
-        else:
-            for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'GRP_RMS']: 
-                if c in merged.columns: merged[f'{c}_prev'] = merged[c]
-
-        # [핀셋 수정] NaN 처리 및 컬럼 생성
-        for col in ['FIT_RMS', 'FIT_RMS_prev', 'GRP_RMS', 'GRP_RMS_prev']:
-            if col not in merged.columns: merged[col] = 0
-            merged[col] = merged[col].fillna(0)
-
-        for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
-            merged[f'Pick_{c}'] = merged[c].fillna(0) - merged.get(f'{c}_prev', 0).fillna(0)
-        
-        merged['Pick_FIT_RMS'] = merged['FIT_RMS'] - merged['FIT_RMS_prev']
-        merged['Pick_GRP_RMS'] = merged['GRP_RMS'] - merged['GRP_RMS_prev']
-
-        sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
-        totals = merged[sum_items].sum()
-        
-        def get_total_rates(prefix_rms, prefix_rev, is_curr=True):
-            s_rms = totals[prefix_rms]
-            s_rev = totals[prefix_rev]
-            if is_curr:
-                avail = (merged['RMS'] / (merged['OCC'].replace(0, np.nan) / 100)).fillna(0).sum()
+            merged = df_curr.copy()
+            if df_prev is not None:
+                df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
+                if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS']
+                else: df_prev_sub['FIT_RMS'] = 0
+                
+                if 'GRP_RMS' in df_prev.columns: df_prev_sub['GRP_RMS'] = df_prev['GRP_RMS']
+                else: df_prev_sub['GRP_RMS'] = 0
+                
+                merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
             else:
-                avail = (merged['RMS_prev'] / (merged['OCC_prev'].replace(0, np.nan) / 100)).fillna(0).sum()
-            t_occ = (s_rms / avail * 100) if avail > 0 else 0
-            t_adr = (s_rev / s_rms) if s_rms > 0 else 0
-            t_par = (s_rev / avail) if avail > 0 else 0
-            return t_occ, t_adr, t_par
+                for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'GRP_RMS']: 
+                    if c in merged.columns: merged[f'{c}_prev'] = merged[c]
 
-        c_occ, c_adr, c_par = get_total_rates('RMS', 'REV', True)
-        p_occ, p_adr, p_par = get_total_rates('RMS_prev', 'REV_prev', False)
+            # [핀셋 수정] NaN 처리 및 컬럼 생성
+            for col in ['FIT_RMS', 'FIT_RMS_prev', 'GRP_RMS', 'GRP_RMS_prev']:
+                if col not in merged.columns: merged[col] = 0
+                merged[col] = merged[col].fillna(0)
 
-        total_row = pd.DataFrame([{
-            'DateStr': 'TOTAL', 'WeekDay': '',
-            'HU_prev': totals['HU_prev'], 'Comp_prev': totals['Comp_prev'], 'RMS_prev': totals['RMS_prev'], 
-            'OCC_prev': p_occ, 'ADR_prev': p_adr, 'RevPAR_prev': p_par, 'REV_prev': totals['REV_prev'],
-            'HU': totals['HU'], 'Comp': totals['Comp'], 'RMS': totals['RMS'], 
-            'OCC': c_occ, 'ADR': c_adr, 'RevPAR': c_par, 'REV': totals['REV'],
-            'Pick_HU': totals['Pick_HU'], 'Pick_Comp': totals['Pick_Comp'], 'Pick_RMS': totals['Pick_RMS'], 
-            'Pick_OCC': c_occ - p_occ, 'Pick_ADR': c_adr - p_adr, 'Pick_RevPAR': c_par - p_par, 'Pick_REV': totals['Pick_REV']
-        }])
-        
-        merged = pd.concat([merged, total_row], ignore_index=True)
+            for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
+                merged[f'Pick_{c}'] = merged[c].fillna(0) - merged.get(f'{c}_prev', 0).fillna(0)
+            
+            merged['Pick_FIT_RMS'] = merged['FIT_RMS'] - merged['FIT_RMS_prev']
+            merged['Pick_GRP_RMS'] = merged['GRP_RMS'] - merged['GRP_RMS_prev']
 
-        st.session_state[f"sob_{cur_m}"] = sob_curr
-        st.session_state[f"pace_{cur_m}"] = totals['Pick_RMS']
+            sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
+            totals = merged[sum_items].sum()
+            
+            def get_total_rates(prefix_rms, prefix_rev, is_curr=True):
+                s_rms = totals[prefix_rms]
+                s_rev = totals[prefix_rev]
+                if is_curr:
+                    avail = (merged['RMS'] / (merged['OCC'].replace(0, np.nan) / 100)).fillna(0).sum()
+                else:
+                    avail = (merged['RMS_prev'] / (merged['OCC_prev'].replace(0, np.nan) / 100)).fillna(0).sum()
+                t_occ = (s_rms / avail * 100) if avail > 0 else 0
+                t_adr = (s_rev / s_rms) if s_rms > 0 else 0
+                t_par = (s_rev / avail) if avail > 0 else 0
+                return t_occ, t_adr, t_par
 
-        sub_t1, sub_t2 = st.tabs([T("📊 리포트"), T("📈 시각화")])
-        
-        with sub_t1:
-            final_df = merged[['DateStr', 'WeekDay', 
-                               'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
-                               'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
-                               'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_OCC', 'Pick_ADR', 'Pick_RevPAR', 'Pick_REV']]
+            c_occ, c_adr, c_par = get_total_rates('RMS', 'REV', True)
+            p_occ, p_adr, p_par = get_total_rates('RMS_prev', 'REV_prev', False)
 
-            col_map = {'DateStr': T('Date'), 'WeekDay': T('Day')}
-            items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
-            for it in items:
-                col_map[f'{it}_prev'] = f'{T("Pre")}\n{T(it)}'
-                col_map[it] = f'{T("Today")}\n{T(it)}'
-                col_map[f'Pick_{it}'] = f'{T("Var")}\n{T(it)}'
-            final_df.columns = [col_map.get(c, c) for c in final_df.columns]
+            total_row = pd.DataFrame([{
+                'DateStr': 'TOTAL', 'WeekDay': '',
+                'HU_prev': totals['HU_prev'], 'Comp_prev': totals['Comp_prev'], 'RMS_prev': totals['RMS_prev'], 
+                'OCC_prev': p_occ, 'ADR_prev': p_adr, 'RevPAR_prev': p_par, 'REV_prev': totals['REV_prev'],
+                'HU': totals['HU'], 'Comp': totals['Comp'], 'RMS': totals['RMS'], 
+                'OCC': c_occ, 'ADR': c_adr, 'RevPAR': c_par, 'REV': totals['REV'],
+                'Pick_HU': totals['Pick_HU'], 'Pick_Comp': totals['Pick_Comp'], 'Pick_RMS': totals['Pick_RMS'], 
+                'Pick_OCC': c_occ - p_occ, 'Pick_ADR': c_adr - p_adr, 'Pick_RevPAR': c_par - p_par, 'Pick_REV': totals['Pick_REV']
+            }])
+            
+            merged_with_total = pd.concat([merged, total_row], ignore_index=True)
 
-            fmt = {c: '{:,.0f}' for c in final_df.columns if 'OCC' not in c and T('Date') not in c and T('Day') not in c}
-            for c in [c for c in final_df.columns if 'OCC' in c]: fmt[c] = '{:.1f}%'
+            sub_t1, sub_t2 = st.tabs([T("📊 리포트"), T("📈 시각화")])
+            
+            with sub_t1:
+                final_df = merged_with_total[['DateStr', 'WeekDay', 
+                                   'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
+                                   'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
+                                   'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_OCC', 'Pick_ADR', 'Pick_RevPAR', 'Pick_REV']]
 
-            styler = final_df.style.format(fmt)
+                col_map = {'DateStr': T('Date'), 'WeekDay': T('Day')}
+                items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
+                for it in items:
+                    col_map[f'{it}_prev'] = f'{T("Pre")}\n{T(it)}'
+                    col_map[it] = f'{T("Today")}\n{T(it)}'
+                    col_map[f'Pick_{it}'] = f'{T("Var")}\n{T(it)}'
+                final_df.columns = [col_map.get(c, c) for c in final_df.columns]
 
-            pre_cols = [c for c in final_df.columns if T('Pre') in c]
-            styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#9ca3af'})
+                fmt = {c: '{:,.0f}' for c in final_df.columns if 'OCC' not in c and T('Date') not in c and T('Day') not in c}
+                for c in [c for c in final_df.columns if 'OCC' in c]: fmt[c] = '{:.1f}%'
 
-            curr_cols = [c for c in final_df.columns if T('Today') in c]
-            data_idx = final_df.index[:-1] 
-            styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.6)
-            styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.7)
+                styler = final_df.style.format(fmt)
+                pre_cols = [c for c in final_df.columns if T('Pre') in c]
+                styler = styler.set_properties(subset=pre_cols, **{'background-color': '#f8f9fa', 'color': '#9ca3af'})
+                curr_cols = [c for c in final_df.columns if T('Today') in c]
+                data_idx = final_df.index[:-1] 
+                styler = styler.background_gradient(cmap='Blues', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' not in c]], low=0.2, high=0.6)
+                styler = styler.background_gradient(cmap='Oranges', subset=pd.IndexSlice[data_idx, [c for c in curr_cols if 'OCC' in c]], low=0.4, high=0.7)
+                var_cols = [c for c in final_df.columns if T('Var') in c]
+                def color_pick(val):
+                    try:
+                        v = float(str(val).replace('%','').replace(',',''))
+                        return 'color: #166534; font-weight: bold;' if v > 0 else 'color: #dc2626; font-weight: bold;' if v < 0 else 'color: #374151;'
+                    except: return ''
+                styler = styler.map(color_pick, subset=var_cols)
+                styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
+                styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
+                                             **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
+                st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
-            var_cols = [c for c in final_df.columns if T('Var') in c]
-            def color_pick(val):
-                try:
-                    v = float(str(val).replace('%','').replace(',',''))
-                    return 'color: #166534; font-weight: bold;' if v > 0 else 'color: #dc2626; font-weight: bold;' if v < 0 else 'color: #374151;'
-                except: return ''
-            styler = styler.map(color_pick, subset=var_cols)
-            styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
-
-            styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
-                                         **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
-
-            st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
-
-        with sub_t2:
-            try:
-                vis_df = merged.iloc[:-1].copy() # Total 행 제외
+            with sub_t2:
+                vis_df = merged.copy() # Total 행 제외는 앞에서 처리됨 (merged는 순수 데이터)
                 if not vis_df.empty:
-                    st.subheader(T("일자별 픽업 현황 (개인 vs 단체)"))
-                    # [수정] 안전한 컬럼 초기화
-                    if 'Pick_FIT_RMS' not in vis_df.columns: vis_df['Pick_FIT_RMS'] = 0
-                    if 'Pick_GRP_RMS' not in vis_df.columns: vis_df['Pick_GRP_RMS'] = 0
+                    st.subheader(T("일자별 매출 구성 (개인 vs 단체)"))
                     
-                    melted = vis_df.melt(id_vars=['DateStr'], value_vars=['Pick_FIT_RMS', 'Pick_GRP_RMS'], 
-                                         var_name='Segment', value_name='Pickup')
-                    melted['Segment'] = melted['Segment'].map({'Pick_FIT_RMS': T('FIT'), 'Pick_GRP_RMS': T('GROUP')})
+                    # 데이터 재가공 (Long-form)
+                    m_rev = vis_df.melt(id_vars=['DateStr', 'FIT_RMS', 'GRP_RMS'], 
+                                        value_vars=['FIT_REV', 'GRP_REV'],
+                                        var_name='Segment', value_name='Revenue')
                     
-                    fig = px.bar(melted, x='DateStr', y='Pickup', color='Segment', 
-                                 title=f"{cur_m}{T('월')} Daily Pickup", 
-                                 color_discrete_map={T('FIT'): '#3b82f6', T('GROUP'): '#ef4444'})
-                    st.plotly_chart(fig, use_container_width=True)
+                    m_rev['Segment'] = m_rev['Segment'].map({'FIT_REV': T('FIT'), 'GRP_REV': T('GROUP')})
+                    # 룸나잇 정보 매칭 (툴팁용)
+                    m_rev['RoomNights'] = np.where(m_rev['Segment'] == T('FIT'), m_rev['FIT_RMS'], m_rev['GRP_RMS'])
+                    
+                    fig_bar = px.bar(m_rev, x='DateStr', y='Revenue', color='Segment', 
+                                     hover_data={'DateStr': False, 'Revenue': ':,.0f', 'RoomNights': ':,.0f'},
+                                     color_discrete_map={T('FIT'): '#3b82f6', T('GROUP'): '#ef4444'})
+                    
+                    fig_bar.update_layout(xaxis_title="", yaxis_title=T("REV"), legend_title="", height=450)
+                    st.plotly_chart(fig_bar, use_container_width=True)
                     
                     st.divider()
+                    
+                    # 2. 요일별 픽업 히트맵 (기존 로직 유지)
                     st.subheader(T("요일별 픽업 히트맵"))
                     vis_df['Date'] = pd.to_datetime(vis_df['DateStr'])
-                    vis_df['Day'] = vis_df['Date'].dt.day
-                    vis_df['MonthWeek'] = (vis_df['Day'] - 1) // 7 + 1
+                    vis_df['DayNum'] = vis_df['Date'].dt.day
+                    vis_df['MonthWeek'] = (vis_df['DayNum'] - 1) // 7 + 1
                     
                     days_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
                     vis_df['WeekDay'] = pd.Categorical(vis_df['WeekDay'], categories=days_order, ordered=True)
                     
                     heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
+                    heatmap_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='DayNum', aggfunc='first').fillna(0).astype(int)
                     
-                    # [수정] 텍스트 안전 조립 (반복문 사용)
-                    heatmap_text_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Day', aggfunc='first').fillna(0).astype(int).astype(str)
-                    heatmap_text_v = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0).astype(int).astype(str)
-                    heatmap_text_d = heatmap_text_d.replace('0', '')
-                    
+                    # 텍스트 행렬 생성 (안전한 반복문 방식)
                     final_text = []
-                    for r in range(len(heatmap_z)):
-                        row_txt = []
+                    for r_idx in range(len(heatmap_z)):
+                        row_cells = []
                         for c_idx in range(len(heatmap_z.columns)):
                             try:
-                                d_val = heatmap_text_d.iloc[r, c_idx]
-                                v_val = heatmap_text_v.iloc[r, c_idx]
-                                if d_val == '' or d_val == '0':
-                                    row_txt.append("")
+                                d_val = heatmap_d.iloc[r_idx, c_idx]
+                                v_val = int(heatmap_z.iloc[r_idx, c_idx])
+                                if d_val == 0:
+                                    row_cells.append("")
                                 else:
-                                    val = int(v_val)
-                                    sign = "+" if val > 0 else ""
-                                    # 0은 표시하지 않거나 0으로 표시 (여기선 표시)
-                                    row_txt.append(f"{d_val}일<br><b>{sign}{val}</b>")
+                                    sign = "+" if v_val > 0 else ""
+                                    # 0도 표시 (증감 없음을 의미)
+                                    row_cells.append(f"{d_val}일<br><b>{sign}{v_val}</b>")
                             except:
-                                row_txt.append("")
-                        final_text.append(row_txt)
+                                row_cells.append("")
+                        final_text.append(row_cells)
 
-                    heatmap_z.index = heatmap_z.index.astype(str)
-                    
                     fig_hm = go.Figure(data=go.Heatmap(
                         z=heatmap_z.values,
                         x=days_order,
-                        y=heatmap_z.index,
+                        y=heatmap_z.index.astype(str),
                         text=final_text,
                         texttemplate="%{text}",
-                        textfont={"size": 11},
                         colorscale='RdBu', 
                         zmid=0,
                         reversescale=True,
-                        xgap=1, ygap=1 # 격자 간격 추가
+                        xgap=2, ygap=2
                     ))
+                    
                     fig_hm.update_layout(
-                        title=f"{cur_m}{T('월')} {T('요일별 픽업 히트맵')}",
                         yaxis=dict(title='Week', autorange="reversed", showgrid=False),
                         xaxis=dict(side="top", showgrid=False),
-                        height=400,
-                        margin=dict(t=50, l=50, r=50, b=50)
+                        height=400
                     )
                     st.plotly_chart(fig_hm, use_container_width=True)
                 else:
                     st.info(T("시각화할 데이터가 없습니다."))
-            except Exception as e:
-                st.error(f"Visualization Error in {cur_m}월: {e}")
 
-        if uploaded_files:
-            st.divider()
-            save_date = st.date_input(
-                T("저장할 기준 일자 선택"), 
-                value=today_kst, 
-                key=f"save_date_{cur_m}"
-            )
-            
-            if st.button(f"💾 {save_date} / {cur_m}{T('월 데이터 DB 저장')}", key=f"btn_{cur_m}"):
-                if save_data_with_sob(save_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr):
-                    st.toast(f"✅ {save_date} : {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
+            if uploaded_files:
+                st.divider()
+                save_date = st.date_input(T("저장할 기준 일자 선택"), value=today_kst, key=f"save_date_{cur_m}")
+                if st.button(f"💾 {save_date} / {cur_m}{T('월 데이터 DB 저장')}", key=f"btn_{cur_m}"):
+                    if save_data_with_sob(save_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr):
+                        st.toast(f"✅ {save_date} : {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
+        except Exception as e:
+            st.error(f"Error in {cur_m}월 Tab: {e}")
