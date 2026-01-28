@@ -408,33 +408,30 @@ for i, tab in enumerate(tabs):
         merged = df_curr.copy()
         if df_prev is not None:
             df_prev_sub = df_prev[['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']]
+            # [수정] 컬럼 존재 여부 체크 후 할당 (안전장치)
             if 'FIT_RMS' in df_prev.columns: df_prev_sub['FIT_RMS'] = df_prev['FIT_RMS']
+            else: df_prev_sub['FIT_RMS'] = 0
+            
             if 'GRP_RMS' in df_prev.columns: df_prev_sub['GRP_RMS'] = df_prev['GRP_RMS']
+            else: df_prev_sub['GRP_RMS'] = 0
+            
             merged = pd.merge(merged, df_prev_sub, on='DateStr', how='left', suffixes=('', '_prev'))
         else:
             for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'GRP_RMS']: 
                 if c in merged.columns: merged[f'{c}_prev'] = merged[c]
+                else: merged[f'{c}_prev'] = 0
+
+        # [수정] 안전한 컬럼 생성 및 NaN 처리 (AttributeError 원천 차단)
+        for col in ['FIT_RMS', 'FIT_RMS_prev', 'GRP_RMS', 'GRP_RMS_prev']:
+            if col not in merged.columns: merged[col] = 0
+            merged[col] = merged[col].fillna(0)
 
         for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']: 
-            merged[f'Pick_{c}'] = merged[c] - merged[f'{c}_prev']
-        
-        # [수정] 픽업 계산 시 안전장치 (컬럼 부재 및 NaN 처리 강화)
-        # FIT
-        if 'FIT_RMS' in merged.columns: merged['FIT_RMS'] = merged['FIT_RMS'].fillna(0)
-        else: merged['FIT_RMS'] = 0
-        
-        if 'FIT_RMS_prev' in merged.columns: merged['FIT_RMS_prev'] = merged['FIT_RMS_prev'].fillna(0)
-        else: merged['FIT_RMS_prev'] = 0
+            if c not in merged.columns: merged[c] = 0
+            if f'{c}_prev' not in merged.columns: merged[f'{c}_prev'] = 0
+            merged[f'Pick_{c}'] = merged[c].fillna(0) - merged[f'{c}_prev'].fillna(0)
         
         merged['Pick_FIT_RMS'] = merged['FIT_RMS'] - merged['FIT_RMS_prev']
-        
-        # GRP
-        if 'GRP_RMS' in merged.columns: merged['GRP_RMS'] = merged['GRP_RMS'].fillna(0)
-        else: merged['GRP_RMS'] = 0
-        
-        if 'GRP_RMS_prev' in merged.columns: merged['GRP_RMS_prev'] = merged['GRP_RMS_prev'].fillna(0)
-        else: merged['GRP_RMS_prev'] = 0
-        
         merged['Pick_GRP_RMS'] = merged['GRP_RMS'] - merged['GRP_RMS_prev']
 
         sum_items = ['HU', 'Comp', 'RMS', 'REV', 'HU_prev', 'Comp_prev', 'RMS_prev', 'REV_prev', 'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_REV']
@@ -518,8 +515,10 @@ for i, tab in enumerate(tabs):
                 vis_df = merged.iloc[:-1].copy() # Total 행 제외
                 if not vis_df.empty:
                     st.subheader(T("일자별 픽업 현황 (개인 vs 단체)"))
-                    vis_df['Pick_FIT_RMS'] = vis_df.get('Pick_FIT_RMS', 0)
-                    vis_df['Pick_GRP_RMS'] = vis_df.get('Pick_GRP_RMS', 0)
+                    # [수정] 안전한 컬럼 초기화
+                    if 'Pick_FIT_RMS' not in vis_df.columns: vis_df['Pick_FIT_RMS'] = 0
+                    if 'Pick_GRP_RMS' not in vis_df.columns: vis_df['Pick_GRP_RMS'] = 0
+                    
                     melted = vis_df.melt(id_vars=['DateStr'], value_vars=['Pick_FIT_RMS', 'Pick_GRP_RMS'], 
                                          var_name='Segment', value_name='Pickup')
                     melted['Segment'] = melted['Segment'].map({'Pick_FIT_RMS': T('FIT'), 'Pick_GRP_RMS': T('GROUP')})
@@ -532,33 +531,32 @@ for i, tab in enumerate(tabs):
                     st.divider()
                     st.subheader(T("요일별 픽업 히트맵"))
                     vis_df['Date'] = pd.to_datetime(vis_df['DateStr'])
-                    # 주차 계산
                     vis_df['Day'] = vis_df['Date'].dt.day
                     vis_df['MonthWeek'] = (vis_df['Day'] - 1) // 7 + 1
                     
                     days_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
                     vis_df['WeekDay'] = pd.Categorical(vis_df['WeekDay'], categories=days_order, ordered=True)
                     
-                    heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum')
+                    heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
                     
-                    # 텍스트 만들기 (날짜 + 픽업값)
-                    heatmap_text_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Day', aggfunc='first').astype(str)
-                    heatmap_text_v = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').astype(str)
+                    # [수정] 달력형 텍스트 생성
+                    heatmap_text_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Day', aggfunc='first').fillna(0).astype(int).astype(str)
+                    heatmap_text_v = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0).astype(int).astype(str)
                     
-                    # combine 함수 정의
+                    # 0일(빈 날짜)은 빈칸으로 처리
+                    heatmap_text_d = heatmap_text_d.replace('0', '')
+                    
                     def combine_txt(d, v):
-                        if d == 'nan': return ""
+                        if d == '': return ""
                         try:
-                            val = float(v)
+                            val = int(v)
                             sign = "+" if val > 0 else ""
-                            # 0은 표시 안하거나, 0으로 표시
-                            val_str = f"{sign}{int(val)}" if val != 0 else "0"
-                            return f"{d.split('.')[0]}<br><b>{val_str}</b>"
+                            # 0은 표시 안하거나 0으로 표시 (여기선 0 표시)
+                            return f"{d}일<br><b>{sign}{val}</b>"
                         except: return ""
 
                     final_text = heatmap_text_d.combine(heatmap_text_v, combine_txt)
                     
-                    # 인덱스 문자열 변환
                     heatmap_z.index = heatmap_z.index.astype(str)
                     final_text.index = final_text.index.astype(str)
                     
@@ -570,14 +568,16 @@ for i, tab in enumerate(tabs):
                         texttemplate="%{text}",
                         textfont={"size": 11},
                         colorscale='RdBu', 
-                        zmid=0, # midpoint 대신 zmid 사용
-                        reversescale=True
+                        zmid=0,
+                        reversescale=True,
+                        xgap=1, ygap=1 # 격자 간격 추가
                     ))
                     fig_hm.update_layout(
                         title=f"{cur_m}{T('월')} {T('요일별 픽업 히트맵')}",
-                        yaxis=dict(title='Week', autorange="reversed"),
-                        xaxis=dict(side="top"),
-                        height=400
+                        yaxis=dict(title='Week', autorange="reversed", showgrid=False),
+                        xaxis=dict(side="top", showgrid=False),
+                        height=400,
+                        margin=dict(t=50, l=50, r=50, b=50)
                     )
                     st.plotly_chart(fig_hm, use_container_width=True)
                 else:
