@@ -220,7 +220,6 @@ def save_to_db(df, data_type='Reservation'):
                     else: new_r[clean_k] = v
                 sanitized_recs.append(new_r)
             
-            # [핀셋 수정] OTB일 경우에만 타임스탬프를 붙여서 개별 파일로 저장 (덮어쓰기 방지)
             if data_type == 'OTB':
                 did = f"{d}_{data_type}_{int(time.time()*1000)}"
             else:
@@ -247,7 +246,6 @@ def load_db():
             dd = d.to_dict()
             snap = dd.get('snapshot_date', '')
             dtype = dd.get('data_type', 'Reservation')
-            # OTB 데이터 타입 감지 강화
             if dtype == 'Reservation' and len(dd['data']) > 0 and 'OTB' in str(dd['data'][0].get('Segment', '')):
                 dtype = 'OTB'
             for r in dd['data']:
@@ -450,6 +448,7 @@ def process_cancel_file(file):
 
 def process_otb(file):
     try:
+        # [핀셋 수정] 파일 처리 로직 전면 수정
         if file.name.endswith('.csv'): df_raw = pd.read_csv(file, header=None, encoding='cp949')
         else: df_raw = pd.read_excel(file, header=None)
         
@@ -457,32 +456,44 @@ def process_otb(file):
         match = re.search(r'(\d{8})', file.name)
         if match: snap = f"{match.group(1)[:4]}-{match.group(1)[4:6]}-{match.group(1)[6:]}"
         
-        data_list = []
+        # 1. 월 파악 (첫번째 날짜형식 값 찾기)
+        target_month_date = None
         for i, row in df_raw.iterrows():
-            try:
-                date_val = row[0]
-                ts = pd.to_datetime(date_val, errors='coerce')
-                
-                if pd.notnull(ts):
-                    rev_val = clean_num(row.iloc[-1])
-                    if rev_val > 0:
-                        data_list.append({
-                            'CheckIn': ts.strftime('%Y-%m-%d'),
-                            'Room_Revenue': rev_val,
-                            'Total_Revenue': rev_val,
-                            'RN': 0, 
-                            'Guest_Name': 'OTB', 
-                            'Segment': 'OTB', 
-                            'Snapshot_Date': snap,
-                            'Status': 'Booked'
-                        })
-            except: continue
+            ts = pd.to_datetime(row[0], errors='coerce')
+            if pd.notnull(ts):
+                target_month_date = ts
+                break
+        
+        if target_month_date is None: return pd.DataFrame() # 날짜 없으면 패스
+
+        # 2. 마지막 행(합계)에서 데이터 추출
+        # 빈 행 제거 후 마지막 행 가져오기
+        df_clean = df_raw.dropna(how='all')
+        if df_clean.empty: return pd.DataFrame()
+        
+        last_row = df_clean.iloc[-1]
+        
+        # 데이터 추출 (인덱스 주의: 0부터 시작)
+        # O열 = 14번째 인덱스, Q열 = 16번째 인덱스, 마지막열 = -1
+        # 안전하게 인덱스 범위 확인
+        cols_count = len(df_clean.columns)
+        
+        rn_val = clean_num(last_row.iloc[14]) if cols_count > 14 else 0 # O열 (RN)
+        adr_val = clean_num(last_row.iloc[16]) if cols_count > 16 else 0 # Q열 (ADR)
+        rev_val = clean_num(last_row.iloc[-1]) # 마지막열 (매출)
+
+        return pd.DataFrame([{
+            'CheckIn': target_month_date.strftime('%Y-%m-%d'),
+            'Room_Revenue': rev_val,
+            'Total_Revenue': rev_val,
+            'RN': rn_val,
+            'ADR_Raw': adr_val, # ADR 저장을 위한 별도 컬럼
+            'Guest_Name': 'OTB', 
+            'Segment': 'OTB', 
+            'Snapshot_Date': snap,
+            'Status': 'Booked'
+        }])
             
-        if not data_list:
-            val = int(str(df_raw.dropna(how='all').dropna(axis=1, how='all').iloc[-1, -1]).replace(',', '').split('.')[0])
-            return pd.DataFrame([{'CheckIn': snap, 'Room_Revenue': val, 'Total_Revenue': val, 'RN': 0, 'Guest_Name': 'OTB', 'Segment': 'OTB', 'Snapshot_Date': snap, 'Status': 'Booked'}])
-            
-        return pd.DataFrame(data_list)
     except: return pd.DataFrame()
 
 # ==============================================================================
@@ -653,7 +664,6 @@ try:
         if f2 and st.button(T("취소 저장")):
             if save_to_db(process_cancel_file(f2), 'Cancellation'): st.rerun()
         f3 = st.file_uploader(T("OTB 파일"), type=['xlsx','csv'], accept_multiple_files=True)
-        # [핀셋 수정] OTB 저장 시 개별 저장으로 복구 (타임스탬프 ID 생성으로 덮어쓰기 방지)
         if f3 and st.button(T("OTB 저장")):
             for f in f3: save_to_db(process_otb(f), 'OTB')
             st.rerun()
@@ -764,17 +774,29 @@ try:
         if df_o.empty: st.warning(T("데이터 없음"))
         else:
             df_o['M'] = pd.to_datetime(df_o['CheckIn']).dt.month
-            grp = df_o.groupby('M').agg({'Room_Revenue':'sum'}).reset_index()
+            # [핀셋 수정] RN(객실수), ADR_Raw(객단가)도 집계에 포함
+            grp = df_o.groupby('M').agg({'Room_Revenue':'sum', 'RN':'sum', 'ADR_Raw':'sum'}).reset_index()
             fin = pd.merge(pd.DataFrame({'M': range(1,13)}), grp, on='M', how='left').fillna(0)
             fin['Budget'] = fin['M'].map(BUDGET_DATA).fillna(0)
             fin['Name'] = fin['M'].astype(str) + "월"
             fin['Rate'] = np.where(fin['Budget']>0, (fin['Room_Revenue']/fin['Budget'])*100, 0)
+            
             fig = go.Figure()
             fig.add_trace(go.Bar(x=fin['Name'], y=fin['Room_Revenue'], name='OTB', text=fin['Rate'].apply(lambda x:f"{x:.1f}%")))
             fig.add_trace(go.Scatter(x=fin['Name'], y=fin['Budget'], name='Budget', line=dict(color='red', dash='dot')))
             st.plotly_chart(fig, use_container_width=True)
+            
             res = {}
-            for _,r in fin.iterrows(): res[r['Name']] = [f"{r['Budget']:,.0f}", f"{r['Room_Revenue']:,.0f}", f"{r['Rate']:.1f}%"]
-            st.dataframe(pd.DataFrame(res, index=['Budget','OTB','Achiev']).T, use_container_width=True)
+            for _,r in fin.iterrows(): 
+                # [핀셋 수정] RN, ADR 데이터 추가
+                res[r['Name']] = [
+                    f"{r['Budget']:,.0f}", 
+                    f"{r['Room_Revenue']:,.0f}", 
+                    f"{r['Rate']:.1f}%",
+                    f"{r['RN']:,.0f}",
+                    f"{r['ADR_Raw']:,.0f}"
+                ]
+            # [핀셋 수정] 인덱스에 RN, ADR 추가
+            st.dataframe(pd.DataFrame(res, index=['Budget','OTB','Achiev', 'RN', 'ADR']).T, use_container_width=True)
 
 except Exception as e: st.error(f"Error: {e}")
