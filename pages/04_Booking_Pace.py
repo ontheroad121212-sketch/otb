@@ -118,36 +118,32 @@ def delete_all_data():
 
 @st.cache_data(ttl=3600)
 def load_data_with_snapshot_cache():
-    df = pd.DataFrame()
-    source_msg = ""
-
-    # 1. 로컬 캐시 시도
+    # 1. 로컬 캐시 시도 (있으면 바로 리턴! -> 속도 향상 & 중복 저장 방지)
     if os.path.exists(CACHE_FILE):
         try:
             df = pd.read_parquet(CACHE_FILE)
-            source_msg = "로컬 캐시 (고속)"
+            return df, "로컬 캐시 (고속)"
         except: pass
 
-    # 2. 캐시 실패 시 파이어베이스 로드
-    if df.empty and db is not None:
-        try:
-            docs = db.collection('hotel_bookings').limit(100000).stream() 
-            data = [doc.to_dict() for doc in docs]
-            if data:
-                df = pd.DataFrame(data)
-                source_msg = "Firestore (실시간)"
-        except: return pd.DataFrame(), "조회 에러"
-
-    if df.empty: return pd.DataFrame(), "데이터 없음"
-
-    # [핵심] 데이터 로드 후 컬럼 재계산 및 정리 (KeyError 방지)
+    # 2. 캐시 실패 시 파이어베이스 로드 (여기서만 비용 발생)
+    if db is None: return pd.DataFrame(), "DB 미연결"
     
-    # 1) 날짜 변환
+    try:
+        docs = db.collection('hotel_bookings').limit(100000).stream() 
+        data = [doc.to_dict() for doc in docs]
+        if not data: return pd.DataFrame(), "데이터 없음"
+        df = pd.DataFrame(data)
+        source_msg = "Firestore (실시간)"
+    except Exception as e: 
+        return pd.DataFrame(), f"조회 에러: {e}"
+
+    # 3. 데이터 전처리 (최초 1회만 실행됨)
+    # [날짜 변환]
     df['입실일자'] = pd.to_datetime(df['입실일자'], errors='coerce').dt.tz_localize(None)
     df['예약일자'] = pd.to_datetime(df['예약일자'], errors='coerce').dt.tz_localize(None)
     df = df.dropna(subset=['입실일자', '예약일자'])
     
-    # 2) 파생 날짜 변수
+    # [파생 변수 생성]
     df['LeadTime'] = (df['입실일자'] - df['예약일자']).dt.days
     df['Year'] = df['입실일자'].dt.isocalendar().year.fillna(0).astype(int)
     df['Month'] = df['입실일자'].dt.month.fillna(0).astype(int)
@@ -155,29 +151,25 @@ def load_data_with_snapshot_cache():
     df['DayOfWeek'] = df['입실일자'].dt.day_name()
     if 'Snapshot' not in df.columns: df['Snapshot'] = "이전 데이터"
 
-    # 3) 숫자 컬럼 강제 변환 (사장님 필드 기준)
+    # [숫자 변환]
     cols_to_numeric = ['객실료', '총금액', '박수', '객실수', '객단가']
     for col in cols_to_numeric:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         else:
-            df[col] = 0 # 없으면 0으로 채움
+            df[col] = 0
     
-    # 4) [ADR 정밀 계산을 위한 핵심 필드 생성]
-    # 박수가 0이면 1로 보정 (0박은 있을 수 없음)
+    # [ADR 정밀 계산]
     df['박수'] = df['박수'].replace(0, 1)
     df['객실수'] = df['객실수'].replace(0, 1)
-    
-    # RoomNights (룸나잇) = 객실수 * 박수
     df['RoomNights'] = df['객실수'] * df['박수']
     
-    # RoomRevenue (객실매출) = '객실료' 필드 우선, 없으면 '총금액'
     if '객실료' in df.columns:
         df['RoomRevenue'] = df['객실료']
     else:
         df['RoomRevenue'] = df['총금액']
 
-    # 최신 상태로 캐시 갱신
+    # 4. 처리된 데이터를 파일로 저장 (다음을 위해)
     df.to_parquet(CACHE_FILE)
     
     return df, source_msg
