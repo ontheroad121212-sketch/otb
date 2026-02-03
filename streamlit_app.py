@@ -9,6 +9,7 @@ import textwrap
 import secret_forecasting  # 포캐스팅 모듈 임포트
 import plotly.express as px
 import plotly.graph_objects as go
+import os # [수정] 캐시 파일 확인을 위해 추가
 
 # ==============================================================================
 # [1] 페이지 기본 설정 및 다국어(중국어) 세션 고정 로직
@@ -329,18 +330,36 @@ if st.session_state.get("authenticated"):
     st.sidebar.success(T("✅ Admin Mode On"))
     selected_page = st.sidebar.radio(T("Navigation"), [T("Main Report"), T("🎯 Forecasting")])
     if "historical_dow" not in st.session_state:
+        # [수정 시작] 캐시 기능 적용된 핀셋 수정 구간
         if st.sidebar.button(T("📊 4만건 히스토리 전체 분석 시작")):
             with st.sidebar.status(T("데이터 수색 중..."), expanded=True) as status:
                 try:
-                    db = firestore.client()
-                    docs = db.collection_group("hotel_bookings").stream()
-                    hist_data = []
-                    count = 0
-                    for doc in docs:
-                        hist_data.append(doc.to_dict())
-                        count += 1
-                    if count > 0:
-                        h_df = pd.DataFrame(hist_data)
+                    cache_file = "hotel_bookings_cache.pkl"
+                    h_df = None
+
+                    # 1. 로컬 캐시 확인
+                    if os.path.exists(cache_file):
+                        st.sidebar.write(T("✅ 캐시 파일에서 로드! (비용 0원)"))
+                        h_df = pd.read_pickle(cache_file)
+                    else:
+                        # 2. 없으면 파이어베이스 로드 (기존 로직)
+                        db = firestore.client()
+                        docs = db.collection_group("hotel_bookings").stream()
+                        hist_data = []
+                        count = 0
+                        status_text = st.sidebar.empty() # 진행상황
+                        for doc in docs:
+                            hist_data.append(doc.to_dict())
+                            count += 1
+                            if count % 2000 == 0:
+                                status_text.write(T("현재 {count:,}건 로드 중...").format(count=count))
+                        
+                        if count > 0:
+                            h_df = pd.DataFrame(hist_data)
+                            h_df.to_pickle(cache_file) # [핵심] 파일로 저장
+                    
+                    # 3. 데이터 처리 공통 로직
+                    if h_df is not None and not h_df.empty:
                         h_df['b_date'] = pd.to_datetime(h_df['예약일자'], errors='coerce')
                         h_df = h_df.dropna(subset=['b_date'])
                         h_df['dow'] = h_df['b_date'].dt.dayofweek
@@ -348,6 +367,7 @@ if st.session_state.get("authenticated"):
                         status.update(label=T("✅ 분석 완료!"), state="complete")
                         st.rerun()
                 except Exception as e: st.error(f"Error: {e}")
+        # [수정 끝]
 
 if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting"):
     secret_forecasting.run_forecasting()
@@ -479,9 +499,9 @@ for i, tab in enumerate(tabs):
             
             with sub_t1:
                 final_df = merged_with_total[['DateStr', 'WeekDay', 
-                                   'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
-                                   'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
-                                   'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_OCC', 'Pick_ADR', 'Pick_RevPAR', 'Pick_REV']]
+                                              'HU_prev', 'Comp_prev', 'RMS_prev', 'OCC_prev', 'ADR_prev', 'RevPAR_prev', 'REV_prev',
+                                              'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV',
+                                              'Pick_HU', 'Pick_Comp', 'Pick_RMS', 'Pick_OCC', 'Pick_ADR', 'Pick_RevPAR', 'Pick_REV']]
 
                 col_map = {'DateStr': T('Date'), 'WeekDay': T('Day')}
                 items = ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
@@ -510,7 +530,7 @@ for i, tab in enumerate(tabs):
                 styler = styler.map(color_pick, subset=var_cols)
                 styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
                 styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
-                                             **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
+                                               **{'background-color': '#eff6ff', 'font-weight': '900', 'border-top': '2px solid #1d4ed8'})
                 st.markdown(f'<div class="compact-table-wrapper">{styler.to_html()}</div>', unsafe_allow_html=True)
 
             with sub_t2:
