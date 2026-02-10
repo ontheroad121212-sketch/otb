@@ -116,8 +116,8 @@ def delete_all_data():
     st.cache_data.clear()
     return total_del
 
-@st.cache_data(ttl=3600)
-@st.cache_data(ttl=3600)
+# @st.cache_data(ttl=3600)
+
 def load_data_with_snapshot_cache():
     df = pd.DataFrame()
     source_msg = ""
