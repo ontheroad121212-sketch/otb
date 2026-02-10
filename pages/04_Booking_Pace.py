@@ -154,7 +154,7 @@ def load_data_with_snapshot_cache():
     
     # 2. 예약번호를 기준으로 가장 '최신 스냅샷'만 남기고 중복 제거
     # 사장님이 오늘 올린 데이터(오늘 날짜 스냅샷)가 옛날 데이터보다 우선순위를 갖게 함
-    df = df.sort_values('Snapshot', ascending=False)
+    df = df.sort_values(['Snapshot', '예약번호'], ascending=[False, True])
     df = df.drop_duplicates(subset=['예약번호'], keep='first').copy()
 
     # -------------------------------------------------------------------------
