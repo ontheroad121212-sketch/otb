@@ -160,7 +160,6 @@ def load_data_with_snapshot_cache():
         subset=['예약번호', '총금액', '객실수', '객실타입', '객실료', '입실일자'], 
         keep='first'
     ).copy()
-    df = df.drop_duplicates(subset=['예약번호'], keep='first').copy()
 
     # -------------------------------------------------------------------------
     # 3. 데이터 전처리 (기존 로직 유지 및 보강)
