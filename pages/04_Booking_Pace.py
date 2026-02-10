@@ -477,7 +477,7 @@ with tabs[0]:
         lp = pt.index.min()
         fig.add_trace(go.Scatter(x=[lp], y=[pt[lp]], mode='markers+text', text=[f"{pt[lp]/10000:,.0f}만"], textposition="top left", marker=dict(color='red', size=8), showlegend=False))
     fig.update_layout(xaxis={'autorange': 'reversed'}, xaxis_title="D-Day", yaxis_title="누적 매출", height=500)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # [TAB 1] ADR (정밀 계산 적용: Room Revenue / Room Nights)
 with tabs[1]:
@@ -502,7 +502,7 @@ with tabs[1]:
     fig2.add_trace(go.Scatter(x=at.index, y=at.values, name='Target ADR', line=dict(color='#ff6b6b', width=3)))
     if not ar.empty: fig2.add_trace(go.Scatter(x=ar.index, y=ar.values, name='Ref ADR', line=dict(color='gray', dash='dot')))
     fig2.update_layout(xaxis={'autorange': 'reversed'}, height=500)
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 
 # [TAB 2] Lead Time
 with tabs[2]:
@@ -515,7 +515,7 @@ with tabs[2]:
     tg = t_c.groupby('Group')['총금액'].sum().reset_index().assign(Type='Target')
     rg = r_c.groupby('Group')['총금액'].sum().reset_index().assign(Type='Ref')
     fig3 = px.bar(pd.concat([tg, rg]), x='Group', y='총금액', color='Type', barmode='group', color_discrete_map={'Target':'#0052cc','Ref':'#bababa'})
-    st.plotly_chart(fig3, use_container_width=True)
+    st.plotly_chart(fig3, width="stretch")
 
 # [TAB 3] Day of Week
 with tabs[3]:
@@ -526,7 +526,7 @@ with tabs[3]:
     fig4 = go.Figure()
     fig4.add_trace(go.Scatter(x=td['DayOfWeek'], y=td['총금액'], name='Target', line=dict(color='green', width=3)))
     fig4.add_trace(go.Scatter(x=rd['DayOfWeek'], y=rd['총금액'], name='Ref', line=dict(color='gray', dash='dot')))
-    st.plotly_chart(fig4, use_container_width=True)
+    st.plotly_chart(fig4, width="stretch")
 
 # [TAB 4] Demographics
 with tabs[4]:
@@ -535,13 +535,13 @@ with tabs[4]:
     with c1:
         nd = target_df.groupby('국적')['총금액'].sum().reset_index().sort_values('총금액', ascending=False)
         fig5 = px.pie(nd.head(7), values='총금액', names='국적', hole=0.4, title="Target 국적 TOP 7")
-        st.plotly_chart(fig5, use_container_width=True)
+        st.plotly_chart(fig5, width="stretch")
     with c2:
         rt_t = target_df.groupby('객실타입')['총금액'].sum().reset_index().assign(Type='Target')
         rt_r = ref_df.groupby('객실타입')['총금액'].sum().reset_index().assign(Type='Ref')
         top = rt_t.sort_values('총금액', ascending=False).head(10)['객실타입']
         fig6 = px.bar(pd.concat([rt_t, rt_r])[pd.concat([rt_t, rt_r])['객실타입'].isin(top)], x='객실타입', y='총금액', color='Type', barmode='group')
-        st.plotly_chart(fig6, use_container_width=True)
+        st.plotly_chart(fig6, width="stretch")
 
 # [TAB 5] Guest Loyalty
 with tabs[5]:
@@ -615,9 +615,9 @@ with tabs[5]:
         grade_counts.columns = ['등급', 'count']
         
         with c1:
-            st.plotly_chart(px.pie(grade_counts, names='등급', values='count', hole=0.4, title="고객 등급 구성비"), use_container_width=True)
+            st.plotly_chart(px.pie(grade_counts, names='등급', values='count', hole=0.4, title="고객 등급 구성비"), width="stretch")
         with c2:
-            st.plotly_chart(px.bar(grade_counts, x='등급', y='count', text_auto=True, title="등급별 예약 건수", color='등급'), use_container_width=True)
+            st.plotly_chart(px.bar(grade_counts, x='등급', y='count', text_auto=True, title="등급별 예약 건수", color='등급'), width="stretch")
 
         st.divider()
 
@@ -629,7 +629,7 @@ with tabs[5]:
                 avg_days = revisit_data.mean()
                 fig_inv = px.histogram(revisit_data, x='DaysSinceLastVisit', nbins=50, 
                                        title=f"평균 재방문 주기: 약 {avg_days:.1f}일", color_discrete_sequence=['#0052cc'])
-                st.plotly_chart(fig_inv, use_container_width=True)
+                st.plotly_chart(fig_inv, width="stretch")
         with col_in2:
             first_c = df_l.groupby('GuestKey').first()['거래처'].reset_index().rename(columns={'거래처':'First'})
             last_c = df_l.groupby('GuestKey').last()['거래처'].reset_index().rename(columns={'거래처':'Last'})
@@ -648,10 +648,10 @@ with tabs[5]:
             grade_perf = df_target_loyalty.groupby('CustomerGrade').apply(
                 lambda x: x['총금액'].sum() / x['객실수'].sum() if x['객실수'].sum() > 0 else 0
             ).reindex(grade_order).fillna(0).reset_index(name='ADR')
-            st.plotly_chart(px.line(grade_perf, x='CustomerGrade', y='ADR', markers=True, title="등급별 ADR 추이"), use_container_width=True)
+            st.plotly_chart(px.line(grade_perf, x='CustomerGrade', y='ADR', markers=True, title="등급별 ADR 추이"), width="stretch")
         with col_rev2:
             grade_rev_total = df_target_loyalty.groupby('CustomerGrade')['총금액'].sum().reindex(grade_order).fillna(0).reset_index()
-            st.plotly_chart(px.pie(grade_rev_total, names='CustomerGrade', values='총금액', title="등급별 매출 기여도 비중"), use_container_width=True)
+            st.plotly_chart(px.pie(grade_rev_total, names='CustomerGrade', values='총금액', title="등급별 매출 기여도 비중"), width="stretch")
 
         st.divider()
 
@@ -660,12 +660,12 @@ with tabs[5]:
         with list_tab1:
             vvip_list = guest_stats[guest_stats['TotalVisits'] >= 5].sort_values('TotalVisits', ascending=False)
             if not vvip_list.empty:
-                st.dataframe(vvip_list, use_container_width=True)
+                st.dataframe(vvip_list, width="stretch")
                 st.download_button("📥 VVIP 리스트 다운로드", data=vvip_list.to_csv(index=False).encode('utf-8-sig'), file_name="VVIP_List.csv")
         with list_tab2:
             regular_list = guest_stats[(guest_stats['TotalVisits'] >= 2) & (guest_stats['TotalVisits'] < 5)].sort_values('TotalVisits', ascending=False)
             if not regular_list.empty:
-                st.dataframe(regular_list, use_container_width=True)
+                st.dataframe(regular_list, width="stretch")
                 st.download_button("📥 단골 리스트 다운로드", data=regular_list.to_csv(index=False).encode('utf-8-sig'), file_name="Regular_Guest_List.csv")
 
 # [TAB 6] 🚀 수익 관리 (RM 정밀 분석 & 핀셋 필터) - 비교 기능 강화판
@@ -716,7 +716,7 @@ with tabs[6]:
             fig_pace.add_trace(go.Scatter(y=p_a.values, name="A기간 (기준)", line=dict(color='gray', dash='dot')))
             fig_pace.add_trace(go.Scatter(y=p_b.values, name="B기간 (현재)", line=dict(color='blue', width=3)))
             fig_pace.update_layout(title="기간별 누적 예약(Room Nights) 속도 비교")
-            st.plotly_chart(fig_pace, use_container_width=True)
+            st.plotly_chart(fig_pace, width="stretch")
 
         # 3) Wash-out (취소율) 비교 - [수정] A/B 비교 Bar Chart
         with sub_rm[2]:
@@ -739,7 +739,7 @@ with tabs[6]:
             top_acc = df_b_raw['거래처'].value_counts().head(10).index
             cxl_comp = cxl_comp[cxl_comp['거래처'].isin(top_acc)]
             
-            st.plotly_chart(px.bar(cxl_comp, x='거래처', y='취소율', color='기간', barmode='group', title="주요 거래처 취소율 변동 비교"), use_container_width=True)
+            st.plotly_chart(px.bar(cxl_comp, x='거래처', y='취소율', color='기간', barmode='group', title="주요 거래처 취소율 변동 비교"), width="stretch")
 
         # 4) 국적/채널 믹스 비교 - [수정] A/B 비교 Bar Chart
         with sub_rm[3]:
@@ -754,7 +754,7 @@ with tabs[6]:
                 nat_b.columns = ['국적', '비중']; nat_b['기간'] = 'B기간'
                 
                 nat_comp = pd.concat([nat_a.head(5), nat_b.head(5)])
-                st.plotly_chart(px.bar(nat_comp, x='국적', y='비중', color='기간', barmode='group'), use_container_width=True)
+                st.plotly_chart(px.bar(nat_comp, x='국적', y='비중', color='기간', barmode='group'), width="stretch")
 
             with col_chn:
                 st.markdown("**🏦 채널 점유율 (RN 기준)**")
@@ -765,7 +765,7 @@ with tabs[6]:
                 ch_b.columns = ['거래처', '비중']; ch_b['기간'] = 'B기간'
                 
                 ch_comp = pd.concat([ch_a.head(5), ch_b.head(5)])
-                st.plotly_chart(px.bar(ch_comp, x='거래처', y='비중', color='기간', barmode='group'), use_container_width=True)
+                st.plotly_chart(px.bar(ch_comp, x='거래처', y='비중', color='기간', barmode='group'), width="stretch")
 
         # 5) 픽업 (Net Change) - 유지
         with sub_rm[4]:
@@ -776,7 +776,7 @@ with tabs[6]:
             # 인덱스(날짜)가 달라서 단순 빼기가 안될 수 있음 -> 날짜 상관없이 'D-Day' 흐름이나 총량 비교가 나음
             # 여기서는 B기간의 일자별 생산량만 보여주는게 더 직관적일 수 있음 (사장님 취향 반영)
             st.write("▼ B기간(비교 기간) 일자별 룸나잇 생산 현황")
-            st.plotly_chart(px.bar(pk_b.reset_index(), x=d_col, y='RoomNights', color='RoomNights'), use_container_width=True)
+            st.plotly_chart(px.bar(pk_b.reset_index(), x=d_col, y='RoomNights', color='RoomNights'), width="stretch")
 
 # [TAB 7] 🎯 수익 전략 (ID 충돌 방지 및 수치 정밀 보정본)
 with tabs[7]:
@@ -805,7 +805,7 @@ with tabs[7]:
             return g[g['RoomNights'] > 0]
         ga = make_golden(s_clean_a, 'A기간'); gb = make_golden(s_clean_b, 'B기간')
         if not ga.empty or not gb.empty:
-            st.plotly_chart(px.scatter(pd.concat([ga, gb]), x='ADR', y='RoomRevenue', size='RoomNights', color='Period', title="ADR 최적점 비교"), use_container_width=True, key="chart_golden_scatter")
+            st.plotly_chart(px.scatter(pd.concat([ga, gb]), x='ADR', y='RoomRevenue', size='RoomNights', color='Period', title="ADR 최적점 비교"), width="stretch", key="chart_golden_scatter")
         else: st.warning("데이터 부족")
 
     # 2. 국적 분석
@@ -817,7 +817,7 @@ with tabs[7]:
             return n[n['RoomNights'] > 5]
         na = make_nat(s_clean_a, 'A기간'); nb = make_nat(s_clean_b, 'B기간')
         if not na.empty or not nb.empty:
-            st.plotly_chart(px.scatter(pd.concat([na, nb]), x='LeadTime', y='RoomRevenue', size='RoomNights', color='Period', text='국적', title="국적별 수익성"), use_container_width=True, key="chart_nat_scatter")
+            st.plotly_chart(px.scatter(pd.concat([na, nb]), x='LeadTime', y='RoomRevenue', size='RoomNights', color='Period', text='국적', title="국적별 수익성"), width="stretch", key="chart_nat_scatter")
 
     # 3. 정밀 취소 예측 (가중치 로직)
     with st_tabs[2]:
@@ -844,7 +844,7 @@ with tabs[7]:
             c_p2.metric("예상 취소 리스크", f"-{t_risk:,.0f}박")
             c_p3.metric("최종 실투숙 예측", f"{t_otb - t_risk:,.0f}박")
             
-            st.plotly_chart(px.bar(current_bookings.groupby('LT_Bin', observed=True)['Expected_Cancel_RN'].sum().reset_index(), x='LT_Bin', y='Expected_Cancel_RN', title="구간별 취소 리스크 상세"), use_container_width=True, key="chart_cancel_bar")
+            st.plotly_chart(px.bar(current_bookings.groupby('LT_Bin', observed=True)['Expected_Cancel_RN'].sum().reset_index(), x='LT_Bin', y='Expected_Cancel_RN', title="구간별 취소 리스크 상세"), width="stretch", key="chart_cancel_bar")
 
     # 4. 가격 민감도
     with st_tabs[3]:
@@ -857,7 +857,7 @@ with tabs[7]:
             return g[(g['OCC']>0) & (g['ADR']>0)]
         sa, sb = prepare_sens(s_clean_a, 'A기간'), prepare_sens(s_clean_b, 'B기간')
         if not sa.empty or not sb.empty:
-            st.plotly_chart(px.scatter(pd.concat([sa, sb]), x='OCC', y='ADR', color='Period', size='RoomNights', title="가격 민감도 (OCC vs ADR)"), use_container_width=True, key="chart_sens_scatter")
+            st.plotly_chart(px.scatter(pd.concat([sa, sb]), x='OCC', y='ADR', color='Period', size='RoomNights', title="가격 민감도 (OCC vs ADR)"), width="stretch", key="chart_sens_scatter")
 
     # 5. 히트맵 (DuplicateElementId 에러 해결 포인트)
     with st_tabs[4]:
@@ -876,8 +876,8 @@ with tabs[7]:
         
         ch_1, ch_2 = st.columns(2)
         # 중요: 각 plotly_chart에 유니크한 key를 부여함
-        with ch_1: st.plotly_chart(plot_heatmap(s_clean_a, "A기간 매출 패턴", zmin, zmax), use_container_width=True, key="hm_chart_a")
-        with ch_2: st.plotly_chart(plot_heatmap(s_clean_b, "B기간 매출 패턴", zmin, zmax), use_container_width=True, key="hm_chart_b")
+        with ch_1: st.plotly_chart(plot_heatmap(s_clean_a, "A기간 매출 패턴", zmin, zmax), width="stretch", key="hm_chart_a")
+        with ch_2: st.plotly_chart(plot_heatmap(s_clean_b, "B기간 매출 패턴", zmin, zmax), width="stretch", key="hm_chart_b")
 
     # 6. 취소 시점
     with st_tabs[5]:
@@ -886,7 +886,7 @@ with tabs[7]:
         if not ra.empty: fig_c.add_trace(go.Histogram(x=ra['LeadTime'], name='A기간 취소', opacity=0.5, marker_color='gray'))
         if not rb.empty: fig_c.add_trace(go.Histogram(x=rb['LeadTime'], name='B기간 취소', opacity=0.5, marker_color='red'))
         fig_c.update_layout(barmode='overlay', title="취소 리드타임 분포")
-        st.plotly_chart(fig_c, use_container_width=True, key="chart_cxl_hist_final")
+        st.plotly_chart(fig_c, width="stretch", key="chart_cxl_hist_final")
 
 # -----------------------------------------------------------------------------
 # 6. 포캐스팅 시스템 연동 (세션 동기화)
