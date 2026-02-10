@@ -8,9 +8,6 @@ from firebase_admin import credentials, firestore
 import time
 import os
 
-if os.path.exists("local_booking_cache.parquet"):
-    os.remove("local_booking_cache.parquet")
-
 # -----------------------------------------------------------------------------
 # 1. Firebase 접속 및 초기 설정
 # -----------------------------------------------------------------------------
