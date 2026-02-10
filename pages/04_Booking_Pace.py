@@ -11,22 +11,24 @@ import os
 # -----------------------------------------------------------------------------
 # 1. Firebase 접속 및 초기 설정
 # -----------------------------------------------------------------------------
-st.set_page_config(layout="wide", page_title="Amber Pure Hill Dashboard", page_icon="🏨")
+# st.set_page_config는 파일의 맨 처음에 딱 한 번만 있어야 합니다. 
+# 만약 맨 위에 이미 있다면 이 줄은 지우셔도 됩니다.
+# st.set_page_config(layout="wide", page_title="Amber Pure Hill Dashboard", page_icon="🏨")
 
 def init_firebase_direct():
     if not firebase_admin._apps:
         try:
             # 1순위: Streamlit Secrets
-            key_dict = dict(st.secrets["firebase"])
-            cred = credentials.Certificate(key_dict)
-            firebase_admin.initialize_app(cred)
-        except Exception as e:
-            try:
+            if "firebase" in st.secrets:
+                key_dict = dict(st.secrets["firebase"])
+                cred = credentials.Certificate(key_dict)
+                firebase_admin.initialize_app(cred)
+            else:
                 # 2순위: 로컬 파일
                 cred = credentials.Certificate("serviceAccountKey.json")
                 firebase_admin.initialize_app(cred)
-            except:
-                return None, str(e)
+        except Exception as e:
+            return None, str(e)
     return firestore.client(), "연결됨 ✅"
 
 db, db_status = init_firebase_direct()
@@ -40,7 +42,7 @@ def upload_to_firestore(df_new):
     if db is None: return
     df_new = df_new.copy()
     
-    # 업로드 시점 자동 기록 (이게 있어야 필터에서 최신 업데이트본 확인 가능)
+    # 업로드 시점 자동 기록
     upload_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     df_new['Snapshot'] = upload_time
     
@@ -67,14 +69,14 @@ def upload_to_firestore(df_new):
     
     for _, row in df_upload.iterrows():
         doc_id = row['예약번호']
-        # 예약번호가 없거나 비어있으면 건너뜀 (안전장치)
+        # 예약번호가 없거나 비어있으면 건너뜀
         if not doc_id or doc_id == 'None' or doc_id == '': continue
         
         # [핵심] 예약번호를 문서 ID로 지정하여 동일 번호는 자동 업데이트
         doc_ref = db.collection('hotel_bookings').document(doc_id)
         payload = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
         
-        # merge=True: 기존 필드는 유지하되 바뀐 데이터(상태 등)만 쏙 덮어씀
+        # merge=True: 기존 필드는 유지하되 바뀐 데이터만 덮어씀
         batch.set(doc_ref, payload, merge=True)
         count += 1
         
@@ -92,9 +94,9 @@ def upload_to_firestore(df_new):
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     st.cache_data.clear()
-    
+
 def delete_all_data():
-    if db is None: return
+    if db is None: return 0
     coll_ref = db.collection('hotel_bookings')
     batch_size = 200
     total_del = 0
@@ -116,21 +118,20 @@ def delete_all_data():
     st.cache_data.clear()
     return total_del
 
-# @st.cache_data(ttl=3600)
-
+# 캐시 기능 활성화 (문제 발생 시 주석 처리 가능)
+@st.cache_data(ttl=3600)
 def load_data_with_snapshot_cache():
     df = pd.DataFrame()
     source_msg = ""
 
-    # [수정 1] 로컬 캐시 시도 (리턴하지 않고 일단 변수에 담기만 함)
+    # 1. 로컬 캐시 시도
     if os.path.exists(CACHE_FILE):
         try:
             df = pd.read_parquet(CACHE_FILE)
             source_msg = "로컬 캐시 (고속)"
         except: pass
 
-    # [수정 2] 캐시가 없거나, 새로운 데이터를 반영하기 위해 파이어베이스 로드
-    # (이미 업로드 함수에서 캐시를 지우게 설계했으므로, 업로드 직후엔 여기로 들어옵니다)
+    # 2. 캐시가 없으면 파이어베이스 로드
     if df.empty and db is not None:
         try:
             # 넉넉하게 15만 건까지 불러오도록 제한 상향
@@ -145,24 +146,36 @@ def load_data_with_snapshot_cache():
     if df.empty: return pd.DataFrame(), "데이터 없음"
 
     # -------------------------------------------------------------------------
-    # [핵심 수술 부위: 중복 제거] - 여기서 4,188박이 2,270박으로 잡힙니다.
+    # [핵심 수술 부위: 데이터 정제 및 중복 제거]
     # -------------------------------------------------------------------------
     
-    # 1. 스냅샷 정보가 없는 옛날 데이터 보정
+    # 예약번호 문자열 변환 (안전장치)
+    df['예약번호'] = df['예약번호'].astype(str)
+
+    # 스냅샷 정보가 없는 옛날 데이터 보정
     if 'Snapshot' not in df.columns: 
         df['Snapshot'] = "이전 데이터"
     
-    # 2. 예약번호를 기준으로 가장 '최신 스냅샷'만 남기고 중복 제거
-    # 사장님이 오늘 올린 데이터(오늘 날짜 스냅샷)가 옛날 데이터보다 우선순위를 갖게 함
+    # 최신 스냅샷이 위로 오게 정렬
     df = df.sort_values('Snapshot', ascending=False)
-    # 사장님이 말씀하신 필드들을 모두 기준으로 넣었습니다.
-    df = df.drop_duplicates(
-        subset=['예약번호', '총금액', '객실수', '객실타입', '객실료', '입실일자'], 
-        keep='first'
-    ).copy()
+    
+    # [중복 제거 로직]
+    # 예약번호가 같더라도 '총금액', '객실수', '객실타입', '입실일자' 중 하나라도 다르면
+    # 단체 예약의 세부 항목으로 간주하여 삭제하지 않고 보존합니다.
+    # (단, 완전히 똑같은 데이터가 여러 번 들어간 경우는 최신 것 하나만 남깁니다.)
+    
+    # 실제 존재하는 컬럼만 사용하여 중복 제거 기준 설정 (에러 방지)
+    subset_cols = ['예약번호', '총금액', '객실수', '객실타입', '객실료', '입실일자']
+    valid_subset = [c for c in subset_cols if c in df.columns]
+    
+    if valid_subset:
+        df = df.drop_duplicates(subset=valid_subset, keep='first').copy()
+    else:
+        # 만약 위 컬럼들이 없다면 최소한 예약번호로라도 중복 제거
+        df = df.drop_duplicates(subset=['예약번호'], keep='first').copy()
 
     # -------------------------------------------------------------------------
-    # 3. 데이터 전처리 (기존 로직 유지 및 보강)
+    # 3. 데이터 전처리 (날짜 및 숫자 변환)
     # -------------------------------------------------------------------------
     df['입실일자'] = pd.to_datetime(df['입실일자'], errors='coerce').dt.tz_localize(None)
     df['예약일자'] = pd.to_datetime(df['예약일자'], errors='coerce').dt.tz_localize(None)
@@ -178,29 +191,32 @@ def load_data_with_snapshot_cache():
     
     for col in cols_to_numeric:
         if col in df.columns:
-            # 1. 강제로 숫자형 변환 (문자열 등이 섞여도 강제 변환)
+            # 1. 강제로 숫자형 변환
             df[col] = pd.to_numeric(df[col], errors='coerce')
-            # 2. 결측치(NaN)를 0이 아닌 1로 채워야 하는 항목들 (박수, 객실수) 처리
+            
+            # 2. 박수, 객실수는 0이나 비어있으면 1로 채움 (누락 방지)
             if col in ['박수', '객실수']:
-                df[col] = df[col].fillna(1).replace(0, 1)
+                df[col] = df[col].fillna(1)
             else:
                 df[col] = df[col].fillna(0)
         else:
-            # 컬럼 자체가 없을 경우 기본값 생성
+            # 컬럼이 아예 없으면 기본값 생성
             df[col] = 1 if col in ['박수', '객실수'] else 0
 
-    # [수치 누락 원천 차단] 룸나잇 계산
-    # 박수가 0.5박(Day Use 등)일 경우도 대비하여 float 유지
+    # 0박, 0객실인 데이터를 최소 1로 강제 보정
+    df['박수'] = df['박수'].replace(0, 1)
+    df['객실수'] = df['객실수'].replace(0, 1)
+    
+    # 룸나잇 계산 (소수점 박수 고려하여 곱셈)
     df['RoomNights'] = df['객실수'] * df['박수']
     
-    # [매출 계산] 객실료가 비어있는 행이 있을 수 있으므로 총금액과 비교 보정
+    # [매출 계산] 객실료가 0원이면 총금액을 매출로 사용 (데이터 누락 방지)
     if '객실료' in df.columns:
-        # 객실료가 0인 경우 총금액으로 보충 (데이터 누락 방지)
         df['RoomRevenue'] = df.apply(lambda x: x['총금액'] if x['객실료'] == 0 else x['객실료'], axis=1)
     else:
         df['RoomRevenue'] = df['총금액']
 
-    # 4. 정제된 데이터를 파일로 저장 (다음 로딩을 위해)
+    # 정제된 데이터를 파일로 저장 (다음 로딩 속도 향상)
     df.to_parquet(CACHE_FILE)
     
     return df, source_msg
