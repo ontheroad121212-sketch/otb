@@ -7,6 +7,9 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import time
 import os
+if os.path.exists("local_booking_cache.parquet"):
+    os.remove("local_booking_cache.parquet")
+    st.toast("🔥 서버의 낡은 캐시 파일을 불태웠습니다! 이제 깨끗한 데이터를 불러옵니다.")
 
 # -----------------------------------------------------------------------------
 # 1. Firebase 접속 및 초기 설정
