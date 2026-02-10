@@ -121,105 +121,108 @@ def delete_all_data():
 # 캐시 기능 활성화 (문제 발생 시 주석 처리 가능)
 @st.cache_data(ttl=3600)
 def load_data_with_snapshot_cache():
-    df = pd.DataFrame()
-    source_msg = ""
+    try:
+        # ---------------------------------------------------------------------
+        # 1. 기초 설정 및 라이브러리 체크
+        # ---------------------------------------------------------------------
+        df = pd.DataFrame()
+        source_msg = ""
+        
+        # 2. 로컬 캐시 시도
+        if os.path.exists(CACHE_FILE):
+            try:
+                df = pd.read_parquet(CACHE_FILE)
+                source_msg = "로컬 캐시 (고속)"
+            except: pass
 
-    # 1. 로컬 캐시 시도
-    if os.path.exists(CACHE_FILE):
-        try:
-            df = pd.read_parquet(CACHE_FILE)
-            source_msg = "로컬 캐시 (고속)"
-        except: pass
+        # 3. 파이어베이스 로드
+        if df.empty and db is not None:
+            try:
+                # 15만 건 제한
+                docs = db.collection('hotel_bookings').limit(150000).stream() 
+                data = [doc.to_dict() for doc in docs]
+                if not data: return pd.DataFrame(), "데이터 없음"
+                df = pd.DataFrame(data)
+                source_msg = "Firestore (실시간)"
+            except Exception as e:
+                return pd.DataFrame(), f"DB 조회 에러: {e}"
 
-    # 2. 캐시가 없으면 파이어베이스 로드
-    if df.empty and db is not None:
-        try:
-            # 넉넉하게 15만 건까지 불러오도록 제한 상향
-            docs = db.collection('hotel_bookings').limit(150000).stream() 
-            data = [doc.to_dict() for doc in docs]
-            if not data: return pd.DataFrame(), "데이터 없음"
-            df = pd.DataFrame(data)
-            source_msg = "Firestore (실시간)"
-        except Exception as e:
-            return pd.DataFrame(), f"조회 에러: {e}"
+        if df.empty: return pd.DataFrame(), "데이터 없음"
 
-    if df.empty: return pd.DataFrame(), "데이터 없음"
+        # ---------------------------------------------------------------------
+        # [핵심] 데이터 정제 및 중복 제거 (안전 장치 추가)
+        # ---------------------------------------------------------------------
+        
+        # 예약번호 문자열 변환 (없으면 생성)
+        if '예약번호' not in df.columns: df['예약번호'] = "Unknown"
+        df['예약번호'] = df['예약번호'].astype(str)
 
-    # -------------------------------------------------------------------------
-    # [핵심 수술 부위: 데이터 정제 및 중복 제거]
-    # -------------------------------------------------------------------------
-    
-    # 예약번호 문자열 변환 (안전장치)
-    df['예약번호'] = df['예약번호'].astype(str)
+        # 스냅샷 보정
+        if 'Snapshot' not in df.columns: df['Snapshot'] = "이전 데이터"
+        
+        # 정렬
+        df = df.sort_values('Snapshot', ascending=False)
+        
+        # [중복 제거] 컬럼 존재 여부 확인 후 안전하게 실행
+        possible_cols = ['예약번호', '총금액', '객실수', '객실타입', '객실료', '입실일자']
+        valid_cols = [c for c in possible_cols if c in df.columns]
+        
+        if valid_cols:
+            df = df.drop_duplicates(subset=valid_cols, keep='first').copy()
+        else:
+            df = df.drop_duplicates(subset=['예약번호'], keep='first').copy()
 
-    # 스냅샷 정보가 없는 옛날 데이터 보정
-    if 'Snapshot' not in df.columns: 
-        df['Snapshot'] = "이전 데이터"
-    
-    # 최신 스냅샷이 위로 오게 정렬
-    df = df.sort_values('Snapshot', ascending=False)
-    
-    # [중복 제거 로직]
-    # 예약번호가 같더라도 '총금액', '객실수', '객실타입', '입실일자' 중 하나라도 다르면
-    # 단체 예약의 세부 항목으로 간주하여 삭제하지 않고 보존합니다.
-    # (단, 완전히 똑같은 데이터가 여러 번 들어간 경우는 최신 것 하나만 남깁니다.)
-    
-    # 실제 존재하는 컬럼만 사용하여 중복 제거 기준 설정 (에러 방지)
-    subset_cols = ['예약번호', '총금액', '객실수', '객실타입', '객실료', '입실일자']
-    valid_subset = [c for c in subset_cols if c in df.columns]
-    
-    if valid_subset:
-        df = df.drop_duplicates(subset=valid_subset, keep='first').copy()
-    else:
-        # 만약 위 컬럼들이 없다면 최소한 예약번호로라도 중복 제거
-        df = df.drop_duplicates(subset=['예약번호'], keep='first').copy()
-
-    # -------------------------------------------------------------------------
-    # 3. 데이터 전처리 (날짜 및 숫자 변환)
-    # -------------------------------------------------------------------------
-    df['입실일자'] = pd.to_datetime(df['입실일자'], errors='coerce').dt.tz_localize(None)
-    df['예약일자'] = pd.to_datetime(df['예약일자'], errors='coerce').dt.tz_localize(None)
-    df = df.dropna(subset=['입실일자', '예약일자'])
-    
-    df['LeadTime'] = (df['입실일자'] - df['예약일자']).dt.days
-    df['Year'] = df['입실일자'].dt.isocalendar().year.fillna(0).astype(int)
-    df['Month'] = df['입실일자'].dt.month.fillna(0).astype(int)
-    df['Week'] = df['입실일자'].dt.isocalendar().week.fillna(0).astype(int)
-    df['DayOfWeek'] = df['입실일자'].dt.day_name()
-
-    cols_to_numeric = ['객실료', '총금액', '박수', '객실수', '객단가']
-    
-    for col in cols_to_numeric:
-        if col in df.columns:
-            # 1. 강제로 숫자형 변환
+        # ---------------------------------------------------------------------
+        # 4. 데이터 전처리 (날짜/숫자 변환)
+        # ---------------------------------------------------------------------
+        # 날짜 변환
+        for col in ['입실일자', '예약일자']:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.tz_localize(None)
+        
+        df = df.dropna(subset=['입실일자', '예약일자'])
+        
+        # 파생 변수
+        df['LeadTime'] = (df['입실일자'] - df['예약일자']).dt.days
+        df['Year'] = df['입실일자'].dt.isocalendar().year.fillna(0).astype(int)
+        df['Month'] = df['입실일자'].dt.month.fillna(0).astype(int)
+        
+        # 숫자 변환 및 결측치 채우기
+        cols_num = ['객실료', '총금액', '박수', '객실수', '객단가']
+        for col in cols_num:
+            if col not in df.columns: df[col] = 0 # 컬럼 없으면 0으로 생성
+            
+            # 강제 숫자 변환
             df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            # 2. 박수, 객실수는 0이나 비어있으면 1로 채움 (누락 방지)
+            # 박수/객실수는 비어있으면 1, 아니면 0
             if col in ['박수', '객실수']:
                 df[col] = df[col].fillna(1)
             else:
                 df[col] = df[col].fillna(0)
+
+        # 0박, 0객실 보정
+        df['박수'] = df['박수'].replace(0, 1)
+        df['객실수'] = df['객실수'].replace(0, 1)
+        
+        df['RoomNights'] = df['객실수'] * df['박수']
+        
+        # 매출 계산
+        if '객실료' in df.columns:
+            df['RoomRevenue'] = df.apply(lambda x: x['총금액'] if x['객실료'] == 0 else x['객실료'], axis=1)
         else:
-            # 컬럼이 아예 없으면 기본값 생성
-            df[col] = 1 if col in ['박수', '객실수'] else 0
+            df['RoomRevenue'] = df['총금액']
 
-    # 0박, 0객실인 데이터를 최소 1로 강제 보정
-    df['박수'] = df['박수'].replace(0, 1)
-    df['객실수'] = df['객실수'].replace(0, 1)
-    
-    # 룸나잇 계산 (소수점 박수 고려하여 곱셈)
-    df['RoomNights'] = df['객실수'] * df['박수']
-    
-    # [매출 계산] 객실료가 0원이면 총금액을 매출로 사용 (데이터 누락 방지)
-    if '객실료' in df.columns:
-        df['RoomRevenue'] = df.apply(lambda x: x['총금액'] if x['객실료'] == 0 else x['객실료'], axis=1)
-    else:
-        df['RoomRevenue'] = df['총금액']
+        # 저장
+        df.to_parquet(CACHE_FILE)
+        
+        return df, source_msg
 
-    # 정제된 데이터를 파일로 저장 (다음 로딩 속도 향상)
-    df.to_parquet(CACHE_FILE)
-    
-    return df, source_msg
+    except Exception as e:
+        # 에러가 나면 앱을 끄지 말고 원인을 화면에 출력해라!
+        st.error(f"🚨 데이터 로딩 중 오류 발생: {str(e)}")
+        # 빈 데이터프레임 리턴해서 멈춤 방지
+        return pd.DataFrame(), "에러 발생"
 
 # -----------------------------------------------------------------------------
 # 3. 사이드바 및 필터 (취소 정밀 필터 적용)
