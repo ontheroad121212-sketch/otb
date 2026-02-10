@@ -117,59 +117,75 @@ def delete_all_data():
     return total_del
 
 @st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600)
 def load_data_with_snapshot_cache():
-    # 1. 로컬 캐시 시도 (있으면 바로 리턴! -> 속도 향상 & 중복 저장 방지)
+    df = pd.DataFrame()
+    source_msg = ""
+
+    # [수정 1] 로컬 캐시 시도 (리턴하지 않고 일단 변수에 담기만 함)
     if os.path.exists(CACHE_FILE):
         try:
             df = pd.read_parquet(CACHE_FILE)
-            return df, "로컬 캐시 (고속)"
+            source_msg = "로컬 캐시 (고속)"
         except: pass
 
-    # 2. 캐시 실패 시 파이어베이스 로드 (여기서만 비용 발생)
-    if db is None: return pd.DataFrame(), "DB 미연결"
-    
-    try:
-        docs = db.collection('hotel_bookings').limit(100000).stream() 
-        data = [doc.to_dict() for doc in docs]
-        if not data: return pd.DataFrame(), "데이터 없음"
-        df = pd.DataFrame(data)
-        source_msg = "Firestore (실시간)"
-    except Exception as e: 
-        return pd.DataFrame(), f"조회 에러: {e}"
+    # [수정 2] 캐시가 없거나, 새로운 데이터를 반영하기 위해 파이어베이스 로드
+    # (이미 업로드 함수에서 캐시를 지우게 설계했으므로, 업로드 직후엔 여기로 들어옵니다)
+    if df.empty and db is not None:
+        try:
+            # 넉넉하게 15만 건까지 불러오도록 제한 상향
+            docs = db.collection('hotel_bookings').limit(150000).stream() 
+            data = [doc.to_dict() for doc in docs]
+            if not data: return pd.DataFrame(), "데이터 없음"
+            df = pd.DataFrame(data)
+            source_msg = "Firestore (실시간)"
+        except Exception as e:
+            return pd.DataFrame(), f"조회 에러: {e}"
 
-    # 3. 데이터 전처리 (최초 1회만 실행됨)
-    # [날짜 변환]
+    if df.empty: return pd.DataFrame(), "데이터 없음"
+
+    # -------------------------------------------------------------------------
+    # [핵심 수술 부위: 중복 제거] - 여기서 4,188박이 2,270박으로 잡힙니다.
+    # -------------------------------------------------------------------------
+    
+    # 1. 스냅샷 정보가 없는 옛날 데이터 보정
+    if 'Snapshot' not in df.columns: 
+        df['Snapshot'] = "이전 데이터"
+    
+    # 2. 예약번호를 기준으로 가장 '최신 스냅샷'만 남기고 중복 제거
+    # 사장님이 오늘 올린 데이터(오늘 날짜 스냅샷)가 옛날 데이터보다 우선순위를 갖게 함
+    df = df.sort_values('Snapshot', ascending=False)
+    df = df.drop_duplicates(subset=['예약번호'], keep='first').copy()
+
+    # -------------------------------------------------------------------------
+    # 3. 데이터 전처리 (기존 로직 유지 및 보강)
+    # -------------------------------------------------------------------------
     df['입실일자'] = pd.to_datetime(df['입실일자'], errors='coerce').dt.tz_localize(None)
     df['예약일자'] = pd.to_datetime(df['예약일자'], errors='coerce').dt.tz_localize(None)
     df = df.dropna(subset=['입실일자', '예약일자'])
     
-    # [파생 변수 생성]
     df['LeadTime'] = (df['입실일자'] - df['예약일자']).dt.days
     df['Year'] = df['입실일자'].dt.isocalendar().year.fillna(0).astype(int)
     df['Month'] = df['입실일자'].dt.month.fillna(0).astype(int)
     df['Week'] = df['입실일자'].dt.isocalendar().week.fillna(0).astype(int)
     df['DayOfWeek'] = df['입실일자'].dt.day_name()
-    if 'Snapshot' not in df.columns: df['Snapshot'] = "이전 데이터"
 
-    # [숫자 변환]
+    # [숫자 변환 및 ADR 정밀 계산]
     cols_to_numeric = ['객실료', '총금액', '박수', '객실수', '객단가']
     for col in cols_to_numeric:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        else:
-            df[col] = 0
     
-    # [ADR 정밀 계산]
     df['박수'] = df['박수'].replace(0, 1)
     df['객실수'] = df['객실수'].replace(0, 1)
     df['RoomNights'] = df['객실수'] * df['박수']
     
-    if '객실료' in df.columns:
+    if '객실료' in df.columns and df['객실료'].sum() > 0:
         df['RoomRevenue'] = df['객실료']
     else:
         df['RoomRevenue'] = df['총금액']
 
-    # 4. 처리된 데이터를 파일로 저장 (다음을 위해)
+    # 4. 정제된 데이터를 파일로 저장 (다음 로딩을 위해)
     df.to_parquet(CACHE_FILE)
     
     return df, source_msg
