@@ -170,18 +170,29 @@ def load_data_with_snapshot_cache():
     df['Week'] = df['입실일자'].dt.isocalendar().week.fillna(0).astype(int)
     df['DayOfWeek'] = df['입실일자'].dt.day_name()
 
-    # [숫자 변환 및 ADR 정밀 계산]
     cols_to_numeric = ['객실료', '총금액', '박수', '객실수', '객단가']
+    
     for col in cols_to_numeric:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    
-    df['박수'] = df['박수'].replace(0, 1)
-    df['객실수'] = df['객실수'].replace(0, 1)
+            # 1. 강제로 숫자형 변환 (문자열 등이 섞여도 강제 변환)
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            # 2. 결측치(NaN)를 0이 아닌 1로 채워야 하는 항목들 (박수, 객실수) 처리
+            if col in ['박수', '객실수']:
+                df[col] = df[col].fillna(1).replace(0, 1)
+            else:
+                df[col] = df[col].fillna(0)
+        else:
+            # 컬럼 자체가 없을 경우 기본값 생성
+            df[col] = 1 if col in ['박수', '객실수'] else 0
+
+    # [수치 누락 원천 차단] 룸나잇 계산
+    # 박수가 0.5박(Day Use 등)일 경우도 대비하여 float 유지
     df['RoomNights'] = df['객실수'] * df['박수']
     
-    if '객실료' in df.columns and df['객실료'].sum() > 0:
-        df['RoomRevenue'] = df['객실료']
+    # [매출 계산] 객실료가 비어있는 행이 있을 수 있으므로 총금액과 비교 보정
+    if '객실료' in df.columns:
+        # 객실료가 0인 경우 총금액으로 보충 (데이터 누락 방지)
+        df['RoomRevenue'] = df.apply(lambda x: x['총금액'] if x['객실료'] == 0 else x['객실료'], axis=1)
     else:
         df['RoomRevenue'] = df['총금액']
 
