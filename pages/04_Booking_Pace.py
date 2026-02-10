@@ -729,48 +729,38 @@ with tabs[6]:
             st.write("▼ B기간(비교 기간) 일자별 룸나잇 생산 현황")
             st.plotly_chart(px.bar(pk_b.reset_index(), x=d_col, y='RoomNights', color='RoomNights'), use_container_width=True)
 
-# [TAB 7] 🎯 수익 전략 (A vs B 정밀 비교 & 고도화된 취소 예측)
+# [TAB 7] 🎯 수익 전략 (ID 충돌 방지 및 수치 정밀 보정본)
 with tabs[7]:
     st.header("🎯 데이터 기반 수익 전략 (A vs B 정밀 비교)")
-    st.info("💡 과거(A)와 현재(B)의 전략 효율성을 1:1로 비교 분석합니다.")
     
     # 1. 전략 전용 기간 선택
     sc1, sc2 = st.columns(2)
-    with sc1: sd_a = st.date_input("전략 기준 기간 (A)", [datetime(2025,1,1), datetime(2025,1,31)], key="sda")
-    with sc2: sd_b = st.date_input("전략 비교 기간 (B)", [datetime(2026,1,1), datetime(2026,1,24)], key="sdb")
+    with sc1: sd_a = st.date_input("전략 기준 기간 (A)", [datetime(2025,1,1), datetime(2025,1,31)], key="sda_strat")
+    with sc2: sd_b = st.date_input("전략 비교 기간 (B)", [datetime(2026,1,1), datetime(2026,1,24)], key="sdb_strat")
     
-    # 데이터 필터링
+    # 데이터 필터링 (중복 방지를 위해 확실하게 카피본 생성)
     s_clean_a = df_clean[(df_clean['입실일자'].dt.date >= sd_a[0]) & (df_clean['입실일자'].dt.date <= sd_a[1])].copy()
     s_clean_b = df_clean[(df_clean['입실일자'].dt.date >= sd_b[0]) & (df_clean['입실일자'].dt.date <= sd_b[1])].copy()
-    
     s_raw_a = df_raw[(df_raw['입실일자'].dt.date >= sd_a[0]) & (df_raw['입실일자'].dt.date <= sd_a[1])].copy()
     s_raw_b = df_raw[(df_raw['입실일자'].dt.date >= sd_b[0]) & (df_raw['입실일자'].dt.date <= sd_b[1])].copy()
     
-    st_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "📉 가격 민감도", "📅 히트맵", "⏳ 취소 시점"])
+    st_tabs = st.tabs(["💰 황금 ADR", "🌍 국적 분석", "🛡️ 정밀 취소 예측", "📉 가격 민감도", "📅 히트맵", "⏳ 취소 시점"])
     
-    # 1. 황금 ADR
+    # 1. 황금 ADR (비교 차트에 유니크 키 추가)
     with st_tabs[0]:
-        st.write("### 💰 객실매출 극대화를 위한 최적 ADR 지점")
         def make_golden(d, label):
             if d.empty: return pd.DataFrame()
             g = d.groupby('입실일자').agg({'RoomRevenue':'sum', 'RoomNights':'sum'}).reset_index()
-            g = g[g['RoomNights'] > 0]
             g['ADR'] = g['RoomRevenue'] / g['RoomNights']
             g['Period'] = label
-            return g
-        ga = make_golden(s_clean_a, 'A기간 (기준)'); gb = make_golden(s_clean_b, 'B기간 (비교)')
+            return g[g['RoomNights'] > 0]
+        ga = make_golden(s_clean_a, 'A기간'); gb = make_golden(s_clean_b, 'B기간')
         if not ga.empty or not gb.empty:
-            gall = pd.concat([ga, gb])
-            fig_gold = px.scatter(gall, x='ADR', y='RoomRevenue', size='RoomNights', color='Period', 
-                                  title="황금 ADR 비교 (점이 가장 높은 곳이 최적가)",
-                                  labels={'ADR': '객단가 (ADR)', 'RoomRevenue': '일일 객실매출'},
-                                  color_discrete_map={'A기간 (기준)': 'gray', 'B기간 (비교)': '#0052cc'})
-            st.plotly_chart(fig_gold, use_container_width=True)
+            st.plotly_chart(px.scatter(pd.concat([ga, gb]), x='ADR', y='RoomRevenue', size='RoomNights', color='Period', title="ADR 최적점 비교"), use_container_width=True, key="chart_golden_scatter")
         else: st.warning("데이터 부족")
 
     # 2. 국적 분석
     with st_tabs[1]:
-        st.write("### 🌍 국적별 리드타임 및 수익성 패턴")
         def make_nat(d, label):
             if d.empty: return pd.DataFrame()
             n = d.groupby('국적').agg({'RoomRevenue':'mean', 'LeadTime':'mean', 'RoomNights':'sum'}).reset_index()
@@ -778,31 +768,54 @@ with tabs[7]:
             return n[n['RoomNights'] > 5]
         na = make_nat(s_clean_a, 'A기간'); nb = make_nat(s_clean_b, 'B기간')
         if not na.empty or not nb.empty:
-            st.plotly_chart(px.scatter(pd.concat([na, nb]), x='LeadTime', y='RoomRevenue', size='RoomNights', color='Period', text='국적', 
-                                 title="국적별 수익성"), use_container_width=True)
-        else: st.warning("데이터 부족")
+            st.plotly_chart(px.scatter(pd.concat([na, nb]), x='LeadTime', y='RoomRevenue', size='RoomNights', color='Period', text='국적', title="국적별 수익성"), use_container_width=True, key="chart_nat_scatter")
+
+    # 3. 정밀 취소 예측 (가중치 로직)
+    with st_tabs[2]:
+        st.write("### 🛡️ 리드타임 가중치 적용 정밀 취소 예측")
+        # 가중치 계산용 전체 데이터 확보
+        train_df = df_raw.copy()
+        train_df['LeadTime'] = train_df['LeadTime'].fillna(0)
+        bins = [-1, 3, 7, 30, 90, 9999]; labels = ['0-3일', '4-7일', '8-30일', '31-90일', '90일+']
+        train_df['LT_Bin'] = pd.cut(train_df['LeadTime'], bins=bins, labels=labels)
+        train_df['is_cancelled'] = train_df['상태'].isin(def_exc)
+        cxl_probs = train_df.groupby('LT_Bin', observed=True)['is_cancelled'].mean().to_dict()
+        
+        current_bookings = s_clean_b.copy()
+        if not current_bookings.empty:
+            current_bookings['LT_Bin'] = pd.cut(current_bookings['LeadTime'], bins=bins, labels=labels).astype(str)
+            current_bookings['Cancel_Prob'] = current_bookings['LT_Bin'].map(cxl_probs).fillna(0)
+            current_bookings['Expected_Cancel_RN'] = current_bookings['RoomNights'] * current_bookings['Cancel_Prob']
+            
+            t_otb = current_bookings['RoomNights'].sum()
+            t_risk = int(current_bookings['Expected_Cancel_RN'].sum())
+            
+            c_p1, c_p2, c_p3 = st.columns(3)
+            c_p1.metric("현재 OTB (Room Nights)", f"{t_otb:,.0f}박")
+            c_p2.metric("예상 취소 리스크", f"-{t_risk:,.0f}박")
+            c_p3.metric("최종 실투숙 예측", f"{t_otb - t_risk:,.0f}박")
+            
+            st.plotly_chart(px.bar(current_bookings.groupby('LT_Bin', observed=True)['Expected_Cancel_RN'].sum().reset_index(), x='LT_Bin', y='Expected_Cancel_RN', title="구간별 취소 리스크 상세"), use_container_width=True, key="chart_cancel_bar")
 
     # 4. 가격 민감도
-    with st_tabs[2]:
-        st.write("### 📉 시기별 가격 저항선 변화 (OCC vs ADR)")
+    with st_tabs[3]:
         def prepare_sens(d, label):
             if d.empty: return pd.DataFrame()
-            g = d.groupby('입실일자').agg({'객실수':'sum', 'RoomRevenue':'sum', 'RoomNights':'sum'}).reset_index()
-            g['OCC'] = (g['객실수']/60)*100 # 60실 기준
+            g = d.groupby('입실일자').agg({'RoomRevenue':'sum', 'RoomNights':'sum', '객실수':'sum'}).reset_index()
+            g['OCC'] = (g['객실수']/60)*100
             g['ADR'] = g.apply(lambda x: x['RoomRevenue']/x['RoomNights'] if x['RoomNights']>0 else 0, axis=1)
             g['Period'] = label
             return g[(g['OCC']>0) & (g['ADR']>0)]
-        sa = prepare_sens(s_clean_a, 'A기간'); sb = prepare_sens(s_clean_b, 'B기간')
+        sa, sb = prepare_sens(s_clean_a, 'A기간'), prepare_sens(s_clean_b, 'B기간')
         if not sa.empty or not sb.empty:
-            st.plotly_chart(px.scatter(pd.concat([sa, sb]), x='OCC', y='ADR', color='Period', size='RoomNights', 
-                                  title="가격 민감도 비교", color_discrete_map={'A기간': 'gray', 'B기간': 'blue'}), use_container_width=True)
-        else: st.warning("데이터 부족")
+            st.plotly_chart(px.scatter(pd.concat([sa, sb]), x='OCC', y='ADR', color='Period', size='RoomNights', title="가격 민감도 (OCC vs ADR)"), use_container_width=True, key="chart_sens_scatter")
 
-    # 5. 히트맵
-    with st_tabs[3]:
-        st.write("### 📅 요일별/월별 평균 매출 히트맵")
-        all_rev = pd.concat([s_clean_a, s_clean_b])['RoomRevenue'] if not s_clean_a.empty or not s_clean_b.empty else [0, 1000000]
+    # 5. 히트맵 (DuplicateElementId 에러 해결 포인트)
+    with st_tabs[4]:
+        st.write("### 📅 요일별/월별 평균 매출 히트맵 (A vs B)")
+        all_rev = pd.concat([s_clean_a, s_clean_b])['RoomRevenue'] if not pd.concat([s_clean_a, s_clean_b]).empty else [0, 1000000]
         zmin, zmax = min(all_rev), max(all_rev)
+        
         def plot_heatmap(d, title, zmin, zmax):
             if d.empty: return go.Figure()
             d['W'] = d['입실일자'].dt.day_name(); d['M'] = d['입실일자'].dt.month
@@ -811,19 +824,20 @@ with tabs[7]:
             hm['W'] = pd.Categorical(hm['W'], categories=days, ordered=True)
             p = hm.pivot(index='W', columns='M', values='RoomRevenue')
             return go.Figure(data=go.Heatmap(z=p.values, x=p.columns, y=p.index, colorscale='RdBu_r', zmin=zmin, zmax=zmax, texttemplate="%{z:,.0f}"))
-        c_h1, c_h2 = st.columns(2)
-        with c_h1: st.plotly_chart(plot_heatmap(s_clean_a, "A기간 매출 패턴", zmin, zmax), use_container_width=True)
-        with c_h2: st.plotly_chart(plot_heatmap(s_clean_b, "B기간 매출 패턴", zmin, zmax), use_container_width=True)
+        
+        ch_1, ch_2 = st.columns(2)
+        # 중요: 각 plotly_chart에 유니크한 key를 부여함
+        with ch_1: st.plotly_chart(plot_heatmap(s_clean_a, "A기간 매출 패턴", zmin, zmax), use_container_width=True, key="hm_chart_a")
+        with ch_2: st.plotly_chart(plot_heatmap(s_clean_b, "B기간 매출 패턴", zmin, zmax), use_container_width=True, key="hm_chart_b")
 
     # 6. 취소 시점
-    with st_tabs[4]:
-        st.write("### ⏳ 예약 취소 시점 분포")
+    with st_tabs[5]:
         ra = s_raw_a[s_raw_a['상태'].isin(def_exc)]; rb = s_raw_b[s_raw_b['상태'].isin(def_exc)]
         fig_c = go.Figure()
-        if not ra.empty: fig_c.add_trace(go.Histogram(x=ra['LeadTime'], name='A기간', opacity=0.5, marker_color='gray'))
-        if not rb.empty: fig_c.add_trace(go.Histogram(x=rb['LeadTime'], name='B기간', opacity=0.5, marker_color='red'))
-        fig_c.update_layout(barmode='overlay', title="취소 리드타임 비교")
-        st.plotly_chart(fig_c, use_container_width=True)
+        if not ra.empty: fig_c.add_trace(go.Histogram(x=ra['LeadTime'], name='A기간 취소', opacity=0.5, marker_color='gray'))
+        if not rb.empty: fig_c.add_trace(go.Histogram(x=rb['LeadTime'], name='B기간 취소', opacity=0.5, marker_color='red'))
+        fig_c.update_layout(barmode='overlay', title="취소 리드타임 분포")
+        st.plotly_chart(fig_c, use_container_width=True, key="chart_cxl_hist_final")
 
 # -----------------------------------------------------------------------------
 # 6. 포캐스팅 시스템 연동 (세션 동기화)
