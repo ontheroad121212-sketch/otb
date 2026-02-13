@@ -521,8 +521,8 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("요일별 매출 퍼포먼스")
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    # [긴급 처방] 만약 데이터에 'DayOfWeek'(요일) 컬럼이 없으면 즉석에서 만듭니다.
-    if 'DayOfWeek' not in target_df.columns:
+# [긴급 처방] 만약 데이터에 'DayOfWeek'(요일) 컬럼이 없으면 즉석에서 만듭니다.
+if 'DayOfWeek' not in target_df.columns:
     target_df['입실일자'] = pd.to_datetime(target_df['입실일자'], errors='coerce')
     target_df['DayOfWeek'] = target_df['입실일자'].dt.day_name()
     td = target_df.groupby('DayOfWeek')['총금액'].mean().reindex(days).reset_index()
