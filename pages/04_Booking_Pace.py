@@ -526,6 +526,10 @@ if 'DayOfWeek' not in target_df.columns:
     target_df['입실일자'] = pd.to_datetime(target_df['입실일자'], errors='coerce')
     target_df['DayOfWeek'] = target_df['입실일자'].dt.day_name()
     td = target_df.groupby('DayOfWeek')['총금액'].mean().reindex(days).reset_index()
+
+if 'DayOfWeek' not in ref_df.columns:
+    ref_df['입실일자'] = pd.to_datetime(ref_df['입실일자'], errors='coerce')
+    ref_df['DayOfWeek'] = ref_df['입실일자'].dt.day_name()    
     rd = ref_df.groupby('DayOfWeek')['총금액'].mean().reindex(days).reset_index()
     fig4 = go.Figure()
     fig4.add_trace(go.Scatter(x=td['DayOfWeek'], y=td['총금액'], name='Target', line=dict(color='green', width=3)))
