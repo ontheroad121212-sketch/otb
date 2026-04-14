@@ -70,11 +70,15 @@ def normalize_date_columns(df):
 
 def find_header_row(df_raw):
     for i, row in df_raw.head(20).iterrows():
-        date_count = row.astype(str).apply(lambda x: '-' in x or '/' in x).sum()
-        has_gdb = row.astype(str).str.contains('GDB').any()
+        # [수정된 부분] x가 실수(NaN)일 경우를 대비해 확실하게 str(x)로 감싸줍니다.
+        date_count = row.apply(lambda x: '-' in str(x) or '/' in str(x)).sum()
+        
+        # [수정된 부분] 결측치가 있을 때 에러가 나지 않도록 na=False 옵션을 추가합니다.
+        has_gdb = row.astype(str).str.contains('GDB', na=False).any()
+        
         if date_count > 3 or has_gdb:
             return i
-    return 0 
+    return 0
 
 def process_uploaded_df(file):
     df_raw = pd.read_excel(file, header=None)
