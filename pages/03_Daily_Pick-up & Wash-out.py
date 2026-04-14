@@ -514,7 +514,18 @@ def show_styled(df):
     if df.empty: st.info(T("데이터 없음")); return
     df = df.reset_index(drop=True)
     cols = df.select_dtypes(include=[np.number]).columns
-    st.dataframe(df.style.format({c: "{:,.0f}" for c in cols}).apply(lambda r: ['background-color: #fff9c4; font-weight: bold; border-top: 2px solid black']*len(r) if str(r[0])=="TOTAL" else ['']*len(r), axis=1), hide_index=True, use_container_width=True)
+    
+    # [수정된 부분] 가독성을 높이고 r[0] 대신 r.iloc[0]으로 안전하게 첫 번째 값을 지칭
+    def highlight_total(r):
+        if str(r.iloc[0]) == "TOTAL":
+            return ['background-color: #fff9c4; font-weight: bold; border-top: 2px solid black'] * len(r)
+        return [''] * len(r)
+        
+    st.dataframe(
+        df.style.format({c: "{:,.0f}" for c in cols}).apply(highlight_total, axis=1), 
+        hide_index=True, 
+        use_container_width=True
+    )
 
 def group_and_show(df, group_col):
     if df.empty: return pd.DataFrame()
