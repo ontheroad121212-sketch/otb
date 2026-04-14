@@ -97,7 +97,7 @@ def process_uploaded_df(file):
         if s_idx in ['객실수', 'Room Qty', 'nan', 'NaT', 'None']:
             rows_to_drop.append(idx)
             continue
-        row_str = "".join(df.loc[idx].astype(str).to_numpy().flatten())
+        row_str = "".join(str(val) for val in df.loc[idx].to_numpy().flatten())
         if any(day in row_str for day in ['월', '화', '수', '목', '금', '토', '일', 'Mon', 'Tue']):
              rows_to_drop.append(idx)
     if rows_to_drop:
