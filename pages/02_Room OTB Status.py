@@ -359,7 +359,7 @@ with tab_dashboard:
                             else: return 'color: lightgrey'
 
                         st.dataframe(
-                            df_pickup.style.applymap(color_pickup).format("{:+.0f}", na_rep=""),
+                            df_pickup.style.map(color_pickup).format("{:+.0f}", na_rep=""),
                             use_container_width=True
                         )
                     else:
