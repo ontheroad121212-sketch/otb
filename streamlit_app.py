@@ -564,7 +564,7 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
                     "목표 (Target RN)": "{:,.0f}", "현재 (Current OTB)": "{:,.0f}",
                     "최근 7일 속도 (RN/Day)": "{:,.1f}", "예측 마감 (Projected)": "{:,.0f}",
                     "예측-목표 차이": "{:+,.0f}"
-                }).applymap(lambda v: 'color: #166534; font-weight:bold' if v>0 else 'color: #dc2626; font-weight:bold' if v<0 else '', subset=["예측-목표 차이"]),
+                }).map(lambda v: 'color: #166534; font-weight:bold' if v>0 else 'color: #dc2626; font-weight:bold' if v<0 else '', subset=["예측-목표 차이"]),
                 use_container_width=True
             )
         else:
