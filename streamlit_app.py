@@ -464,8 +464,7 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
 st.title(T("🏨 Daily Pace Report"))
 uploaded_files = st.file_uploader(T("엑셀 업로드"), accept_multiple_files=True, type=['xlsx', 'csv'])
 
-tab_names = [T("📈 통합 데일리 트래킹")] + [f"{i}{T('월')}" for i in range(1, 13)]
-tabs = st.tabs(tab_names)
+tabs = st.tabs([f"{i}{T('월')}" for i in range(1, 13)])
 month_files_map = {i: [] for i in range(1, 13)}
 if uploaded_files:
     for f in uploaded_files:
