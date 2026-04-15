@@ -302,38 +302,40 @@ def save_data_with_sob(date_str, month, df, sob):
         return True
     except: return False
 
-@st.cache_data(ttl=300) # 속도를 위해 5분간 캐시 저장
+@st.cache_data(ttl=300)
 def load_daily_summary_matrix():
     try:
         db = firestore.client()
-        # 모든 날짜의 'months' 데이터를 한 번에 싹 긁어옵니다.
         docs = db.collection_group('months').stream()
         data = []
         for doc in docs:
             month_num = int(doc.id)
-            date_str = doc.reference.parent.parent.id # 상위 문서 이름(날짜) 추출
+            date_str = doc.reference.parent.parent.id
             d = doc.to_dict()
             sob = d.get('sob_data', {})
             if sob:
-                # FIT와 GRP 매출을 합친 총액 계산
+                # 매출(Rev)과 룸나잇(RN) 둘 다 계산
                 rev = sob.get('FIT_REV', 0) + sob.get('GRP_REV', 0)
-                data.append({'Date': date_str, 'Month': month_num, 'Rev': rev})
+                rn = sob.get('FIT_RMS', 0) + sob.get('GRP_RMS', 0)
+                data.append({'Date': date_str, 'Month': f"{month_num}월", 'Rev': rev, 'RN': rn})
                 
-        if not data: return pd.DataFrame()
+        if not data: return None, None
         
         df = pd.DataFrame(data)
-        # 피벗 테이블 생성 (행: 날짜, 열: 월, 값: 매출)
-        pivot = df.pivot_table(index='Date', columns='Month', values='Rev', aggfunc='sum').fillna(0)
         
-        # 1~12월 컬럼이 모두 존재하도록 보정
-        for m in range(1, 13):
-            if m not in pivot.columns: pivot[m] = 0
+        # 각각 피벗 테이블 생성
+        df_rev = df.pivot_table(index='Date', columns='Month', values='Rev', aggfunc='sum').fillna(0)
+        df_rn = df.pivot_table(index='Date', columns='Month', values='RN', aggfunc='sum').fillna(0)
+        
+        # 1~12월 컬럼이 모두 존재하도록 빈칸 보정
+        month_cols = [f"{m}월" for m in range(1, 13)]
+        for c in month_cols:
+            if c not in df_rev.columns: df_rev[c] = 0
+            if c not in df_rn.columns: df_rn[c] = 0
             
-        pivot = pivot[sorted(pivot.columns)] # 월별 오름차순 정렬
-        pivot.columns = [f"{m}월" for m in pivot.columns]
-        return pivot.sort_index() # 날짜별 오름차순 정렬
+        return df_rev[month_cols].sort_index(), df_rn[month_cols].sort_index()
     except Exception as e:
-        return pd.DataFrame()
+        return None, None
 
 # ==============================================================================
 # [3] 메인 화면 UI 및 사이드바
@@ -361,7 +363,8 @@ if admin_key == "master136":
 selected_page = T("Main Report")
 if st.session_state.get("authenticated"):
     st.sidebar.success(T("✅ Admin Mode On"))
-    selected_page = st.sidebar.radio(T("Navigation"), [T("Main Report"), T("🎯 Forecasting")])
+    # 메뉴에 Daily Tracking 추가!
+    selected_page = st.sidebar.radio(T("Navigation"), [T("Main Report"), T("📈 Daily Tracking"), T("🎯 Forecasting")])
     if "historical_dow" not in st.session_state:
         # [수정 시작] 캐시 기능 적용된 핀셋 수정 구간
         if st.sidebar.button(T("📊 4만건 히스토리 전체 분석 시작")):
@@ -405,6 +408,58 @@ if st.session_state.get("authenticated"):
 if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting"):
     secret_forecasting.run_forecasting()
     st.stop()
+
+# ----------------------------------------------------------------------
+# 🌟 [새로 추가된 독립된 Daily Tracking 페이지]
+# ----------------------------------------------------------------------
+elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tracking"):
+    st.title(T("📈 Daily Tracking (일자별 통합 트래킹)"))
+    
+    df_rev, df_rn = load_daily_summary_matrix()
+    if df_rev is None or df_rev.empty:
+        st.info(T("저장된 일자별 요약 데이터가 없습니다. Main Report에서 데이터를 먼저 저장해 주세요."))
+        st.stop()
+        
+    # 매출을 볼지, 룸나잇을 볼지 선택하는 토글 버튼
+    view_type = st.radio("보기 옵션 (View Type)", ["💰 총 매출 (Revenue)", "🛏️ 총 객실수 (Room Nights)"], horizontal=True)
+    target_df = df_rev if "매출" in view_type else df_rn
+    
+    # 1. 누적 총액 표
+    st.markdown("### 1️⃣ 누적 총합 (Cumulative OTB)")
+    st.dataframe(target_df.style.format("{:,.0f}").background_gradient(cmap="Blues", axis=0), use_container_width=True)
+    
+    # 2. 증감률(%) 계산 로직
+    st.markdown("### 2️⃣ 전일 대비 픽업 및 증감률 (Pick-up & %)")
+    combined_df = pd.DataFrame(index=target_df.index, columns=target_df.columns)
+    shifted_df = target_df.shift(1) # 어제 데이터
+    
+    for col in target_df.columns:
+        for idx in target_df.index:
+            curr = target_df.at[idx, col]
+            prev = shifted_df.at[idx, col]
+            
+            if pd.isna(prev): # 첫 번째 행 (비교 대상 없음)
+                combined_df.at[idx, col] = "-"
+                continue
+                
+            diff = curr - prev
+            if diff == 0:
+                combined_df.at[idx, col] = "-"
+            else:
+                pct = (diff / prev * 100) if prev != 0 else 100.0
+                sign = "+" if diff > 0 else ""
+                # 숫자 포맷: +5,000,000 (+1.5%) 형태로 깔끔하게 결합
+                combined_df.at[idx, col] = f"{sign}{diff:,.0f} ({sign}{pct:,.1f}%)"
+                
+    # 색상 칠해주기 (플러스는 초록, 마이너스는 빨강)
+    def color_combined(val):
+        if isinstance(val, str):
+            if val.startswith("+"): return 'color: #166534; font-weight: bold; background-color: #f0fdf4;'
+            elif val.startswith("-") and val != "-": return 'color: #dc2626; font-weight: bold; background-color: #fef2f2;'
+        return 'color: #9ca3af;'
+        
+    st.dataframe(combined_df.style.map(color_combined), use_container_width=True)
+    st.stop() # 여기서 렌더링 종료 (아래쪽 Main Report가 안 보이게 함)
 
 st.title(T("🏨 Daily Pace Report"))
 uploaded_files = st.file_uploader(T("엑셀 업로드"), accept_multiple_files=True, type=['xlsx', 'csv'])
