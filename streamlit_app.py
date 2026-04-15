@@ -302,6 +302,39 @@ def save_data_with_sob(date_str, month, df, sob):
         return True
     except: return False
 
+@st.cache_data(ttl=300) # 속도를 위해 5분간 캐시 저장
+def load_daily_summary_matrix():
+    try:
+        db = firestore.client()
+        # 모든 날짜의 'months' 데이터를 한 번에 싹 긁어옵니다.
+        docs = db.collection_group('months').stream()
+        data = []
+        for doc in docs:
+            month_num = int(doc.id)
+            date_str = doc.reference.parent.parent.id # 상위 문서 이름(날짜) 추출
+            d = doc.to_dict()
+            sob = d.get('sob_data', {})
+            if sob:
+                # FIT와 GRP 매출을 합친 총액 계산
+                rev = sob.get('FIT_REV', 0) + sob.get('GRP_REV', 0)
+                data.append({'Date': date_str, 'Month': month_num, 'Rev': rev})
+                
+        if not data: return pd.DataFrame()
+        
+        df = pd.DataFrame(data)
+        # 피벗 테이블 생성 (행: 날짜, 열: 월, 값: 매출)
+        pivot = df.pivot_table(index='Date', columns='Month', values='Rev', aggfunc='sum').fillna(0)
+        
+        # 1~12월 컬럼이 모두 존재하도록 보정
+        for m in range(1, 13):
+            if m not in pivot.columns: pivot[m] = 0
+            
+        pivot = pivot[sorted(pivot.columns)] # 월별 오름차순 정렬
+        pivot.columns = [f"{m}월" for m in pivot.columns]
+        return pivot.sort_index() # 날짜별 오름차순 정렬
+    except Exception as e:
+        return pd.DataFrame()
+
 # ==============================================================================
 # [3] 메인 화면 UI 및 사이드바
 # ==============================================================================
@@ -376,7 +409,8 @@ if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting")
 st.title(T("🏨 Daily Pace Report"))
 uploaded_files = st.file_uploader(T("엑셀 업로드"), accept_multiple_files=True, type=['xlsx', 'csv'])
 
-tabs = st.tabs([f"{i}{T('월')}" for i in range(1, 13)])
+tab_names = [T("📈 통합 데일리 트래킹")] + [f"{i}{T('월')}" for i in range(1, 13)]
+tabs = st.tabs(tab_names)
 month_files_map = {i: [] for i in range(1, 13)}
 if uploaded_files:
     for f in uploaded_files:
@@ -386,6 +420,35 @@ if uploaded_files:
 # ==============================================================================
 # [4] 탭별 데이터 렌더링 (T 함수 적용 핵심 구간)
 # ==============================================================================
+# [새로 추가된 첫 번째 통합 탭 렌더링]
+with tabs[0]:
+    st.subheader(T("📅 일자별/투숙월별 총 매출 추이 (Daily Tracking)"))
+    matrix_df = load_daily_summary_matrix()
+    
+    if matrix_df.empty:
+        st.info(T("저장된 일자별 요약 데이터가 없습니다. 각 월별 탭에서 데이터를 먼저 저장해 주세요."))
+    else:
+        # 1. 누적 총액 표 (그라데이션 효과)
+        st.markdown("##### 💰 누적 총액 (Cumulative OTB)")
+        st.dataframe(
+            matrix_df.style.format("{:,.0f}").background_gradient(cmap="Blues", axis=0),
+            use_container_width=True
+        )
+        
+        # 2. 전일 대비 증감 (Daily Pick-up) 계산 및 색상 적용
+        st.markdown("##### 📊 전일 대비 증감 (Daily Pick-up)")
+        diff_df = matrix_df.diff().fillna(0) # 이전 행(어제)과의 차이 계산
+        
+        def color_pickup(val):
+            if val > 0: return 'color: #166534; font-weight: bold; background-color: #f0fdf4;' # 플러스는 녹색
+            elif val < 0: return 'color: #dc2626; font-weight: bold; background-color: #fef2f2;' # 마이너스는 붉은색
+            return 'color: #9ca3af;' # 0은 회색
+            
+        st.dataframe(
+            diff_df.style.map(color_pickup).format("{:+,.0f}"),
+            use_container_width=True
+        )
+
 for i, tab in enumerate(tabs):
     cur_m = i + 1
     with tab:
