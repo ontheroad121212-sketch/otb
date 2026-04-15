@@ -166,8 +166,21 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-BUDGET_DATA = {1:514992575, 2:786570856, 3:529599040, 4:695351004, 5:903705440, 6:808203820,
-               7:1231949142, 8:1388376999, 9:952171506, 10:897171539, 11:667146771, 12:804030110}
+# [교체할 부분]
+TARGET_DATA = {
+    1:  {"rn": 2270, "adr": 226869, "occ": 56.3, "rev": 514992575},
+    2:  {"rn": 2577, "adr": 305227, "occ": 70.8, "rev": 786570856},
+    3:  {"rn": 2248, "adr": 235587, "occ": 55.8, "rev": 529599040},
+    4:  {"rn": 2414, "adr": 288049, "occ": 61.9, "rev": 695351004},
+    5:  {"rn": 3082, "adr": 293220, "occ": 76.5, "rev": 903705440},
+    6:  {"rn": 2776, "adr": 291140, "occ": 71.2, "rev": 808203820},
+    7:  {"rn": 3671, "adr": 335590, "occ": 91.1, "rev": 1231949142},
+    8:  {"rn": 3873, "adr": 358476, "occ": 96.1, "rev": 1388376999},
+    9:  {"rn": 2932, "adr": 324752, "occ": 75.2, "rev": 952171506},
+    10: {"rn": 3009, "adr": 298163, "occ": 74.7, "rev": 897171539},
+    11: {"rn": 2402, "adr": 277746, "occ": 61.6, "rev": 667146771},
+    12: {"rn": 2765, "adr": 290788, "occ": 68.6, "rev": 804030110}
+}
 
 def load_all_historical_data():
     db = firestore.client()
@@ -413,54 +426,152 @@ if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting")
 # 🌟 [새로 추가된 독립된 Daily Tracking 페이지]
 # ----------------------------------------------------------------------
 elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tracking"):
-    st.title(T("📈 Daily Tracking (일자별 통합 트래킹)"))
+    st.title(T("📈 Daily Tracking & Pace Analysis"))
     
     df_rev, df_rn = load_daily_summary_matrix()
     if df_rev is None or df_rev.empty:
         st.info(T("저장된 일자별 요약 데이터가 없습니다. Main Report에서 데이터를 먼저 저장해 주세요."))
         st.stop()
+    
+    dt_tab1, dt_tab2 = st.tabs(["📅 데일리 매트릭스 (Daily Matrix)", "🎯 페이스 & 분기 분석 (Pace & Quarterly)"])
+    
+    with dt_tab1:
+        view_type = st.radio("보기 옵션 (View Type)", ["💰 총 매출 (Revenue)", "🛏️ 총 객실수 (Room Nights)"], horizontal=True)
+        target_df = df_rev if "매출" in view_type else df_rn
         
-    # 매출을 볼지, 룸나잇을 볼지 선택하는 토글 버튼
-    view_type = st.radio("보기 옵션 (View Type)", ["💰 총 매출 (Revenue)", "🛏️ 총 객실수 (Room Nights)"], horizontal=True)
-    target_df = df_rev if "매출" in view_type else df_rn
-    
-    # 1. 누적 총액 표
-    st.markdown("### 1️⃣ 누적 총합 (Cumulative OTB)")
-    st.dataframe(target_df.style.format("{:,.0f}").background_gradient(cmap="Blues", axis=0), use_container_width=True)
-    
-    # 2. 증감률(%) 계산 로직
-    st.markdown("### 2️⃣ 전일 대비 픽업 및 증감률 (Pick-up & %)")
-    combined_df = pd.DataFrame(index=target_df.index, columns=target_df.columns)
-    shifted_df = target_df.shift(1) # 어제 데이터
-    
-    for col in target_df.columns:
-        for idx in target_df.index:
-            curr = target_df.at[idx, col]
-            prev = shifted_df.at[idx, col]
+        st.markdown("### 1️⃣ 누적 총합 (Cumulative OTB)")
+        st.dataframe(target_df.style.format("{:,.0f}").background_gradient(cmap="Blues", axis=0), use_container_width=True)
+        
+        st.markdown("### 2️⃣ 전일 대비 픽업 및 증감률 (Pick-up & %)")
+        combined_df = pd.DataFrame(index=target_df.index, columns=target_df.columns)
+        shifted_df = target_df.shift(1)
+        
+        for col in target_df.columns:
+            for idx in target_df.index:
+                curr = target_df.at[idx, col]
+                prev = shifted_df.at[idx, col]
+                if pd.isna(prev):
+                    combined_df.at[idx, col] = "-"
+                    continue
+                diff = curr - prev
+                if diff == 0:
+                    combined_df.at[idx, col] = "-"
+                else:
+                    pct = (diff / prev * 100) if prev != 0 else 100.0
+                    sign = "+" if diff > 0 else ""
+                    combined_df.at[idx, col] = f"{sign}{diff:,.0f} ({sign}{pct:,.1f}%)"
+                    
+        def color_combined(val):
+            if isinstance(val, str):
+                if val.startswith("+"): return 'color: #166534; font-weight: bold; background-color: #f0fdf4;'
+                elif val.startswith("-") and val != "-": return 'color: #dc2626; font-weight: bold; background-color: #fef2f2;'
+            return 'color: #9ca3af;'
             
-            if pd.isna(prev): # 첫 번째 행 (비교 대상 없음)
-                combined_df.at[idx, col] = "-"
-                continue
-                
-            diff = curr - prev
-            if diff == 0:
-                combined_df.at[idx, col] = "-"
-            else:
-                pct = (diff / prev * 100) if prev != 0 else 100.0
-                sign = "+" if diff > 0 else ""
-                # 숫자 포맷: +5,000,000 (+1.5%) 형태로 깔끔하게 결합
-                combined_df.at[idx, col] = f"{sign}{diff:,.0f} ({sign}{pct:,.1f}%)"
-                
-    # 색상 칠해주기 (플러스는 초록, 마이너스는 빨강)
-    def color_combined(val):
-        if isinstance(val, str):
-            if val.startswith("+"): return 'color: #166534; font-weight: bold; background-color: #f0fdf4;'
-            elif val.startswith("-") and val != "-": return 'color: #dc2626; font-weight: bold; background-color: #fef2f2;'
-        return 'color: #9ca3af;'
-        
-    st.dataframe(combined_df.style.map(color_combined), use_container_width=True)
-    st.stop() # 여기서 렌더링 종료 (아래쪽 Main Report가 안 보이게 함)
+        st.dataframe(combined_df.style.map(color_combined), use_container_width=True)
 
+    with dt_tab2:
+        st.subheader("📊 분기별 타겟 달성 현황 (Quarterly Target)")
+        st.caption("※ 4,5월이 오버버짓하면 6월의 부족분을 상쇄할 수 있는지 확인하는 통합 뷰입니다.")
+        
+        # 분기별 데이터 계산
+        current_year = datetime.now().year
+        q_data = []
+        for q in range(1, 5):
+            months = [q*3-2, q*3-1, q*3]
+            q_target_rn = sum([TARGET_DATA[m]['rn'] for m in months])
+            q_target_rev = sum([TARGET_DATA[m]['rev'] for m in months])
+            
+            q_curr_rn = sum([df_rn[f"{m}월"].iloc[-1] if f"{m}월" in df_rn.columns else 0 for m in months])
+            q_curr_rev = sum([df_rev[f"{m}월"].iloc[-1] if f"{m}월" in df_rev.columns else 0 for m in months])
+            
+            rn_achieve = (q_curr_rn / q_target_rn * 100) if q_target_rn > 0 else 0
+            
+            q_data.append({
+                "Quarter": f"Q{q}", "Target RN": q_target_rn, "OTB RN": q_curr_rn, "Achievement": rn_achieve,
+                "Diff RN": q_curr_rn - q_target_rn, "Months": f"{months[0]}월~{months[2]}월"
+            })
+            
+        q_df = pd.DataFrame(q_data)
+        
+        # 분기별 카드 UI (4등분)
+        cols = st.columns(4)
+        for idx, row in q_df.iterrows():
+            with cols[idx]:
+                st.info(f"**{row['Quarter']} ({row['Months']})**")
+                st.metric("OTB RN", f"{row['OTB RN']:,.0f}", f"{row['Diff RN']:+,.0f} vs Target")
+                st.progress(min(row['Achievement']/100, 1.0))
+                st.caption(f"🎯 Target RN: {row['Target RN']:,.0f} ({row['Achievement']:.1f}%)")
+
+        st.divider()
+
+        # [핵심] 현재 예약 속도 기반 프로젝션 (Projection)
+        st.subheader("🚀 현재 속도 기반 마감 예측 (Run-Rate Projection)")
+        st.caption("※ 최근 7일간의 예약 속도(Velocity)를 바탕으로 월말 최종 객실수(RN)를 예측합니다.")
+        
+        proj_data = []
+        today = datetime.now()
+        
+        for m in range(today.month, 13): # 이번 달부터 12월까지만
+            m_str = f"{m}월"
+            if m_str not in df_rn.columns: continue
+            
+            target_rn = TARGET_DATA[m]['rn']
+            curr_rn = df_rn[m_str].iloc[-1]
+            
+            # 최근 7일간의 일평균 픽업량 (Run Rate)
+            if len(df_rn) >= 7:
+                pickup_7d = df_rn[m_str].iloc[-1] - df_rn[m_str].iloc[-7]
+                run_rate = pickup_7d / 7
+            elif len(df_rn) > 1:
+                pickup_all = df_rn[m_str].iloc[-1] - df_rn[m_str].iloc[0]
+                run_rate = pickup_all / (len(df_rn) - 1)
+            else:
+                run_rate = 0
+                
+            # 해당 월의 마지막 날짜까지 남은 일수 계산
+            if m == 12:
+                last_day = datetime(current_year + 1, 1, 1) - timedelta(days=1)
+            else:
+                last_day = datetime(current_year, m + 1, 1) - timedelta(days=1)
+                
+            days_remaining = (last_day.date() - today.date()).days
+            if days_remaining < 0: days_remaining = 0
+            
+            # 최종 예측치 계산 = 현재 OTB + (일평균 속도 * 남은 기간)
+            projected_rn = curr_rn + (run_rate * days_remaining)
+            diff_to_target = projected_rn - target_rn
+            
+            # 상태 판단
+            if diff_to_target >= target_rn * 0.05: status = "🔥 매우 빠름 (단가 인상 고려)"
+            elif diff_to_target >= 0: status = "✅ 정상 궤도 (On-Pace)"
+            elif diff_to_target >= -target_rn * 0.1: status = "⚠️ 주의 (Slightly Slow)"
+            else: status = "🚨 심각한 지연 (프로모션 필요)"
+            
+            proj_data.append({
+                "월 (Month)": m_str,
+                "목표 (Target RN)": target_rn,
+                "현재 (Current OTB)": curr_rn,
+                "최근 7일 속도 (RN/Day)": run_rate,
+                "예측 마감 (Projected)": projected_rn,
+                "예측-목표 차이": diff_to_target,
+                "상태 (Status)": status
+            })
+            
+        if proj_data:
+            proj_df = pd.DataFrame(proj_data)
+            st.dataframe(
+                proj_df.style.format({
+                    "목표 (Target RN)": "{:,.0f}", "현재 (Current OTB)": "{:,.0f}",
+                    "최근 7일 속도 (RN/Day)": "{:,.1f}", "예측 마감 (Projected)": "{:,.0f}",
+                    "예측-목표 차이": "{:+,.0f}"
+                }).applymap(lambda v: 'color: #166534; font-weight:bold' if v>0 else 'color: #dc2626; font-weight:bold' if v<0 else '', subset=["예측-목표 차이"]),
+                use_container_width=True
+            )
+        else:
+            st.info("예측할 수 있는 진행 중인 월 데이터가 없습니다.")
+            
+    st.stop() # 여기서 렌더링 종료
+# ==============================================================================    
 st.title(T("🏨 Daily Pace Report"))
 uploaded_files = st.file_uploader(T("엑셀 업로드"), accept_multiple_files=True, type=['xlsx', 'csv'])
 
