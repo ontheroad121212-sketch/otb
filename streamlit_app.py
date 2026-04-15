@@ -474,35 +474,6 @@ if uploaded_files:
 # ==============================================================================
 # [4] 탭별 데이터 렌더링 (T 함수 적용 핵심 구간)
 # ==============================================================================
-# [새로 추가된 첫 번째 통합 탭 렌더링]
-with tabs[0]:
-    st.subheader(T("📅 일자별/투숙월별 총 매출 추이 (Daily Tracking)"))
-    matrix_df = load_daily_summary_matrix()
-    
-    if matrix_df.empty:
-        st.info(T("저장된 일자별 요약 데이터가 없습니다. 각 월별 탭에서 데이터를 먼저 저장해 주세요."))
-    else:
-        # 1. 누적 총액 표 (그라데이션 효과)
-        st.markdown("##### 💰 누적 총액 (Cumulative OTB)")
-        st.dataframe(
-            matrix_df.style.format("{:,.0f}").background_gradient(cmap="Blues", axis=0),
-            use_container_width=True
-        )
-        
-        # 2. 전일 대비 증감 (Daily Pick-up) 계산 및 색상 적용
-        st.markdown("##### 📊 전일 대비 증감 (Daily Pick-up)")
-        diff_df = matrix_df.diff().fillna(0) # 이전 행(어제)과의 차이 계산
-        
-        def color_pickup(val):
-            if val > 0: return 'color: #166534; font-weight: bold; background-color: #f0fdf4;' # 플러스는 녹색
-            elif val < 0: return 'color: #dc2626; font-weight: bold; background-color: #fef2f2;' # 마이너스는 붉은색
-            return 'color: #9ca3af;' # 0은 회색
-            
-        st.dataframe(
-            diff_df.style.map(color_pickup).format("{:+,.0f}"),
-            use_container_width=True
-        )
-
 for i, tab in enumerate(tabs):
     cur_m = i + 1
     with tab:
