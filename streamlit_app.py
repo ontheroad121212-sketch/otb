@@ -607,7 +607,8 @@ for i, tab in enumerate(tabs):
                 st.info(f"{cur_m}{T('월')} {T('데이터를 업로드하거나 조회하세요.')}")
                 continue
 
-            budget = BUDGET_DATA.get(cur_m, 0)
+            # TARGET_DATA에서 해당 월의 'rev'(매출) 값을 가져오도록 수정합니다.
+            budget = TARGET_DATA.get(cur_m, {}).get('rev', 0)
             total_rev = sob_curr.get('FIT_REV', 0) + sob_curr.get('GRP_REV', 0)
             total_rms = sob_curr.get('FIT_RMS', 0) + sob_curr.get('GRP_RMS', 0)
             
