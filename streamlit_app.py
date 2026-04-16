@@ -749,7 +749,7 @@ for i, tab in enumerate(tabs):
                                      hover_data={'DateStr': False, 'Revenue': ':,.0f', 'RoomNights': ':,.0f'},
                                      color_discrete_map={T('FIT'): '#3b82f6', T('GROUP'): '#ef4444'})
                     fig_bar.update_layout(xaxis_title="", yaxis_title=T("REV"), legend_title="", height=450)
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{cur_m}")
                     
                     st.divider()
                     
@@ -790,7 +790,7 @@ for i, tab in enumerate(tabs):
                     ))
                     fig_hm.update_layout(yaxis=dict(title='Week', autorange="reversed", showgrid=False),
                                          xaxis=dict(side="top", showgrid=False), height=400)
-                    st.plotly_chart(fig_hm, use_container_width=True)
+                    st.plotly_chart(fig_hm, use_container_width=True, key=f"hm_{cur_m}")
                 else:
                     st.info(T("시각화할 데이터가 없습니다."))
 
