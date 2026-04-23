@@ -204,7 +204,33 @@ def load_data_with_snapshot_cache():
         # 0박, 0객실 보정
         df['박수'] = df['박수'].replace(0, 1)
         df['객실수'] = df['객실수'].replace(0, 1)
-        
+
+        # ==============================================================
+        # 🚀 [추가] 단체(Master) / 멤버 중복 뻥튀기 완벽 제거
+        # ==============================================================
+        if '단체 ID' in df.columns:
+            group_mask = df['단체 ID'].notna() & (df['단체 ID'].astype(str).str.strip() != '') & (df['단체 ID'].astype(str).str.lower() != 'nan')
+            df_group = df[group_mask]
+            
+            if not df_group.empty:
+                group_counts = df_group['단체 ID'].value_counts()
+                mixed_groups = group_counts[group_counts > 1].index
+                
+                if len(mixed_groups) > 0:
+                    df_mixed = df[df['단체 ID'].isin(mixed_groups)]
+                    # 각 단체 ID별로 '객실수'가 가장 큰 행을 마스터로 지정하여 보호
+                    master_indices = df_mixed.groupby('단체 ID')['객실수'].idxmax().values
+                    # 마스터가 아니면서(멤버), 총금액이 0원인 껍데기 예약들을 식별하여 삭제
+                    members_to_drop = df_mixed[~df_mixed.index.isin(master_indices) & (df_mixed['총금액'] == 0)].index
+                    df = df.drop(index=members_to_drop)
+
+        # ==============================================================
+        # 🚀 [추가] 숨은 취소건(취소일자) 교차 검증 철통 방어
+        # ==============================================================
+        if '취소일자' in df.columns:
+            # 취소일자 컬럼이 비어있는(NaT/None/NaN) 진짜 확정 예약만 남김
+            df = df[pd.isna(df['취소일자']) | (df['취소일자'] == '') | (df['취소일자'].astype(str).str.lower() == 'nat')]
+
         df['RoomNights'] = df['객실수'] * df['박수']
         
         # 매출 계산
