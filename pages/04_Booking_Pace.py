@@ -40,26 +40,52 @@ CACHE_FILE = "local_booking_cache.parquet"
 
 def upload_to_firestore(df_new):
     if db is None: return
-    df_new = df_new.copy()
+    df = df_new.copy()
     
-    # 업로드 시점 자동 기록
     upload_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    df_new['Snapshot'] = upload_time
+    df['Snapshot'] = upload_time
     
-    # 필수 전처리
-    df_new['입실일자'] = pd.to_datetime(df_new['입실일자'], errors='coerce')
-    df_new['예약일자'] = pd.to_datetime(df_new['예약일자'], errors='coerce')
-    df_new['예약번호'] = df_new['예약번호'].astype(str)
-    
-    # 숫자 필드 강제 변환
-    numeric_cols = ['객실료', '총금액', '객실수', '박수', '객단가', '서비스료']
-    for col in numeric_cols:
-        if col in df_new.columns:
-            df_new[col] = pd.to_numeric(df_new[col], errors='coerce').fillna(0)
+    # 1. 예약번호 없는 가짜 데이터 원천 차단
+    if '예약번호' not in df.columns: return
+    df['예약번호'] = df['예약번호'].astype(str).str.strip()
+    df = df[(df['예약번호'] != '') & (df['예약번호'].str.lower() != 'nan') & (df['예약번호'].str.lower() != 'none')]
+
+    # -------------------------------------------------------------
+    # 💡 [핵심 1] 단체 마스터/멤버 뻥튀기 방지 (업로드할 때 아예 껍데기를 지워버림)
+    # -------------------------------------------------------------
+    for col in ['총금액', '객실료', '객실수', '박수']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+    if '단체 ID' in df.columns:
+        has_group = df['단체 ID'].notna() & (df['단체 ID'].astype(str).str.strip() != '') & (~df['단체 ID'].astype(str).str.upper().isin(['NAN', 'NONE', 'NULL']))
+        df_group = df[has_group].copy()
+        df_normal = df[~has_group].copy()
+        
+        if not df_group.empty:
+            # 총금액/객실수 순으로 정렬 후 단체 ID당 1개(마스터)만 남기고 드랍!
+            df_group = df_group.sort_values(by=['총금액', '객실수'], ascending=[False, False])
+            df_group = df_group.drop_duplicates(subset=['단체 ID'], keep='first')
+            df = pd.concat([df_normal, df_group], ignore_index=True)
+
+    # -------------------------------------------------------------
+    # 💡 [핵심 2] 날짜 정제 및 1970년 에러 물리적 차단
+    # -------------------------------------------------------------
+    for date_col in ['입실일자', '예약일자', '퇴실일자', '취소일자']:
+        if date_col in df.columns:
+            # 숫자형(엑셀 날짜 일련번호)일 경우 방어
+            if pd.api.types.is_numeric_dtype(df[date_col]):
+                df[date_col] = pd.to_datetime(df[date_col], unit='D', origin='1899-12-30', errors='coerce')
+            else:
+                df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
             
-    # NaN/NaT 제거
-    df_upload = df_new.where(pd.notnull(df_new), None)
-    
+            # DB 용량 최적화 및 파싱 에러 방지를 위해 깔끔한 문자열로 저장
+            df[date_col] = df[date_col].dt.strftime('%Y-%m-%d')
+
+    # 숨은 취소건은 취소일자에 날짜가 박혀있으므로, 취소일자가 존재하는 행은 제외 (옵션)
+    # df = df[df['취소일자'].isna()] 
+            
+    df_upload = df.where(pd.notnull(df), None)
     total = len(df_upload)
     batch = db.batch()
     count = 0
@@ -69,14 +95,9 @@ def upload_to_firestore(df_new):
     
     for _, row in df_upload.iterrows():
         doc_id = row['예약번호']
-        # 예약번호가 없거나 비어있으면 건너뜀
-        if not doc_id or doc_id == 'None' or doc_id == '': continue
-        
-        # [핵심] 예약번호를 문서 ID로 지정하여 동일 번호는 자동 업데이트
         doc_ref = db.collection('hotel_bookings').document(doc_id)
         payload = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
         
-        # merge=True: 기존 필드는 유지하되 바뀐 데이터만 덮어씀
         batch.set(doc_ref, payload, merge=True)
         count += 1
         
@@ -84,15 +105,14 @@ def upload_to_firestore(df_new):
             batch.commit()
             batch = db.batch()
             bar.progress(count / total)
-            msg.text(f"⏳ 데이터 동기화 및 상태 업데이트 중... ({count}/{total})")
+            msg.text(f"⏳ 순도 100% 데이터 정제 및 업로드 중... ({count}/{total})")
             time.sleep(0.05)
             
     batch.commit()
     bar.empty()
-    msg.success(f"✅ {total}건 동기화 완료! 이제 예약번호당 최신 상태만 남습니다.")
+    msg.success(f"✅ {total}건의 무결성 데이터 동기화 완료! 이제 앱 속도가 비약적으로 상승합니다.")
     
-    if os.path.exists(CACHE_FILE):
-        os.remove(CACHE_FILE)
+    if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
     st.cache_data.clear()
 
 def delete_all_data():
