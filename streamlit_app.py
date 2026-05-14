@@ -4,6 +4,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime, timedelta
 import io
+import re  # [추가] 파일명 날짜 추출용
 import numpy as np
 import textwrap
 import secret_forecasting  # 포캐스팅 모듈 임포트
@@ -183,6 +184,46 @@ TARGET_DATA = {
     12: {"rn": 2765, "adr": 290788, "occ": 68.6, "rev": 804030110}
 }
 
+
+# ==============================================================================
+# [신규 함수 1] 파일명에서 날짜 추출
+# ==============================================================================
+def extract_date_from_filename(filename):
+    """
+    파일명에서 날짜를 추출하여 'YYYY-MM-DD' 문자열로 반환.
+    지원 패턴:
+      - 20251210, 2025-12-10, 2025.12.10, 2025_12_10 (8자리)
+      - 251210, 25-12-10, 25.12.10 (6자리, 20xx로 변환)
+    실패 시 None 반환.
+    """
+    name = filename.lower()
+    # 확장자 제거
+    name = re.sub(r'\.(xlsx|xls|csv)$', '', name)
+    
+    # 패턴 1: YYYYMMDD (8자리 연속) 또는 YYYY-MM-DD 등
+    m = re.search(r'(20\d{2})[-_./]?(\d{2})[-_./]?(\d{2})', name)
+    if m:
+        try:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if 1 <= mo <= 12 and 1 <= d <= 31:
+                return f"{y:04d}-{mo:02d}-{d:02d}"
+        except (ValueError, TypeError):
+            pass
+    
+    # 패턴 2: YYMMDD (6자리, 25 → 2025)
+    m = re.search(r'(?<!\d)(\d{2})[-_./]?(\d{2})[-_./]?(\d{2})(?!\d)', name)
+    if m:
+        try:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if 0 <= y <= 99 and 1 <= mo <= 12 and 1 <= d <= 31:
+                full_year = 2000 + y
+                return f"{full_year:04d}-{mo:02d}-{d:02d}"
+        except (ValueError, TypeError):
+            pass
+    
+    return None
+
+
 def load_all_historical_data():
     db = firestore.client()
     st.write(T("파이어베이스 서버에 접속 중..."))
@@ -211,6 +252,7 @@ def load_all_historical_data():
     repeat_rate = (df[cust_col].value_counts() > 1).mean() * 100 if cust_col else 0
     return dow_indices, repeat_rate
 
+
 # [강력한 숫자 변환 함수]
 def clean_num(val):
     try:
@@ -219,6 +261,7 @@ def clean_num(val):
         return float(s)
     except (ValueError, TypeError):
         return 0
+
 
 def find_header_and_process(file):
     """
@@ -231,16 +274,13 @@ def find_header_and_process(file):
         file.seek(0)
         df_raw = None
         
-        # 1차 시도: 엑셀로 읽기
         try:
             df_raw = pd.read_excel(file, header=None)
         except Exception:
-            # 2차 시도: CSV로 읽기 (utf-8)
             try:
                 file.seek(0)
                 df_raw = pd.read_csv(file, header=None)
             except Exception:
-                # 3차 시도: CSV로 읽기 (cp949 - 한글 인코딩)
                 file.seek(0)
                 df_raw = pd.read_csv(file, header=None, encoding='cp949')
         
@@ -263,17 +303,17 @@ def find_header_and_process(file):
         df_clean['DateStr'] = df_data['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_data.iloc[:, 1].astype(str)
         
-        df_clean['FIT_RMS'] = safe_col(2)  # C
-        df_clean['FIT_REV'] = safe_col(5)  # F
-        df_clean['GRP_RMS'] = safe_col(7)  # H
-        df_clean['GRP_REV'] = safe_col(10) # K
-        df_clean['RMS'] = safe_col(14)     # O
-        df_clean['REV'] = safe_col(18)     # S
+        df_clean['FIT_RMS'] = safe_col(2)   # C
+        df_clean['FIT_REV'] = safe_col(5)   # F
+        df_clean['GRP_RMS'] = safe_col(7)   # H
+        df_clean['GRP_REV'] = safe_col(10)  # K
+        df_clean['RMS']     = safe_col(14)  # O
+        df_clean['REV']     = safe_col(18)  # S
         
-        df_clean['HU'] = safe_col(12)
-        df_clean['Comp'] = safe_col(13)
-        df_clean['OCC'] = safe_col(15)
-        df_clean['ADR'] = safe_col(16)
+        df_clean['HU']     = safe_col(12)
+        df_clean['Comp']   = safe_col(13)
+        df_clean['OCC']    = safe_col(15)
+        df_clean['ADR']    = safe_col(16)
         df_clean['RevPAR'] = safe_col(17)
 
         sob_data = {
@@ -287,13 +327,12 @@ def find_header_and_process(file):
         return df_clean, int(df_data['Date'].iloc[0].month), sob_data
         
     except Exception as e:
-        # [개선] 침묵하지 않고 디버그 가능하게 세션에 저장
         st.session_state['last_upload_error'] = f"{type(e).__name__}: {e}"
         return None, None, None
 
 
 def get_full_data_by_date(date_str, month_num):
-    """[개선] 에러를 침묵시키지 않고 명확히 표시"""
+    """date_str의 month_num 스냅샷 로드"""
     try:
         doc = db.collection('daily_snapshots').document(date_str).collection('months').document(str(month_num)).get()
         if doc.exists:
@@ -304,20 +343,13 @@ def get_full_data_by_date(date_str, month_num):
                 if c not in df.columns: df[c] = 0
             return df, d.get('sob_data')
     except Exception as e:
-        # [개선] 어떤 에러였는지 세션에 기록
         st.session_state[f'db_load_err_{month_num}'] = f"{type(e).__name__}: {e}"
     return None, None
 
 
 def get_latest_snapshot_before(target_date_str, month_num, exclude_date=None):
-    """
-    [신규] target_date 이전의 가장 최근 스냅샷을 자동으로 찾아 반환.
-    compare_date에 데이터가 없을 때 fallback으로 사용.
-    
-    Returns: (df, sob, actual_date_str) or (None, None, None)
-    """
+    """target_date 이전의 가장 최근 스냅샷"""
     try:
-        # 해당 month_num 데이터가 있는 모든 날짜를 가져옴
         docs = db.collection_group('months').stream()
         candidate_dates = []
         for doc in docs:
@@ -329,7 +361,6 @@ def get_latest_snapshot_before(target_date_str, month_num, exclude_date=None):
         
         if not candidate_dates: return None, None, None
         
-        # 가장 최근 날짜 선택
         latest = max(candidate_dates)
         df, sob = get_full_data_by_date(latest, month_num)
         return df, sob, latest
@@ -337,8 +368,55 @@ def get_latest_snapshot_before(target_date_str, month_num, exclude_date=None):
         return None, None, None
 
 
+# ==============================================================================
+# [신규 함수 2] 특정 월의 모든 스냅샷 날짜 리스트
+# ==============================================================================
+@st.cache_data(ttl=60)
+def get_all_snapshot_dates_for_month(month_num):
+    """해당 월(month_num)에 대해 저장된 모든 스냅샷 날짜를 정렬해 반환"""
+    try:
+        db_local = firestore.client()
+        docs = db_local.collection_group('months').stream()
+        dates = []
+        for doc in docs:
+            if doc.id == str(month_num):
+                dates.append(doc.reference.parent.parent.id)
+        return sorted(dates)
+    except Exception:
+        return []
+
+
+def get_latest_snapshot_for_month(month_num):
+    """
+    [신규] 해당 월의 가장 마지막에 저장된 스냅샷을 반환.
+    과거 월(예: 5월 시점의 1~4월) 자동 로드용.
+    """
+    dates = get_all_snapshot_dates_for_month(month_num)
+    if not dates: return None, None, None
+    latest = dates[-1]
+    df, sob = get_full_data_by_date(latest, month_num)
+    if df is None: return None, None, None
+    return df, sob, latest
+
+
+def get_second_latest_snapshot_for_month(month_num, exclude_date=None):
+    """[신규] 마지막에서 두 번째 스냅샷 (과거 월의 비교용)"""
+    dates = get_all_snapshot_dates_for_month(month_num)
+    if exclude_date:
+        dates = [d for d in dates if d != exclude_date]
+    if len(dates) == 0: 
+        return None, None, None
+    if len(dates) == 1:
+        # 한 개밖에 없으면 그것이라도 반환
+        df, sob = get_full_data_by_date(dates[0], month_num)
+        return df, sob, dates[0]
+    second_latest = dates[-2]
+    df, sob = get_full_data_by_date(second_latest, month_num)
+    return df, sob, second_latest
+
+
 def save_data_with_sob(date_str, month, df, sob):
-    """[개선] 에러를 사용자에게 명확히 표시"""
+    """저장. (success, err_msg) 반환"""
     try:
         db.collection('daily_snapshots').document(date_str).set(
             {'created_at': firestore.SERVER_TIMESTAMP}, merge=True
@@ -407,12 +485,28 @@ today_kst = now_kst.date()
 report_date = st.sidebar.date_input(T("기준 일자"), value=today_kst, max_value=today_kst)
 compare_date = st.sidebar.date_input(T("비교 일자"), value=today_kst - timedelta(days=1), max_value=today_kst)
 
-# [신규] 비교 데이터 자동 탐색 옵션
+# [신규] 자동화 옵션들
+st.sidebar.divider()
+st.sidebar.markdown("**🤖 자동화 옵션**")
+
+auto_save_on_upload = st.sidebar.checkbox(
+    "📤 업로드 시 파일명 일자로 자동 저장",
+    value=True,
+    help="파일명에서 날짜(예: 12월_20251210.xlsx → 2025-12-10)를 추출해 자동으로 DB에 저장합니다."
+)
+
+auto_load_past_months = st.sidebar.checkbox(
+    "📅 과거 월 자동 로드 (최신 스냅샷)",
+    value=True,
+    help="현재 월 이전의 월들은 파일을 올리지 않아도 가장 마지막 저장 스냅샷을 자동으로 표시합니다."
+)
+
 auto_fallback = st.sidebar.checkbox(
-    "🔄 비교일자에 데이터 없으면 가장 가까운 이전 스냅샷 사용",
+    "🔄 비교일자 데이터 없으면 가장 가까운 이전 스냅샷 사용",
     value=True,
     help="비교 일자에 저장된 스냅샷이 없을 때, 그 이전의 가장 최근 스냅샷을 자동으로 찾아 비교합니다."
 )
+st.sidebar.divider()
 
 admin_key = st.sidebar.text_input(T("Admin Key"), type="password")
 if admin_key == "master136":
@@ -520,7 +614,6 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
             q_target_rn = sum([TARGET_DATA[m]['rn'] for m in months])
             q_target_rev = sum([TARGET_DATA[m]['rev'] for m in months])
             
-            # [개선] 빈 DataFrame 방지
             q_curr_rn = 0
             q_curr_rev = 0
             for m in months:
@@ -572,7 +665,6 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
             else:
                 run_rate = 0
                 
-            # [확인] 12월 → 다음 해 1월 경계 처리 정상
             if m == 12:
                 last_day = datetime(current_year + 1, 1, 1) - timedelta(days=1)
             else:
@@ -626,11 +718,82 @@ if 'last_upload_error' in st.session_state and uploaded_files:
         st.code(st.session_state['last_upload_error'])
 
 tabs = st.tabs([f"{i}{T('월')}" for i in range(1, 13)])
+
+# ==============================================================================
+# [개선] 파일 처리 + 파일명에서 일자 추출 + 자동 저장
+# ==============================================================================
 month_files_map = {i: [] for i in range(1, 13)}
+
 if uploaded_files:
+    auto_save_results = {'success': [], 'failed': [], 'no_date': []}
+    
+    # 중복 저장 방지 시그니처
+    upload_signature = tuple(sorted(f.name for f in uploaded_files))
+    already_saved = st.session_state.get('auto_saved_signature') == upload_signature
+    
     for f in uploaded_files:
         df, m, sob = find_header_and_process(f)
-        if m: month_files_map[m].append({'name': f.name, 'data': df, 'sob': sob})
+        if not m: 
+            continue
+        
+        # 파일명에서 일자 추출
+        snapshot_date = extract_date_from_filename(f.name)
+        date_from_filename = snapshot_date is not None
+        if not snapshot_date:
+            snapshot_date = today_kst.strftime("%Y-%m-%d")
+        
+        month_files_map[m].append({
+            'name': f.name, 
+            'data': df, 
+            'sob': sob,
+            'snapshot_date': snapshot_date,
+            'date_from_filename': date_from_filename
+        })
+        
+        # [핵심] 자동 저장
+        if auto_save_on_upload and not already_saved:
+            ok, err = save_data_with_sob(snapshot_date, m, df, sob)
+            if ok:
+                auto_save_results['success'].append({
+                    'file': f.name, 'date': snapshot_date, 'month': m,
+                    'from_filename': date_from_filename
+                })
+            else:
+                auto_save_results['failed'].append({
+                    'file': f.name, 'date': snapshot_date, 'month': m, 'err': err
+                })
+            if not date_from_filename:
+                auto_save_results['no_date'].append(f.name)
+    
+    # 자동 저장 결과 표시 + 중복 방지 시그니처 기록
+    if auto_save_on_upload and not already_saved and (auto_save_results['success'] or auto_save_results['failed']):
+        st.session_state['auto_saved_signature'] = upload_signature
+        load_daily_summary_matrix.clear()
+        get_all_snapshot_dates_for_month.clear()
+        
+        with st.expander(f"📦 자동 저장 결과 ({len(auto_save_results['success'])}건 성공, {len(auto_save_results['failed'])}건 실패)", expanded=True):
+            if auto_save_results['success']:
+                st.success(f"✅ {len(auto_save_results['success'])}개 파일이 DB에 자동 저장되었습니다.")
+                df_result = pd.DataFrame([
+                    {
+                        '파일명': s['file'], 
+                        '월': f"{s['month']}월", 
+                        '저장 일자': s['date'],
+                        '인식 방법': '✅ 파일명 자동추출' if s['from_filename'] else '⚠️ 오늘 날짜(파일명 인식 실패)'
+                    }
+                    for s in auto_save_results['success']
+                ])
+                st.dataframe(df_result, use_container_width=True, hide_index=True)
+            
+            if auto_save_results['failed']:
+                st.error(f"❌ {len(auto_save_results['failed'])}개 파일 저장 실패")
+                for fail in auto_save_results['failed']:
+                    st.code(f"{fail['file']} → {fail['err']}")
+            
+            if auto_save_results['no_date']:
+                st.warning(f"⚠️ 파일명에서 일자를 인식하지 못해 **오늘 날짜({today_kst})**로 저장한 파일: {', '.join(auto_save_results['no_date'])}")
+                st.caption("📌 파일명 예시: `12월_20251210.xlsx`, `12월 2025-12-10.xlsx`, `251210_12월.xlsx`")
+
 
 # ==============================================================================
 # [4] 탭별 데이터 렌더링
@@ -641,30 +804,57 @@ for i, tab in enumerate(tabs):
         try:
             files = month_files_map.get(cur_m, [])
             df_curr, sob_curr, df_prev = None, None, None
-            prev_source_info = None  # [신규] 이전 데이터 출처 표시용
+            prev_source_info = None
+            curr_source_info = None
             
             if files:
-                files.sort(key=lambda x: x['name'])
+                # snapshot_date 기준으로 정렬 (가장 최근이 현재, 그 직전이 비교)
+                files.sort(key=lambda x: x['snapshot_date'])
+                
                 if len(files) >= 2:
-                    df_curr, sob_curr, df_prev = files[-1]['data'], files[-1]['sob'], files[-2]['data']
-                    prev_source_info = f"📁 파일 비교: `{files[-2]['name']}` ↔ `{files[-1]['name']}`"
+                    df_curr, sob_curr = files[-1]['data'], files[-1]['sob']
+                    df_prev = files[-2]['data']
+                    curr_source_info = f"📁 업로드 파일: `{files[-1]['name']}` ({files[-1]['snapshot_date']})"
+                    prev_source_info = f"📁 파일 비교: `{files[-2]['name']}` ({files[-2]['snapshot_date']})"
                 else:
                     df_curr, sob_curr = files[0]['data'], files[0]['sob']
-                    # [핵심 개선] DB에서 비교 데이터 조회
-                    compare_date_str = compare_date.strftime("%Y-%m-%d")
-                    df_prev, _ = get_full_data_by_date(compare_date_str, cur_m)
+                    curr_source_info = f"📁 업로드 파일: `{files[0]['name']}` ({files[0]['snapshot_date']})"
+                    
+                    # 파일의 snapshot_date 기준으로 그 이전 스냅샷을 DB에서 찾기
+                    file_snap_date = files[0]['snapshot_date']
+                    df_prev, _, found_date = get_latest_snapshot_before(file_snap_date, cur_m, exclude_date=file_snap_date)
                     
                     if df_prev is not None:
-                        prev_source_info = f"💾 DB 비교: `{compare_date_str}` 스냅샷"
-                    elif auto_fallback:
-                        # [신규] 자동 폴백: 가장 가까운 이전 스냅샷 찾기
-                        df_prev, _, found_date = get_latest_snapshot_before(compare_date_str, cur_m)
+                        prev_source_info = f"💾 DB 비교: `{found_date}` 스냅샷 (자동 매칭)"
+                    else:
+                        compare_date_str = compare_date.strftime("%Y-%m-%d")
+                        df_prev, _ = get_full_data_by_date(compare_date_str, cur_m)
                         if df_prev is not None:
-                            prev_source_info = f"🔄 자동 폴백: `{compare_date_str}` 데이터 없음 → 가장 가까운 `{found_date}` 사용"
+                            prev_source_info = f"💾 DB 비교: `{compare_date_str}` 스냅샷"
+                        elif auto_fallback:
+                            df_prev, _, found_date = get_latest_snapshot_before(compare_date_str, cur_m)
+                            if df_prev is not None:
+                                prev_source_info = f"🔄 자동 폴백: 가장 가까운 `{found_date}` 사용"
             else:
+                # [핵심] 파일 없을 때
                 report_date_str = report_date.strftime("%Y-%m-%d")
-                df_curr, sob_curr = get_full_data_by_date(report_date_str, cur_m)
-                if df_curr is not None:
+                is_past_month = cur_m < today_kst.month
+                
+                if auto_load_past_months and is_past_month:
+                    # [신규] 과거 월 자동 로드: 가장 마지막 스냅샷 + 그 직전 스냅샷으로 비교
+                    df_curr, sob_curr, latest_date = get_latest_snapshot_for_month(cur_m)
+                    if df_curr is not None:
+                        curr_source_info = f"📅 과거 월 자동 로드: 최신 스냅샷 `{latest_date}`"
+                        df_prev, _, second_date = get_second_latest_snapshot_for_month(cur_m, exclude_date=latest_date)
+                        if df_prev is not None and second_date != latest_date:
+                            prev_source_info = f"💾 직전 스냅샷 비교: `{second_date}`"
+                else:
+                    # 기존 로직: report_date 기준
+                    df_curr, sob_curr = get_full_data_by_date(report_date_str, cur_m)
+                    if df_curr is not None:
+                        curr_source_info = f"💾 DB 로드: `{report_date_str}` 스냅샷"
+                    
+                if df_curr is not None and df_prev is None:
                     compare_date_str = compare_date.strftime("%Y-%m-%d")
                     df_prev, _ = get_full_data_by_date(compare_date_str, cur_m)
                     if df_prev is not None:
@@ -672,23 +862,25 @@ for i, tab in enumerate(tabs):
                     elif auto_fallback:
                         df_prev, _, found_date = get_latest_snapshot_before(compare_date_str, cur_m, exclude_date=report_date_str)
                         if df_prev is not None:
-                            prev_source_info = f"🔄 자동 폴백: `{compare_date_str}` 데이터 없음 → 가장 가까운 `{found_date}` 사용"
+                            prev_source_info = f"🔄 자동 폴백: 가장 가까운 `{found_date}` 사용"
 
             if df_curr is None:
                 st.info(f"{cur_m}{T('월')} {T('데이터를 업로드하거나 조회하세요.')}")
-                # [개선] DB 조회 에러가 있었으면 표시
                 err_key = f'db_load_err_{cur_m}'
                 if err_key in st.session_state:
                     with st.expander(f"⚠️ {cur_m}월 DB 조회 에러 상세"):
                         st.code(st.session_state[err_key])
                 continue
 
-            # [신규] 비교 데이터 출처 안내
-            if prev_source_info:
-                st.caption(prev_source_info)
-            else:
-                st.warning(f"⚠️ {cur_m}월 비교 데이터(이전 스냅샷)를 찾을 수 없습니다. 증감(Var) 컬럼은 현재값과 동일하게 표시됩니다. "
-                           f"`{compare_date.strftime('%Y-%m-%d')}` 또는 그 이전 날짜로 이 월의 데이터를 저장해 주세요.")
+            # [신규] 데이터 출처 안내
+            col_info1, col_info2 = st.columns(2)
+            with col_info1:
+                if curr_source_info: st.caption(f"**현재:** {curr_source_info}")
+            with col_info2:
+                if prev_source_info: 
+                    st.caption(f"**비교:** {prev_source_info}")
+                else:
+                    st.caption("**비교:** ⚠️ 이전 스냅샷 없음 (증감 = 현재값)")
 
             budget = TARGET_DATA.get(cur_m, {}).get('rev', 0)
             total_rev = sob_curr.get('FIT_REV', 0) + sob_curr.get('GRP_REV', 0)
@@ -727,7 +919,6 @@ for i, tab in enumerate(tabs):
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     if c in df_prev.columns: cols_to_use.append(c)
                 
-                # [개선] DateStr 컬럼 보장
                 if 'DateStr' not in df_prev.columns and 'Date' in df_prev.columns:
                     df_prev['DateStr'] = pd.to_datetime(df_prev['Date']).dt.strftime('%Y-%m-%d')
                 
@@ -876,19 +1067,21 @@ for i, tab in enumerate(tabs):
                 else:
                     st.info(T("시각화할 데이터가 없습니다."))
 
-            if uploaded_files:
+            # [수정] 자동 저장이 켜져있을 때는 수동 저장 버튼을 옵션으로
+            if uploaded_files and not auto_save_on_upload:
                 st.divider()
                 save_date = st.date_input(T("저장할 기준 일자 선택"), value=today_kst, key=f"save_date_{cur_m}")
                 if st.button(f"💾 {save_date} / {cur_m}{T('월 데이터 DB 저장')}", key=f"btn_{cur_m}"):
-                    # [개선] 저장 결과를 상세히 표시
                     ok, err = save_data_with_sob(save_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr)
                     if ok:
                         st.success(f"✅ {save_date} : {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
                         st.toast(f"✅ {save_date} : {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
-                        # [개선] 캐시 무효화하여 Daily Tracking이 즉시 반영되도록
                         load_daily_summary_matrix.clear()
+                        get_all_snapshot_dates_for_month.clear()
                     else:
                         st.error(f"❌ 저장 실패: {err}")
+            elif uploaded_files and auto_save_on_upload and files:
+                st.caption(f"💡 자동 저장 모드: 업로드 시점에 이미 DB에 저장되었습니다. 수동 저장을 원하면 사이드바에서 자동 저장을 꺼주세요.")
         except Exception as e:
             st.error(f"Error in {cur_m}월 Tab: {e}")
             with st.expander("🔍 상세 에러 (개발자용)"):
