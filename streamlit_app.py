@@ -9,7 +9,8 @@ import textwrap
 import secret_forecasting  # 포캐스팅 모듈 임포트
 import plotly.express as px
 import plotly.graph_objects as go
-import os # [수정] 캐시 파일 확인을 위해 추가
+import os
+import traceback  # [추가] 에러 상세 추적용
 
 # ==============================================================================
 # [1] 페이지 기본 설정 및 다국어(중국어) 세션 고정 로직
@@ -166,7 +167,7 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-# [교체할 부분]
+# [타겟 데이터]
 TARGET_DATA = {
     1:  {"rn": 2270, "adr": 226869, "occ": 56.3, "rev": 514992575},
     2:  {"rn": 2577, "adr": 305227, "occ": 70.8, "rev": 786570856},
@@ -213,12 +214,11 @@ def load_all_historical_data():
 # [강력한 숫자 변환 함수]
 def clean_num(val):
     try:
-        # 값이 없으면 0
         if pd.isna(val) or str(val).strip() == '': return 0
-        # 문자열로 변환 후 콤마, 원화, 퍼센트, 공백 제거
         s = str(val).replace(',', '').replace('₩', '').replace(' ', '').replace('%', '').strip()
         return float(s)
-    except: return 0
+    except (ValueError, TypeError):
+        return 0
 
 def find_header_and_process(file):
     """
@@ -234,12 +234,12 @@ def find_header_and_process(file):
         # 1차 시도: 엑셀로 읽기
         try:
             df_raw = pd.read_excel(file, header=None)
-        except:
+        except Exception:
             # 2차 시도: CSV로 읽기 (utf-8)
             try:
                 file.seek(0)
                 df_raw = pd.read_csv(file, header=None)
-            except:
+            except Exception:
                 # 3차 시도: CSV로 읽기 (cp949 - 한글 인코딩)
                 file.seek(0)
                 df_raw = pd.read_csv(file, header=None, encoding='cp949')
@@ -247,12 +247,10 @@ def find_header_and_process(file):
         if df_raw is None or len(df_raw) < 5:
             return None, None, None
 
-        # [핵심] 5행(Index 4)부터 데이터 시작
         df_data = df_raw.iloc[4:].copy()
         
-        # 첫 번째 컬럼(A열, Index 0)이 날짜라고 가정
         df_data['Date'] = pd.to_datetime(df_data.iloc[:, 0], errors='coerce')
-        df_data = df_data.dropna(subset=['Date']) # 날짜가 없는 행은 제거
+        df_data = df_data.dropna(subset=['Date'])
         
         if df_data.empty: return None, None, None
 
@@ -265,7 +263,6 @@ def find_header_and_process(file):
         df_clean['DateStr'] = df_data['Date'].dt.strftime('%Y-%m-%d')
         df_clean['WeekDay'] = df_data.iloc[:, 1].astype(str)
         
-        # [지배인님 확정 좌표]
         df_clean['FIT_RMS'] = safe_col(2)  # C
         df_clean['FIT_REV'] = safe_col(5)  # F
         df_clean['GRP_RMS'] = safe_col(7)  # H
@@ -273,7 +270,6 @@ def find_header_and_process(file):
         df_clean['RMS'] = safe_col(14)     # O
         df_clean['REV'] = safe_col(18)     # S
         
-        # 보조 지표 (추정)
         df_clean['HU'] = safe_col(12)
         df_clean['Comp'] = safe_col(13)
         df_clean['OCC'] = safe_col(15)
@@ -288,32 +284,74 @@ def find_header_and_process(file):
             'TOTAL_OCC': float(df_clean['OCC'].mean()) if not df_clean['OCC'].empty else 0
         }
         
-        return df_clean, df_data['Date'].iloc[0].month, sob_data
+        return df_clean, int(df_data['Date'].iloc[0].month), sob_data
         
-    except Exception: return None, None, None
+    except Exception as e:
+        # [개선] 침묵하지 않고 디버그 가능하게 세션에 저장
+        st.session_state['last_upload_error'] = f"{type(e).__name__}: {e}"
+        return None, None, None
+
 
 def get_full_data_by_date(date_str, month_num):
+    """[개선] 에러를 침묵시키지 않고 명확히 표시"""
     try:
         doc = db.collection('daily_snapshots').document(date_str).collection('months').document(str(month_num)).get()
         if doc.exists:
             d = doc.to_dict()
             df = pd.read_json(io.StringIO(d['json_data']), orient='records')
-            # [DB 데이터 복구] 과거 데이터에 필드가 없으면 0으로 생성
             required_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
             for c in required_cols:
                 if c not in df.columns: df[c] = 0
             return df, d.get('sob_data')
-    except: pass
+    except Exception as e:
+        # [개선] 어떤 에러였는지 세션에 기록
+        st.session_state[f'db_load_err_{month_num}'] = f"{type(e).__name__}: {e}"
     return None, None
 
-def save_data_with_sob(date_str, month, df, sob):
+
+def get_latest_snapshot_before(target_date_str, month_num, exclude_date=None):
+    """
+    [신규] target_date 이전의 가장 최근 스냅샷을 자동으로 찾아 반환.
+    compare_date에 데이터가 없을 때 fallback으로 사용.
+    
+    Returns: (df, sob, actual_date_str) or (None, None, None)
+    """
     try:
-        db.collection('daily_snapshots').document(date_str).set({'created_at': firestore.SERVER_TIMESTAMP}, merge=True)
+        # 해당 month_num 데이터가 있는 모든 날짜를 가져옴
+        docs = db.collection_group('months').stream()
+        candidate_dates = []
+        for doc in docs:
+            if doc.id != str(month_num): continue
+            date_str = doc.reference.parent.parent.id
+            if exclude_date and date_str == exclude_date: continue
+            if date_str < target_date_str:
+                candidate_dates.append(date_str)
+        
+        if not candidate_dates: return None, None, None
+        
+        # 가장 최근 날짜 선택
+        latest = max(candidate_dates)
+        df, sob = get_full_data_by_date(latest, month_num)
+        return df, sob, latest
+    except Exception:
+        return None, None, None
+
+
+def save_data_with_sob(date_str, month, df, sob):
+    """[개선] 에러를 사용자에게 명확히 표시"""
+    try:
+        db.collection('daily_snapshots').document(date_str).set(
+            {'created_at': firestore.SERVER_TIMESTAMP}, merge=True
+        )
         db.collection('daily_snapshots').document(date_str).collection('months').document(str(month)).set({
-            'json_data': df.to_json(orient='records'), 'sob_data': sob, 'updated_at': firestore.SERVER_TIMESTAMP
+            'json_data': df.to_json(orient='records'),
+            'sob_data': sob,
+            'updated_at': firestore.SERVER_TIMESTAMP
         })
-        return True
-    except: return False
+        return True, None
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
 
 @st.cache_data(ttl=300)
 def load_daily_summary_matrix():
@@ -322,12 +360,14 @@ def load_daily_summary_matrix():
         docs = db.collection_group('months').stream()
         data = []
         for doc in docs:
-            month_num = int(doc.id)
+            try:
+                month_num = int(doc.id)
+            except (ValueError, TypeError):
+                continue
             date_str = doc.reference.parent.parent.id
             d = doc.to_dict()
             sob = d.get('sob_data', {})
             if sob:
-                # 매출(Rev)과 룸나잇(RN) 둘 다 계산
                 rev = sob.get('FIT_REV', 0) + sob.get('GRP_REV', 0)
                 rn = sob.get('FIT_RMS', 0) + sob.get('GRP_RMS', 0)
                 data.append({'Date': date_str, 'Month': f"{month_num}월", 'Rev': rev, 'RN': rn})
@@ -336,18 +376,16 @@ def load_daily_summary_matrix():
         
         df = pd.DataFrame(data)
         
-        # 각각 피벗 테이블 생성
         df_rev = df.pivot_table(index='Date', columns='Month', values='Rev', aggfunc='sum').fillna(0)
         df_rn = df.pivot_table(index='Date', columns='Month', values='RN', aggfunc='sum').fillna(0)
         
-        # 1~12월 컬럼이 모두 존재하도록 빈칸 보정
         month_cols = [f"{m}월" for m in range(1, 13)]
         for c in month_cols:
             if c not in df_rev.columns: df_rev[c] = 0
             if c not in df_rn.columns: df_rn[c] = 0
             
         return df_rev[month_cols].sort_index(), df_rn[month_cols].sort_index()
-    except Exception as e:
+    except Exception:
         return None, None
 
 # ==============================================================================
@@ -369,6 +407,13 @@ today_kst = now_kst.date()
 report_date = st.sidebar.date_input(T("기준 일자"), value=today_kst, max_value=today_kst)
 compare_date = st.sidebar.date_input(T("비교 일자"), value=today_kst - timedelta(days=1), max_value=today_kst)
 
+# [신규] 비교 데이터 자동 탐색 옵션
+auto_fallback = st.sidebar.checkbox(
+    "🔄 비교일자에 데이터 없으면 가장 가까운 이전 스냅샷 사용",
+    value=True,
+    help="비교 일자에 저장된 스냅샷이 없을 때, 그 이전의 가장 최근 스냅샷을 자동으로 찾아 비교합니다."
+)
+
 admin_key = st.sidebar.text_input(T("Admin Key"), type="password")
 if admin_key == "master136":
     st.session_state["authenticated"] = True
@@ -376,27 +421,23 @@ if admin_key == "master136":
 selected_page = T("Main Report")
 if st.session_state.get("authenticated"):
     st.sidebar.success(T("✅ Admin Mode On"))
-    # 메뉴에 Daily Tracking 추가!
     selected_page = st.sidebar.radio(T("Navigation"), [T("Main Report"), T("📈 Daily Tracking"), T("🎯 Forecasting")])
     if "historical_dow" not in st.session_state:
-        # [수정 시작] 캐시 기능 적용된 핀셋 수정 구간
         if st.sidebar.button(T("📊 4만건 히스토리 전체 분석 시작")):
             with st.sidebar.status(T("데이터 수색 중..."), expanded=True) as status:
                 try:
                     cache_file = "hotel_bookings_cache.pkl"
                     h_df = None
 
-                    # 1. 로컬 캐시 확인
                     if os.path.exists(cache_file):
                         st.sidebar.write(T("✅ 캐시 파일에서 로드! (비용 0원)"))
                         h_df = pd.read_pickle(cache_file)
                     else:
-                        # 2. 없으면 파이어베이스 로드 (기존 로직)
                         db = firestore.client()
                         docs = db.collection_group("hotel_bookings").stream()
                         hist_data = []
                         count = 0
-                        status_text = st.sidebar.empty() # 진행상황
+                        status_text = st.sidebar.empty()
                         for doc in docs:
                             hist_data.append(doc.to_dict())
                             count += 1
@@ -405,9 +446,8 @@ if st.session_state.get("authenticated"):
                         
                         if count > 0:
                             h_df = pd.DataFrame(hist_data)
-                            h_df.to_pickle(cache_file) # [핵심] 파일로 저장
+                            h_df.to_pickle(cache_file)
                     
-                    # 3. 데이터 처리 공통 로직
                     if h_df is not None and not h_df.empty:
                         h_df['b_date'] = pd.to_datetime(h_df['예약일자'], errors='coerce')
                         h_df = h_df.dropna(subset=['b_date'])
@@ -415,15 +455,15 @@ if st.session_state.get("authenticated"):
                         st.session_state["historical_dow"] = (h_df['dow'].value_counts(normalize=True) * 7).to_dict()
                         status.update(label=T("✅ 분석 완료!"), state="complete")
                         st.rerun()
-                except Exception as e: st.error(f"Error: {e}")
-        # [수정 끝]
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
 if selected_page == "🎯 Forecasting" or selected_page == T("🎯 Forecasting"):
     secret_forecasting.run_forecasting()
     st.stop()
 
 # ----------------------------------------------------------------------
-# 🌟 [새로 추가된 독립된 Daily Tracking 페이지]
+# 🌟 [Daily Tracking 페이지]
 # ----------------------------------------------------------------------
 elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tracking"):
     st.title(T("📈 Daily Tracking & Pace Analysis"))
@@ -473,7 +513,6 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
         st.subheader("📊 분기별 타겟 달성 현황 (Quarterly Target)")
         st.caption("※ 4,5월이 오버버짓하면 6월의 부족분을 상쇄할 수 있는지 확인하는 통합 뷰입니다.")
         
-        # 분기별 데이터 계산
         current_year = datetime.now().year
         q_data = []
         for q in range(1, 5):
@@ -481,8 +520,15 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
             q_target_rn = sum([TARGET_DATA[m]['rn'] for m in months])
             q_target_rev = sum([TARGET_DATA[m]['rev'] for m in months])
             
-            q_curr_rn = sum([df_rn[f"{m}월"].iloc[-1] if f"{m}월" in df_rn.columns else 0 for m in months])
-            q_curr_rev = sum([df_rev[f"{m}월"].iloc[-1] if f"{m}월" in df_rev.columns else 0 for m in months])
+            # [개선] 빈 DataFrame 방지
+            q_curr_rn = 0
+            q_curr_rev = 0
+            for m in months:
+                col = f"{m}월"
+                if col in df_rn.columns and not df_rn[col].empty:
+                    q_curr_rn += df_rn[col].iloc[-1]
+                if col in df_rev.columns and not df_rev[col].empty:
+                    q_curr_rev += df_rev[col].iloc[-1]
             
             rn_achieve = (q_curr_rn / q_target_rn * 100) if q_target_rn > 0 else 0
             
@@ -493,7 +539,6 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
             
         q_df = pd.DataFrame(q_data)
         
-        # 분기별 카드 UI (4등분)
         cols = st.columns(4)
         for idx, row in q_df.iterrows():
             with cols[idx]:
@@ -504,21 +549,20 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
 
         st.divider()
 
-        # [핵심] 현재 예약 속도 기반 프로젝션 (Projection)
         st.subheader("🚀 현재 속도 기반 마감 예측 (Run-Rate Projection)")
         st.caption("※ 최근 7일간의 예약 속도(Velocity)를 바탕으로 월말 최종 객실수(RN)를 예측합니다.")
         
         proj_data = []
         today = datetime.now()
         
-        for m in range(today.month, 13): # 이번 달부터 12월까지만
+        for m in range(today.month, 13):
             m_str = f"{m}월"
             if m_str not in df_rn.columns: continue
+            if df_rn[m_str].empty: continue
             
             target_rn = TARGET_DATA[m]['rn']
             curr_rn = df_rn[m_str].iloc[-1]
             
-            # 최근 7일간의 일평균 픽업량 (Run Rate)
             if len(df_rn) >= 7:
                 pickup_7d = df_rn[m_str].iloc[-1] - df_rn[m_str].iloc[-7]
                 run_rate = pickup_7d / 7
@@ -528,7 +572,7 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
             else:
                 run_rate = 0
                 
-            # 해당 월의 마지막 날짜까지 남은 일수 계산
+            # [확인] 12월 → 다음 해 1월 경계 처리 정상
             if m == 12:
                 last_day = datetime(current_year + 1, 1, 1) - timedelta(days=1)
             else:
@@ -537,11 +581,9 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
             days_remaining = (last_day.date() - today.date()).days
             if days_remaining < 0: days_remaining = 0
             
-            # 최종 예측치 계산 = 현재 OTB + (일평균 속도 * 남은 기간)
             projected_rn = curr_rn + (run_rate * days_remaining)
             diff_to_target = projected_rn - target_rn
             
-            # 상태 판단
             if diff_to_target >= target_rn * 0.05: status = "🔥 매우 빠름 (단가 인상 고려)"
             elif diff_to_target >= 0: status = "✅ 정상 궤도 (On-Pace)"
             elif diff_to_target >= -target_rn * 0.1: status = "⚠️ 주의 (Slightly Slow)"
@@ -570,10 +612,18 @@ elif selected_page == "📈 Daily Tracking" or selected_page == T("📈 Daily Tr
         else:
             st.info("예측할 수 있는 진행 중인 월 데이터가 없습니다.")
             
-    st.stop() # 여기서 렌더링 종료
+    st.stop()
+
+# ==============================================================================
+# Main Report
 # ==============================================================================    
 st.title(T("🏨 Daily Pace Report"))
 uploaded_files = st.file_uploader(T("엑셀 업로드"), accept_multiple_files=True, type=['xlsx', 'csv'])
+
+# [개선] 업로드 에러가 있었으면 표시
+if 'last_upload_error' in st.session_state and uploaded_files:
+    with st.expander("⚠️ 업로드 처리 중 일부 파일에서 에러 발생 (클릭하여 상세 확인)"):
+        st.code(st.session_state['last_upload_error'])
 
 tabs = st.tabs([f"{i}{T('월')}" for i in range(1, 13)])
 month_files_map = {i: [] for i in range(1, 13)}
@@ -583,7 +633,7 @@ if uploaded_files:
         if m: month_files_map[m].append({'name': f.name, 'data': df, 'sob': sob})
 
 # ==============================================================================
-# [4] 탭별 데이터 렌더링 (T 함수 적용 핵심 구간)
+# [4] 탭별 데이터 렌더링
 # ==============================================================================
 for i, tab in enumerate(tabs):
     cur_m = i + 1
@@ -591,23 +641,55 @@ for i, tab in enumerate(tabs):
         try:
             files = month_files_map.get(cur_m, [])
             df_curr, sob_curr, df_prev = None, None, None
+            prev_source_info = None  # [신규] 이전 데이터 출처 표시용
             
             if files:
                 files.sort(key=lambda x: x['name'])
                 if len(files) >= 2:
                     df_curr, sob_curr, df_prev = files[-1]['data'], files[-1]['sob'], files[-2]['data']
+                    prev_source_info = f"📁 파일 비교: `{files[-2]['name']}` ↔ `{files[-1]['name']}`"
                 else:
                     df_curr, sob_curr = files[0]['data'], files[0]['sob']
-                    df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
+                    # [핵심 개선] DB에서 비교 데이터 조회
+                    compare_date_str = compare_date.strftime("%Y-%m-%d")
+                    df_prev, _ = get_full_data_by_date(compare_date_str, cur_m)
+                    
+                    if df_prev is not None:
+                        prev_source_info = f"💾 DB 비교: `{compare_date_str}` 스냅샷"
+                    elif auto_fallback:
+                        # [신규] 자동 폴백: 가장 가까운 이전 스냅샷 찾기
+                        df_prev, _, found_date = get_latest_snapshot_before(compare_date_str, cur_m)
+                        if df_prev is not None:
+                            prev_source_info = f"🔄 자동 폴백: `{compare_date_str}` 데이터 없음 → 가장 가까운 `{found_date}` 사용"
             else:
-                df_curr, sob_curr = get_full_data_by_date(report_date.strftime("%Y-%m-%d"), cur_m)
-                if df_curr is not None: df_prev, _ = get_full_data_by_date(compare_date.strftime("%Y-%m-%d"), cur_m)
+                report_date_str = report_date.strftime("%Y-%m-%d")
+                df_curr, sob_curr = get_full_data_by_date(report_date_str, cur_m)
+                if df_curr is not None:
+                    compare_date_str = compare_date.strftime("%Y-%m-%d")
+                    df_prev, _ = get_full_data_by_date(compare_date_str, cur_m)
+                    if df_prev is not None:
+                        prev_source_info = f"💾 DB 비교: `{compare_date_str}` 스냅샷"
+                    elif auto_fallback:
+                        df_prev, _, found_date = get_latest_snapshot_before(compare_date_str, cur_m, exclude_date=report_date_str)
+                        if df_prev is not None:
+                            prev_source_info = f"🔄 자동 폴백: `{compare_date_str}` 데이터 없음 → 가장 가까운 `{found_date}` 사용"
 
             if df_curr is None:
                 st.info(f"{cur_m}{T('월')} {T('데이터를 업로드하거나 조회하세요.')}")
+                # [개선] DB 조회 에러가 있었으면 표시
+                err_key = f'db_load_err_{cur_m}'
+                if err_key in st.session_state:
+                    with st.expander(f"⚠️ {cur_m}월 DB 조회 에러 상세"):
+                        st.code(st.session_state[err_key])
                 continue
 
-            # TARGET_DATA에서 해당 월의 'rev'(매출) 값을 가져오도록 수정합니다.
+            # [신규] 비교 데이터 출처 안내
+            if prev_source_info:
+                st.caption(prev_source_info)
+            else:
+                st.warning(f"⚠️ {cur_m}월 비교 데이터(이전 스냅샷)를 찾을 수 없습니다. 증감(Var) 컬럼은 현재값과 동일하게 표시됩니다. "
+                           f"`{compare_date.strftime('%Y-%m-%d')}` 또는 그 이전 날짜로 이 월의 데이터를 저장해 주세요.")
+
             budget = TARGET_DATA.get(cur_m, {}).get('rev', 0)
             total_rev = sob_curr.get('FIT_REV', 0) + sob_curr.get('GRP_REV', 0)
             total_rms = sob_curr.get('FIT_RMS', 0) + sob_curr.get('GRP_RMS', 0)
@@ -624,7 +706,7 @@ for i, tab in enumerate(tabs):
                         </table>
                         <div class="kpi-wrapper">
                             <div class="kpi-card"><div class="kpi-title">{T('OCC')}</div><div class="kpi-value">{sob_curr.get('TOTAL_OCC',0):.1f}%</div></div>
-                            <div class="kpi-card kpi-accent"><div class="kpi-title">{T('ACHIEVEMENT')}</div><div class="kpi-value">{(total_rev/budget*100):.1f}%</div></div>
+                            <div class="kpi-card kpi-accent"><div class="kpi-title">{T('ACHIEVEMENT')}</div><div class="kpi-value">{(total_rev/budget*100) if budget>0 else 0:.1f}%</div></div>
                         </div>
                     </div>
                     <div>
@@ -641,12 +723,15 @@ for i, tab in enumerate(tabs):
 
             merged = df_curr.copy()
             if df_prev is not None:
-                # [DB 데이터 복구] FIT/GRP 컬럼이 DB에 없으면 0으로 채워서 병합
                 cols_to_use = ['DateStr', 'HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV']
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     if c in df_prev.columns: cols_to_use.append(c)
                 
-                p_sub = df_prev[cols_to_use].copy()
+                # [개선] DateStr 컬럼 보장
+                if 'DateStr' not in df_prev.columns and 'Date' in df_prev.columns:
+                    df_prev['DateStr'] = pd.to_datetime(df_prev['Date']).dt.strftime('%Y-%m-%d')
+                
+                p_sub = df_prev[[c for c in cols_to_use if c in df_prev.columns]].copy()
                 for c in ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']:
                     if c not in p_sub.columns: p_sub[c] = 0
                 
@@ -655,7 +740,6 @@ for i, tab in enumerate(tabs):
                 for c in ['HU', 'Comp', 'RMS', 'OCC', 'ADR', 'RevPAR', 'REV', 'FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV']: 
                     merged[f'{c}_prev'] = 0
 
-            # 결측치 0 처리 및 픽업 계산
             all_cols = ['FIT_RMS', 'FIT_REV', 'GRP_RMS', 'GRP_REV', 'RMS', 'REV', 'HU', 'Comp', 'OCC', 'ADR', 'RevPAR']
             for c in all_cols:
                 if c not in merged.columns: merged[c] = 0
@@ -726,7 +810,8 @@ for i, tab in enumerate(tabs):
                     try:
                         v = float(str(val).replace('%','').replace(',',''))
                         return 'color: #166534; font-weight: bold;' if v > 0 else 'color: #dc2626; font-weight: bold;' if v < 0 else 'color: #374151;'
-                    except: return ''
+                    except (ValueError, TypeError):
+                        return ''
                 styler = styler.map(color_pick, subset=var_cols)
                 styler = styler.set_properties(subset=var_cols, **{'background-color': '#fffbeb'})
                 styler = styler.set_properties(subset=pd.IndexSlice[final_df.index[-1], :], 
@@ -736,7 +821,6 @@ for i, tab in enumerate(tabs):
             with sub_t2:
                 vis_df = merged.copy()
                 if not vis_df.empty:
-                    # 1. 일자별 매출 구성 (현재 실적 기준) - 누적 막대
                     st.subheader(T("일자별 매출 구성 (개인 vs 단체)"))
                     m_rev = vis_df.melt(id_vars=['DateStr', 'FIT_RMS', 'GRP_RMS'], 
                                         value_vars=['FIT_REV', 'GRP_REV'],
@@ -753,7 +837,6 @@ for i, tab in enumerate(tabs):
                     
                     st.divider()
                     
-                    # 2. 요일별 픽업 히트맵 (Pickup RMS 기준)
                     st.subheader(T("요일별 픽업 히트맵"))
                     vis_df['Date'] = pd.to_datetime(vis_df['DateStr'])
                     vis_df['DayNum'] = vis_df['Date'].dt.day
@@ -765,7 +848,6 @@ for i, tab in enumerate(tabs):
                     heatmap_z = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='Pick_RMS', aggfunc='sum').fillna(0)
                     heatmap_d = vis_df.pivot_table(index='MonthWeek', columns='WeekDay', values='DayNum', aggfunc='first').fillna(0).astype(int)
                     
-                    # 텍스트 생성 (안전한 이중 반복문)
                     final_text = []
                     for r_idx in range(len(heatmap_z)):
                         row_cells = []
@@ -777,10 +859,10 @@ for i, tab in enumerate(tabs):
                                 else:
                                     sign = "+" if v_val > 0 else ""
                                     row_cells.append(f"{d_val}일<br><b>{sign}{v_val}</b>")
-                            except: row_cells.append("")
+                            except (IndexError, ValueError, TypeError):
+                                row_cells.append("")
                         final_text.append(row_cells)
 
-                    # Plotly Heatmap
                     heatmap_z.index = heatmap_z.index.astype(str)
                     
                     fig_hm = go.Figure(data=go.Heatmap(
@@ -798,7 +880,16 @@ for i, tab in enumerate(tabs):
                 st.divider()
                 save_date = st.date_input(T("저장할 기준 일자 선택"), value=today_kst, key=f"save_date_{cur_m}")
                 if st.button(f"💾 {save_date} / {cur_m}{T('월 데이터 DB 저장')}", key=f"btn_{cur_m}"):
-                    if save_data_with_sob(save_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr):
+                    # [개선] 저장 결과를 상세히 표시
+                    ok, err = save_data_with_sob(save_date.strftime("%Y-%m-%d"), cur_m, df_curr, sob_curr)
+                    if ok:
+                        st.success(f"✅ {save_date} : {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
                         st.toast(f"✅ {save_date} : {cur_m}{T('월 데이터가 안전하게 저장되었습니다.')}")
+                        # [개선] 캐시 무효화하여 Daily Tracking이 즉시 반영되도록
+                        load_daily_summary_matrix.clear()
+                    else:
+                        st.error(f"❌ 저장 실패: {err}")
         except Exception as e:
             st.error(f"Error in {cur_m}월 Tab: {e}")
+            with st.expander("🔍 상세 에러 (개발자용)"):
+                st.code(traceback.format_exc())
