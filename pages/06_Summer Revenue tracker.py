@@ -8,6 +8,7 @@ import plotly.express as px
 import io
 import numpy as np
 import textwrap
+import math
 
 # ==============================================================================
 # [1] 페이지 설정
@@ -31,7 +32,7 @@ st.markdown(textwrap.dedent("""
 """), unsafe_allow_html=True)
 
 # ==============================================================================
-# [2] 구간 설정 (이전 대화 내용 기반)
+# [2] 구간 설정
 # ==============================================================================
 PERIODS = [
     {
@@ -41,10 +42,11 @@ PERIODS = [
         "start": "2026-07-01",
         "end": "2026-07-18",
         "target_adr": 355_000,
-        "new_bk_adr_lo": 355_000,  # 신규 예약 목표 ADR 하단
-        "new_bk_adr_hi": 355_000,  # 신규 예약 목표 ADR 상단 (동일하면 단일값)
-        "target_occ": 0.85,        # 목표 OCC 85% (프리피크)
-        "booking_buffer": 3,       # 기간 종료일 N일 전까지 실질 판매 (period END 기준)
+        "new_bk_adr_lo": 355_000,
+        "new_bk_adr_hi": 355_000,
+        "target_occ": 0.85,
+        "booking_buffer": 3,
+        "wash_rate": 0.08,
         "color": "#64748b",
         "bg": "#f8fafc",
     },
@@ -57,8 +59,9 @@ PERIODS = [
         "target_adr": 340_000,
         "new_bk_adr_lo": 340_000,
         "new_bk_adr_hi": 340_000,
-        "target_occ": 0.90,        # 목표 OCC 90% (숄더)
+        "target_occ": 0.90,
         "booking_buffer": 3,
+        "wash_rate": 0.08,
         "color": "#d97706",
         "bg": "#fffbeb",
     },
@@ -71,8 +74,9 @@ PERIODS = [
         "target_adr": 510_000,
         "new_bk_adr_lo": 510_000,
         "new_bk_adr_hi": 530_000,
-        "target_occ": 0.97,        # 목표 OCC 97% (극성수기)
-        "booking_buffer": 5,       # 극성수기는 막바지 예약 적으므로 기간 종료 5일 전 기준
+        "target_occ": 0.97,
+        "booking_buffer": 5,
+        "wash_rate": 0.12,
         "color": "#dc2626",
         "bg": "#fef2f2",
     },
@@ -85,8 +89,9 @@ PERIODS = [
         "target_adr": 470_000,
         "new_bk_adr_lo": 470_000,
         "new_bk_adr_hi": 470_000,
-        "target_occ": 0.96,        # 목표 OCC 96% (성수기 후반)
+        "target_occ": 0.96,
         "booking_buffer": 3,
+        "wash_rate": 0.10,
         "color": "#ea580c",
         "bg": "#fff7ed",
     },
@@ -99,20 +104,20 @@ PERIODS = [
         "target_adr": 310_000,
         "new_bk_adr_lo": 310_000,
         "new_bk_adr_hi": 310_000,
-        "target_occ": 0.80,        # 목표 OCC 80% (숄더 후반)
+        "target_occ": 0.80,
         "booking_buffer": 3,
+        "wash_rate": 0.08,
         "color": "#16a34a",
         "bg": "#f0fdf4",
     },
 ]
 
-# 월별 예산 목표 (이전 대화 수치)
+# 월별 예산 목표
 MONTH_TARGETS = {
     7: {"rn": 3_720, "rev": 1_231_949_142},
     8: {"rn": 3_873, "rev": 1_388_376_999},
 }
 
-# 총 판매 가능 객실수 (고장/유지보수 제외 기준 129실)
 TOTAL_ROOMS = 129
 
 # ==============================================================================
@@ -124,7 +129,7 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"🔥 Firebase 연결 실패: {e}")
+        st.error(f"Firebase 연결 실패: {e}")
         st.stop()
 
 db = firestore.client()
@@ -136,7 +141,6 @@ db = firestore.client()
 
 @st.cache_data(ttl=60)
 def get_snapshot_dates_for_month(month_num: int) -> list:
-    """해당 월에 저장된 스냅샷 날짜 목록 반환"""
     try:
         db_local = firestore.client()
         docs = db_local.collection_group("months").stream()
@@ -151,7 +155,6 @@ def get_snapshot_dates_for_month(month_num: int) -> list:
 
 @st.cache_data(ttl=60)
 def get_all_snapshot_dates() -> list:
-    """7월·8월 스냅샷 날짜 합집합 (최신순)"""
     d7 = set(get_snapshot_dates_for_month(7))
     d8 = set(get_snapshot_dates_for_month(8))
     return sorted(d7 | d8, reverse=True)
@@ -159,10 +162,6 @@ def get_all_snapshot_dates() -> list:
 
 @st.cache_data(ttl=60)
 def load_reservation_pickups(snapshot_date: str) -> pd.DataFrame:
-    """해당 날짜에 예약된 건 로드 — revenue_integrity_history 컬렉션
-    문서 ID = {snapshot_date}_Reservation
-    Snapshot_Date = Booking_Date (예약일자)이므로 당일 신규 유입 예약만 추출됨
-    """
     try:
         db_local = firestore.client()
         doc_id = f"{snapshot_date}_Reservation"
@@ -171,17 +170,13 @@ def load_reservation_pickups(snapshot_date: str) -> pd.DataFrame:
             data = doc.to_dict().get("data", [])
             if data:
                 df = pd.DataFrame(data)
-                # CheckIn 파싱 (string으로 저장됨)
                 if "CheckIn" in df.columns:
                     df["CheckIn"] = pd.to_datetime(df["CheckIn"], errors="coerce")
-                # 숫자형 변환
                 for col in ["Room_Revenue", "Total_Revenue", "RN", "Rooms", "Nights", "F_B_Revenue"]:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-                # RN 없으면 Rooms * Nights로 계산
                 if "RN" not in df.columns and "Rooms" in df.columns and "Nights" in df.columns:
                     df["RN"] = df["Rooms"] * df["Nights"]
-                # 0원 예약 제외 (무료 이용, 내부 사용 등)
                 if "Room_Revenue" in df.columns:
                     df = df[df["Room_Revenue"] > 0].copy()
                 return df
@@ -190,10 +185,32 @@ def load_reservation_pickups(snapshot_date: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def calc_res_period_stats(res_df: pd.DataFrame) -> dict:
-    """구간별 신규 예약 ADR/RN/건수 계산
-    Returns: {period_id: {"rn": ..., "rev": ..., "adr": ..., "count": ...} or None}
-    """
+@st.cache_data(ttl=300)
+def load_cancellation_pickups(snapshot_date: str) -> pd.DataFrame:
+    try:
+        db_local = firestore.client()
+        doc_id = f"{snapshot_date}_Cancellation"
+        doc = db_local.collection("revenue_integrity_history").document(doc_id).get()
+        if doc.exists:
+            data = doc.to_dict().get("data", [])
+            if data:
+                df = pd.DataFrame(data)
+                if "CheckIn" in df.columns:
+                    df["CheckIn"] = pd.to_datetime(df["CheckIn"], errors="coerce")
+                for col in ["Room_Revenue", "Total_Revenue", "RN", "Rooms", "Nights", "F_B_Revenue"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+                if "RN" not in df.columns and "Rooms" in df.columns and "Nights" in df.columns:
+                    df["RN"] = df["Rooms"] * df["Nights"]
+                if "Room_Revenue" in df.columns:
+                    df = df[df["Room_Revenue"] > 0].copy()
+                return df
+    except Exception as e:
+        st.session_state["_cancel_pickup_err"] = str(e)
+    return pd.DataFrame()
+
+
+def calc_res_period_stats(res_df: pd.DataFrame, cancel_df: pd.DataFrame = None) -> dict:
     stats = {}
     for p in PERIODS:
         if res_df.empty or "CheckIn" not in res_df.columns:
@@ -205,11 +222,36 @@ def calc_res_period_stats(res_df: pd.DataFrame) -> dict:
         )
         sub = res_df[mask]
         rn_sum = sub["RN"].sum() if not sub.empty else 0
+
+        # 취소 RN 계산
+        cancel_rn = 0
+        if cancel_df is not None and not cancel_df.empty and "CheckIn" in cancel_df.columns:
+            c_mask = (
+                (cancel_df["CheckIn"] >= pd.Timestamp(p["start"]))
+                & (cancel_df["CheckIn"] <= pd.Timestamp(p["end"]))
+            )
+            c_sub = cancel_df[c_mask]
+            cancel_rn = int(c_sub["RN"].sum()) if not c_sub.empty else 0
+
         if sub.empty or rn_sum == 0:
-            stats[p["id"]] = None
+            # 취소만 있는 경우에도 None 반환하지 않고 cancel 정보 포함
+            if cancel_rn > 0:
+                stats[p["id"]] = {
+                    "rn": 0,
+                    "room_rev": 0,
+                    "total_rev": 0,
+                    "room_adr": 0,
+                    "total_adr": 0,
+                    "count": 0,
+                    "cancel_rn": cancel_rn,
+                    "net_rn": -cancel_rn,
+                }
+            else:
+                stats[p["id"]] = None
         else:
             room_rev = sub["Room_Revenue"].sum()
             total_rev = sub["Total_Revenue"].sum() if "Total_Revenue" in sub.columns else room_rev
+            net_rn = int(rn_sum) - cancel_rn
             stats[p["id"]] = {
                 "rn": int(rn_sum),
                 "room_rev": room_rev,
@@ -217,12 +259,38 @@ def calc_res_period_stats(res_df: pd.DataFrame) -> dict:
                 "room_adr": room_rev / rn_sum,
                 "total_adr": total_rev / rn_sum,
                 "count": len(sub),
+                "cancel_rn": cancel_rn,
+                "net_rn": net_rn,
             }
     return stats
 
 
+@st.cache_data(ttl=300)
+def load_7day_pickups(curr_date_str: str) -> dict:
+    base = datetime.strptime(curr_date_str, "%Y-%m-%d").date()
+    period_daily = {p["id"]: [] for p in PERIODS}
+
+    for i in range(1, 8):
+        d = (base - timedelta(days=i)).strftime("%Y-%m-%d")
+        r_df = load_reservation_pickups(d)
+        c_df = load_cancellation_pickups(d)
+        stats = calc_res_period_stats(r_df, c_df)
+        for p in PERIODS:
+            s = stats.get(p["id"])
+            net = s["net_rn"] if s else 0
+            period_daily[p["id"]].append(net)
+
+    result = {}
+    for pid, vals in period_daily.items():
+        loaded = [v for v in vals if v > 0]
+        result[pid] = {
+            "avg_net_rn": sum(vals) / 7,
+            "days_with_data": len(loaded),
+        }
+    return result
+
+
 def load_snapshot(date_str: str, month_num: int) -> pd.DataFrame | None:
-    """특정 날짜·월의 스냅샷 로드"""
     try:
         doc = (
             db.collection("daily_snapshots")
@@ -234,7 +302,6 @@ def load_snapshot(date_str: str, month_num: int) -> pd.DataFrame | None:
         if doc.exists:
             d = doc.to_dict()
             df = pd.read_json(io.StringIO(d["json_data"]), orient="records")
-            # 필수 컬럼 보정
             for c in ["FIT_RMS", "FIT_REV", "GRP_RMS", "GRP_REV", "RMS", "REV", "OCC", "ADR", "RevPAR", "HU", "Comp"]:
                 if c not in df.columns:
                     df[c] = 0
@@ -251,7 +318,6 @@ def load_snapshot(date_str: str, month_num: int) -> pd.DataFrame | None:
 
 
 def combine_months(df7, df8) -> pd.DataFrame | None:
-    """7월·8월 데이터프레임 합치기"""
     parts = [df for df in [df7, df8] if df is not None and not df.empty]
     if not parts:
         return None
@@ -267,17 +333,17 @@ def combine_months(df7, df8) -> pd.DataFrame | None:
 all_dates = get_all_snapshot_dates()
 
 with st.sidebar:
-    st.markdown("## ⚙️ Summer Tracker 설정")
+    st.markdown("## 설정")
 
     if not all_dates:
-        st.warning("저장된 스냅샷 없음.\n메인 리포트에서 7·8월 데이터를 먼저 저장해 주세요.")
+        st.warning("저장된 스냅샷 없음. 메인 리포트에서 7·8월 데이터를 먼저 저장해 주세요.")
         st.stop()
 
-    curr_date = st.selectbox("📅 기준 스냅샷 (오늘)", all_dates, index=0)
+    curr_date = st.selectbox("기준 스냅샷 (오늘)", all_dates, index=0)
 
     prev_options = [d for d in all_dates if d < curr_date]
     prev_date = (
-        st.selectbox("📅 비교 스냅샷 (전일/전주)", prev_options, index=0)
+        st.selectbox("비교 스냅샷 (전일/전주)", prev_options, index=0)
         if prev_options
         else None
     )
@@ -285,18 +351,28 @@ with st.sidebar:
         st.caption("비교할 이전 스냅샷이 없습니다.")
 
     st.divider()
-    st.markdown("**🎯 구간별 ADR 목표**")
+    st.markdown("**구간별 ADR 목표**")
     for p in PERIODS:
         st.markdown(
             f"<span style='color:{p['color']};font-size:16px;'>■</span> "
             f"**{p['desc']}** {p['target_adr']:,}원",
             unsafe_allow_html=True,
         )
+
     st.divider()
-    if st.button("🔄 캐시 새로고침"):
+    st.markdown("**ADR Scenario**")
+    scenario_adj = st.slider(
+        "신규 단가 조정 (%)", -20, 20, 0, step=5,
+        help="신규 예약 목표 단가를 % 조정하여 예상 최종 ADR 재계산"
+    )
+
+    st.divider()
+    if st.button("캐시 새로고침"):
         get_all_snapshot_dates.clear()
         get_snapshot_dates_for_month.clear()
         load_reservation_pickups.clear()
+        load_cancellation_pickups.clear()
+        load_7day_pickups.clear()
         st.rerun()
 
 # ==============================================================================
@@ -310,22 +386,24 @@ prev_df8 = load_snapshot(prev_date, 8) if prev_date else None
 curr_df = combine_months(curr_df7, curr_df8)
 prev_df = combine_months(prev_df7, prev_df8)
 
-# 신규 예약 ADR: revenue_integrity_history에서 전일(curr_date - 1) 예약 데이터 로드
-# 매일 업로드하는 픽업 파일의 Booking_Date = 전일 → 저장 문서 ID도 전일 기준
 _pickup_date = (
     datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(days=1)
 ).strftime("%Y-%m-%d")
 res_today = load_reservation_pickups(_pickup_date)
-res_period_stats = calc_res_period_stats(res_today)
+cancel_today = load_cancellation_pickups(_pickup_date)
+res_period_stats = calc_res_period_stats(res_today, cancel_today)
+
+pace_7day = load_7day_pickups(curr_date)
+
 if not res_today.empty:
-    st.sidebar.success(f"✅ 신규 예약 {len(res_today)}건 로드됨\n({_pickup_date} 예약분)")
+    st.sidebar.success(f"신규 예약 {len(res_today)}건 로드됨\n({_pickup_date} 예약분)")
 else:
-    st.sidebar.info(f"ℹ️ {_pickup_date} 예약 데이터 없음\n(Daily Pick-up에서 어제 예약 파일 업로드 필요)")
+    st.sidebar.info(f"{_pickup_date} 예약 데이터 없음\n(Daily Pick-up에서 어제 예약 파일 업로드 필요)")
 
 # ==============================================================================
 # [7] 메인 화면
 # ==============================================================================
-st.title("🌊 Summer 2026 Revenue Tracker")
+st.title("Summer 2026 Revenue Tracker")
 st.caption(
     f"기준: **{curr_date}**  |  비교: **{prev_date or '없음'}**  "
     f"|  구간별 데일리 픽업 · ADR · Revenue 모니터링"
@@ -340,7 +418,6 @@ if prev_df is not None:
     prev_df["Date"] = pd.to_datetime(prev_df["Date"])
 
 
-# ── 헬퍼 ──────────────────────────────────────────────────────────────────────
 def period_df(src_df, p):
     if src_df is None:
         return pd.DataFrame()
@@ -362,8 +439,10 @@ def calc_summary(df):
 # ==============================================================================
 # [8] 구간 요약 카드 (상단 5개)
 # ==============================================================================
-st.markdown("### 📊 구간별 OTB 현황 요약")
+st.markdown("### 구간별 OTB 현황 요약")
 period_results = []
+
+scenario_factor = 1 + scenario_adj / 100
 
 summary_cols = st.columns(5)
 for i, p in enumerate(PERIODS):
@@ -374,7 +453,6 @@ for i, p in enumerate(PERIODS):
 
     pickup_rn = cs["rn"] - ps["rn"]
     pickup_rev = cs["rev"] - ps["rev"]
-    # 신규 유입 예약 ADR: revenue_integrity_history 기반 (OTB diff 방식 제거)
     res_stat = res_period_stats.get(p["id"])
     pickup_room_adr = res_stat["room_adr"] if res_stat else None
     pickup_total_adr = res_stat["total_adr"] if res_stat else None
@@ -382,41 +460,43 @@ for i, p in enumerate(PERIODS):
     adr_color = "#16a34a" if adr_vs_tgt >= 0 else "#dc2626"
     pickup_adr_color = "#16a34a" if (pickup_room_adr or 0) >= p["target_adr"] else "#dc2626"
 
-    # ── 블렌디드 ADR 계산 ──────────────────────────────────────────────────
-    # = (현재 OTB 매출 + 잔여 RN × 신규 목표 단가) / 목표 총 RN
-    # ※ OTB RN >= 목표 RN이면 이미 달성 → 현재 ADR 그대로 반환
     _p_start = datetime.strptime(p["start"], "%Y-%m-%d").date()
     _p_end   = datetime.strptime(p["end"],   "%Y-%m-%d").date()
     _p_days  = (_p_end - _p_start).days + 1
-    _target_rn   = int(TOTAL_ROOMS * _p_days * p["target_occ"])
-    _remaining   = max(0, _target_rn - cs["rn"])
-    _otb_rev     = cs["rev"]   # cs["rev"] 직접 사용 (= sum(REV) per period)
-    _is_range    = p["new_bk_adr_lo"] != p["new_bk_adr_hi"]
+    _target_rn = int(TOTAL_ROOMS * _p_days * p["target_occ"])
+    effective_target_rn = math.ceil(_target_rn / (1 - p["wash_rate"]))
+    _remaining = max(0, effective_target_rn - cs["rn"])
+    _otb_rev   = cs["rev"]
+    _is_range  = p["new_bk_adr_lo"] != p["new_bk_adr_hi"]
 
-    def _blended(new_bk_price):
-        if _target_rn <= 0:
-            return cs["adr"]
-        if _remaining <= 0:
-            # OTB가 이미 목표 달성 — 추가 판매 없으므로 현재 ADR 반환
-            return cs["adr"]
-        return (_otb_rev + _remaining * new_bk_price) / _target_rn
+    adj_lo = p["new_bk_adr_lo"] * scenario_factor
+    adj_hi = p["new_bk_adr_hi"] * scenario_factor
 
-    _blended_lo = _blended(p["new_bk_adr_lo"])
-    _blended_hi = _blended(p["new_bk_adr_hi"])
+    def _blended(new_bk_price, _r=_remaining, _otb=_otb_rev, _trn=_target_rn, _cs_adr=cs["adr"]):
+        if _trn <= 0:
+            return _cs_adr
+        if _r <= 0:
+            return _cs_adr
+        return (_otb + _r * new_bk_price) / _trn
+
+    _blended_lo = _blended(adj_lo)
+    _blended_hi = _blended(adj_hi)
 
     if _remaining <= 0:
         _blended_str = f"{cs['adr']:,.0f}원 (OCC 목표 달성)"
-        # 신규 목표 단가는 remaining=0이어도 항상 표시
         _new_bk_str  = (
             f"{p['new_bk_adr_lo']:,}~{p['new_bk_adr_hi']:,}원"
             if _is_range else f"{p['new_bk_adr_lo']:,}원"
         )
     elif _is_range:
         _blended_str = f"{_blended_lo:,.0f}~{_blended_hi:,.0f}원"
-        _new_bk_str  = f"{p['new_bk_adr_lo']:,}~{p['new_bk_adr_hi']:,}원"
+        _new_bk_str  = f"{adj_lo:,.0f}~{adj_hi:,.0f}원"
     else:
         _blended_str = f"{_blended_lo:,.0f}원"
-        _new_bk_str  = f"{p['new_bk_adr_lo']:,}원"
+        _new_bk_str  = f"{adj_lo:,.0f}원"
+
+    if scenario_adj != 0:
+        _new_bk_str += f" (조정 {scenario_adj:+d}%)"
 
     period_results.append(
         {
@@ -430,14 +510,16 @@ for i, p in enumerate(PERIODS):
             "adr_vs_tgt": adr_vs_tgt,
             "curr_df": c_df,
             "prev_df": p_df,
-            # 블렌디드 ADR
             "target_rn": _target_rn,
+            "effective_target_rn": effective_target_rn,
             "remaining_rn": _remaining,
             "blended_lo": _blended_lo,
             "blended_hi": _blended_hi,
             "blended_str": _blended_str,
             "new_bk_str": _new_bk_str,
             "is_range": _is_range,
+            "adj_lo": adj_lo,
+            "adj_hi": adj_hi,
         }
     )
 
@@ -445,12 +527,17 @@ for i, p in enumerate(PERIODS):
         pickup_sign = "+" if pickup_rn >= 0 else ""
         room_adr_str  = f"{pickup_room_adr:,.0f}원"  if pickup_room_adr  is not None else "—"
         total_adr_str = f"{pickup_total_adr:,.0f}원" if pickup_total_adr is not None else "—"
-        res_info = (
-            f"<span style='font-size:10px;color:#6b7280;'>"
-            f"{res_stat['count']}건 / {res_stat['rn']}RN</span>"
-            if res_stat else
-            "<span style='font-size:10px;color:#9ca3af;'>예약 데이터 없음</span>"
-        )
+
+        if res_stat:
+            cancel_rn_val = res_stat.get("cancel_rn", 0)
+            net_rn_val = res_stat.get("net_rn", res_stat["rn"])
+            res_info = (
+                f"<span style='font-size:10px;color:#6b7280;'>"
+                f"{res_stat['count']}건 신규 / 취소 -{cancel_rn_val}RN / 순픽업 {net_rn_val}RN</span>"
+            )
+        else:
+            res_info = "<span style='font-size:10px;color:#9ca3af;'>예약 데이터 없음</span>"
+
         st.markdown(
             f"""
             <div class="period-card" style="background:{p['bg']};border-left:4px solid {p['color']};">
@@ -463,8 +550,8 @@ for i, p in enumerate(PERIODS):
                 <div><b>OTB ADR</b> &nbsp;<span style="color:{adr_color};font-weight:900;">{cs['adr']:,.0f}원</span>
                     &nbsp;<span style="font-size:11px;color:{adr_color};">({'+' if adr_vs_tgt>=0 else ''}{adr_vs_tgt:,.0f})</span>
                 </div>
-                <div><b>📌 신규 객실 ADR</b> &nbsp;<span style="color:{pickup_adr_color};font-weight:900;">{room_adr_str}</span></div>
-                <div><b>📌 신규 총매출 ADR</b> &nbsp;<span style="color:#6366f1;font-weight:900;">{total_adr_str}</span></div>
+                <div><b>신규 객실 ADR</b> &nbsp;<span style="color:{pickup_adr_color};font-weight:900;">{room_adr_str}</span></div>
+                <div><b>신규 총매출 ADR</b> &nbsp;<span style="color:#6366f1;font-weight:900;">{total_adr_str}</span></div>
                 <div style="margin-top:2px;">{res_info}</div>
                 <hr style="margin:6px 0;border-color:#e5e7eb;">
                 <div style="font-size:11px;color:#374151;">
@@ -484,7 +571,7 @@ for i, p in enumerate(PERIODS):
 # [8.5] 구간별 Pacing 분석
 # ==============================================================================
 st.markdown("---")
-st.markdown("### 🚀 구간별 Pacing 분석")
+st.markdown("### 구간별 Pacing 분석")
 st.caption(
     "목표 OCC 기반 필요 일일 픽업 vs 실제 어제 픽업을 비교해 액션을 제안합니다. "
     f"기준일: {curr_date}  |  어제 예약 데이터: {_pickup_date}"
@@ -493,7 +580,6 @@ st.caption(
 _today_dt = datetime.strptime(curr_date, "%Y-%m-%d").date()
 
 def _pacing_action(pace_ratio, days_to_start, otb_pct):
-    """페이스 비율 + 잔여 리드타임 기반 액션 추천 (영문 유지 — 한글 인코딩 회피)"""
     if otb_pct >= 1.0:
         return "TARGET MET", "#16a34a", "OTA inventory reduction / BAR increase review"
     if pace_ratio is None:
@@ -520,7 +606,6 @@ def _pacing_action(pace_ratio, days_to_start, otb_pct):
         else:
             advice = "CRITICAL D-7 — immediate price adjustment & full channel review"
         return "BELOW PACE", "#d97706", advice
-    # pace < 0.7
     if days_to_start > 45:
         advice = "Underperforming — launch promotion / review OTA ranking"
     elif days_to_start > 21:
@@ -537,33 +622,47 @@ for i, pr in enumerate(period_results):
     cs   = pr["curr"]
     rs   = pr.get("res_stat")
 
-    start_dt   = datetime.strptime(p["start"], "%Y-%m-%d").date()
-    end_dt     = datetime.strptime(p["end"],   "%Y-%m-%d").date()
+    start_dt    = datetime.strptime(p["start"], "%Y-%m-%d").date()
+    end_dt      = datetime.strptime(p["end"],   "%Y-%m-%d").date()
     period_days = (end_dt - start_dt).days + 1
-    target_rn   = int(TOTAL_ROOMS * period_days * p["target_occ"])
+    effective_target_rn = pr["effective_target_rn"]
     otb_rn      = cs["rn"]
-    remaining   = max(0, target_rn - otb_rn)
-    otb_pct     = otb_rn / target_rn if target_rn > 0 else 0
+    remaining   = max(0, effective_target_rn - otb_rn)
+    otb_pct     = otb_rn / pr["target_rn"] if pr["target_rn"] > 0 else 0
 
-    # 판매 마감 = 기간 종료일 - buffer (기간 내 막바지 예약도 들어오므로 END 기준)
     deadline_dt      = end_dt - timedelta(days=p["booking_buffer"])
     days_to_deadline = max(1, (deadline_dt - _today_dt).days)
     days_to_start    = max(0, (start_dt - _today_dt).days)
 
     required_daily = remaining / days_to_deadline if days_to_deadline > 0 else 0
-    actual_daily   = rs["rn"] if rs else None
-    pace_ratio     = (actual_daily / required_daily) if (actual_daily and required_daily > 0) else None
+
+    # 7일 평균 vs 어제 실적
+    p7d = pace_7day.get(p["id"], {})
+    avg7 = p7d.get("avg_net_rn", 0)
+    days_with_data = p7d.get("days_with_data", 0)
+    actual_daily_yesterday = rs["net_rn"] if rs else None
+
+    # pace_ratio: 3일 이상 데이터 있으면 7일 평균 사용, 아니면 어제 실적
+    if days_with_data >= 3:
+        pace_actual = avg7
+    else:
+        pace_actual = actual_daily_yesterday
+
+    pace_ratio = (pace_actual / required_daily) if (pace_actual is not None and required_daily > 0) else None
 
     status_label, status_color, advice = _pacing_action(pace_ratio, days_to_start, otb_pct)
 
-    # progress bar fill colour
-    bar_pct  = min(otb_pct, 1.0)
+    bar_pct   = min(otb_pct, 1.0)
     bar_color = "#16a34a" if otb_pct >= 0.8 else ("#d97706" if otb_pct >= 0.5 else "#dc2626")
-    bar_w    = f"{bar_pct*100:.0f}%"
+    bar_w     = f"{bar_pct*100:.0f}%"
 
-    actual_str   = f"{actual_daily:.0f} RN" if actual_daily is not None else "—"
-    required_str = f"{required_daily:.1f} RN/day" if required_daily > 0 else "—"
-    pace_str     = f"{pace_ratio*100:.0f}%" if pace_ratio is not None else "—"
+    yesterday_str = f"{actual_daily_yesterday:.0f} RN" if actual_daily_yesterday is not None else "—"
+    avg7_str      = f"{avg7:.1f} RN" if days_with_data > 0 else "—"
+    required_str  = f"{required_daily:.1f} RN/day" if required_daily > 0 else "—"
+    pace_str      = f"{pace_ratio*100:.0f}%" if pace_ratio is not None else "—"
+
+    rev_gap = remaining * p["new_bk_adr_lo"]
+    rev_gap_str = f"잔여 매출 갭: {rev_gap/1e8:.2f}억원" if remaining > 0 else "목표 달성"
 
     with pace_cols[i]:
         st.markdown(
@@ -573,13 +672,15 @@ for i, pr in enumerate(period_results):
               <div style="background:#f3f4f6;border-radius:6px;height:8px;margin-bottom:8px;">
                 <div style="background:{bar_color};width:{bar_w};height:8px;border-radius:6px;"></div>
               </div>
-              <div>OTB <b>{otb_rn:,}</b> / 목표 <b>{target_rn:,}</b> RN &nbsp;
+              <div>OTB <b>{otb_rn:,}</b> / 목표 <b>{pr['target_rn']:,}</b> RN &nbsp;
                 <span style="color:{bar_color};font-weight:700;">({otb_pct*100:.0f}%)</span>
               </div>
+              <div>효과적 목표 <b>{effective_target_rn:,}</b> RN (wash {p['wash_rate']*100:.0f}%)</div>
               <div>필요 일일 픽업 &nbsp;<b>{required_str}</b></div>
-              <div>어제 실적 &nbsp;<b>{actual_str}</b> &nbsp;
+              <div>어제: <b>{yesterday_str}</b> | 7일 평균: <b>{avg7_str}</b> &nbsp;
                 <span style="color:{status_color};font-weight:700;">({pace_str})</span>
               </div>
+              <div style="font-size:11px;color:#6b7280;">{rev_gap_str}</div>
               <div style="margin-top:6px;padding:5px 8px;background:{status_color}22;
                           border-left:3px solid {status_color};border-radius:4px;
                           color:{status_color};font-weight:700;font-size:11px;">
@@ -598,7 +699,7 @@ for i, pr in enumerate(period_results):
 # [9] 월별 OTB 총계 (7월·8월)
 # ==============================================================================
 st.markdown("---")
-st.markdown("### 📈 월별 OTB vs 목표")
+st.markdown("### 월별 OTB vs 목표")
 mcol7, mcol8 = st.columns(2)
 
 for m_num, mcol, df_m in [(7, mcol7, curr_df7), (8, mcol8, curr_df8)]:
@@ -610,10 +711,8 @@ for m_num, mcol, df_m in [(7, mcol7, curr_df7), (8, mcol8, curr_df8)]:
             rev = df_m["REV"].sum()
             adr = rev / rn if rn > 0 else 0
 
-            # 필요 추가 픽업 계산
             need_rn = max(tgt["rn"] - rn, 0)
             today = datetime.now()
-            # 7월은 7/31, 8월은 8/31까지 잔여 판매일
             end_day = datetime(2026, m_num, 31)
             days_left = max((end_day.date() - today.date()).days, 1)
             daily_need = need_rn / days_left
@@ -623,9 +722,9 @@ for m_num, mcol, df_m in [(7, mcol7, curr_df7), (8, mcol8, curr_df8)]:
             rc2.metric("OTB Rev", f"{rev/1e8:.2f}억", f"{(rev - tgt['rev'])/1e8:+.2f}억 vs 목표")
             rc3.metric("ADR", f"{adr:,.0f}원")
 
-            rn_pct = min(rn / tgt["rn"], 1.0) if tgt["rn"] > 0 else 0
+            rn_pct  = min(rn  / tgt["rn"],  1.0) if tgt["rn"]  > 0 else 0
             rev_pct = min(rev / tgt["rev"], 1.0) if tgt["rev"] > 0 else 0
-            st.progress(rn_pct, text=f"RN {rn_pct*100:.1f}% | 필요 추가 {need_rn:,.0f} RN (일평균 {daily_need:.1f} RN × {days_left}일)")
+            st.progress(rn_pct,  text=f"RN {rn_pct*100:.1f}% | 필요 추가 {need_rn:,.0f} RN (일평균 {daily_need:.1f} RN × {days_left}일)")
             st.progress(rev_pct, text=f"Revenue {rev_pct*100:.1f}%")
         else:
             st.info(f"{m_num}월 데이터 없음")
@@ -634,7 +733,7 @@ for m_num, mcol, df_m in [(7, mcol7, curr_df7), (8, mcol8, curr_df8)]:
 # [10] 구간별 상세 탭
 # ==============================================================================
 st.markdown("---")
-st.markdown("### 🗓️ 구간별 데일리 픽업 상세")
+st.markdown("### 구간별 데일리 픽업 상세")
 
 tab_labels = [f"{pr['period']['label']} {pr['period']['desc']}" for pr in period_results]
 tabs = st.tabs(tab_labels)
@@ -649,7 +748,6 @@ for tab, pr in zip(tabs, period_results):
             st.info(f"{p['desc']} 구간에 데이터가 없습니다.")
             continue
 
-        # ── 픽업 테이블 조합 ──────────────────────────────────────────────
         merged = c_df.copy()
         if not p_df_period.empty:
             prev_sub = p_df_period[
@@ -666,14 +764,11 @@ for tab, pr in zip(tabs, period_results):
 
         merged["Pick_RN"]  = merged["RMS"] - merged["RMS_prev"]
         merged["Pick_REV"] = merged["REV"] - merged["REV_prev"]
-        # 픽업 ADR 컬럼: 행별 값은 표시 안함 (구간 전체 ADR을 메트릭에서 표시)
-        # — OTB diff 방식은 단가 변경/취소 영향으로 의미 없으므로 NaN 처리
         merged["Pick_ADR"] = np.nan
         merged["ADR_vs_Tgt"] = merged["ADR"] - p["target_adr"]
         merged["Date"] = pd.to_datetime(merged["DateStr"])
         merged = merged.sort_values("Date")
 
-        # ── 상단 메트릭 ───────────────────────────────────────────────────
         cs = pr["curr"]
         ps = pr["prev"]
         res_stat = pr.get("res_stat")
@@ -683,17 +778,17 @@ for tab, pr in zip(tabs, period_results):
                     else "예약 데이터 없음")
 
         m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
-        m1.metric("OTB RN",       f"{cs['rn']:,.0f}",       f"{pr['pickup_rn']:+,.0f} (OTB)")
-        m2.metric("OTB Revenue",   f"{cs['rev']/1e8:.2f}억", f"{pr['pickup_rev']/1e6:+.1f}M (OTB)")
-        m3.metric("OTB ADR (종합)", f"{cs['adr']:,.0f}원",   f"{pr['adr_vs_tgt']:+,.0f} vs 목표")
+        m1.metric("OTB RN",        f"{cs['rn']:,.0f}",        f"{pr['pickup_rn']:+,.0f} (OTB)")
+        m2.metric("OTB Revenue",    f"{cs['rev']/1e8:.2f}억",  f"{pr['pickup_rev']/1e6:+.1f}M (OTB)")
+        m3.metric("OTB ADR (종합)", f"{cs['adr']:,.0f}원",     f"{pr['adr_vs_tgt']:+,.0f} vs 목표")
         m4.metric(
-            "📌 신규 객실 ADR",
+            "신규 객실 ADR",
             f"{pickup_room_adr:,.0f}원" if pickup_room_adr else "—",
             f"{pickup_room_adr - p['target_adr']:+,.0f} vs 목표" if pickup_room_adr else "데이터 없음",
             help=f"객실료 기준 | {res_hint}",
         )
         m5.metric(
-            "📌 신규 총매출 ADR",
+            "신규 총매출 ADR",
             f"{pickup_total_adr:,.0f}원" if pickup_total_adr else "—",
             f"{pickup_total_adr - pickup_room_adr:+,.0f} (F&B 포함 차이)" if (pickup_total_adr and pickup_room_adr) else "",
             help=f"총매출(객실+F&B) 기준 | {res_hint}",
@@ -703,14 +798,21 @@ for tab, pr in zip(tabs, period_results):
         m7.metric("GRP ADR",
                   f"{(merged['GRP_REV'].sum() / merged['GRP_RMS'].sum()):,.0f}원" if merged['GRP_RMS'].sum() > 0 else "—")
 
-        # ── 블렌디드 ADR 요약 박스 ────────────────────────────────────────
-        _b_lo  = pr["blended_lo"]
-        _b_hi  = pr["blended_hi"]
-        _b_str = pr["blended_str"]
+        # ADR 시뮬레이션 박스
+        _b_lo   = pr["blended_lo"]
+        _b_hi   = pr["blended_hi"]
+        _b_str  = pr["blended_str"]
         _nb_str = pr["new_bk_str"]
-        _rem   = pr["remaining_rn"]
+        _rem    = pr["remaining_rn"]
         _tgt_rn = pr["target_rn"]
+        _eff_tgt = pr["effective_target_rn"]
         _b_color = "#16a34a" if _b_lo >= p["target_adr"] else ("#d97706" if _b_lo >= p["target_adr"] * 0.95 else "#dc2626")
+
+        scenario_note = ""
+        if scenario_adj != 0:
+            adj_lo_v = pr["adj_lo"]
+            scenario_note = f" &nbsp;<span style='color:#d97706;font-weight:700;'>조정 단가: {adj_lo_v:,.0f}원</span>"
+
         st.markdown(
             f"""
             <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;
@@ -719,26 +821,25 @@ for tab, pr in zip(tabs, period_results):
               신규 예약 목표 단가 <b style="color:#7c3aed;">{_nb_str}</b>으로
               잔여 <b>{_rem:,} RN</b> 소화 시 &nbsp;→&nbsp;
               <b>예상 최종 ADR: <span style="color:{_b_color};font-size:14px;">{_b_str}</span></b>
-              &nbsp;<span style="color:#6b7280;">(목표 RN {_tgt_rn:,})</span>
+              &nbsp;<span style="color:#6b7280;">(목표 RN {_tgt_rn:,} | 효과적 목표 {_eff_tgt:,})</span>
+              {scenario_note}
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        # ── ADR Alert ─────────────────────────────────────────────────────
         adr_diff = cs["adr"] - p["target_adr"]
         if cs["rn"] == 0:
             pass
         elif adr_diff >= 0:
-            st.markdown(f'<div class="alert-green">✅ ADR <b>{cs["adr"]:,.0f}원</b> — 목표 대비 <b>+{adr_diff:,.0f}원</b> 상회</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="alert-green">ADR <b>{cs["adr"]:,.0f}원</b> — 목표 대비 <b>+{adr_diff:,.0f}원</b> 상회</div>', unsafe_allow_html=True)
         elif adr_diff >= -20_000:
-            st.markdown(f'<div class="alert-yellow">⚠️ ADR <b>{cs["adr"]:,.0f}원</b> — 목표 대비 <b>{adr_diff:,.0f}원</b> 미달 (BAR 점검 권고)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="alert-yellow">ADR <b>{cs["adr"]:,.0f}원</b> — 목표 대비 <b>{adr_diff:,.0f}원</b> 미달 (BAR 점검 권고)</div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="alert-red">🚨 ADR <b>{cs["adr"]:,.0f}원</b> — 목표 대비 <b>{adr_diff:,.0f}원</b> 미달 (즉시 가격 검토 필요)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="alert-red">ADR <b>{cs["adr"]:,.0f}원</b> — 목표 대비 <b>{adr_diff:,.0f}원</b> 미달 (즉시 가격 검토 필요)</div>', unsafe_allow_html=True)
 
         st.markdown("")
 
-        # ── 데일리 픽업 테이블 ────────────────────────────────────────────
         base_cols = ["DateStr", "RMS_prev", "REV_prev", "ADR_prev",
                      "RMS", "REV", "ADR", "OCC", "Pick_RN", "Pick_REV", "Pick_ADR", "ADR_vs_Tgt"]
         if "WeekDay" in merged.columns:
@@ -757,12 +858,11 @@ for tab, pr in zip(tabs, period_results):
             "OCC": "OCC%",
             "Pick_RN": "픽업 RN",
             "Pick_REV": "픽업 Revenue",
-            "Pick_ADR": "📌 픽업 ADR (신규)",
+            "Pick_ADR": "픽업 ADR (신규)",
             "ADR_vs_Tgt": f"OTB ADR vs 목표({p['target_adr']:,})",
         }
         display.rename(columns=col_names, inplace=True)
 
-        # TOTAL 행 추가 — 빈 문자열 대신 np.nan 사용 (Styler 포맷 에러 방지)
         num_cols = [c for c in display.columns if c not in ["날짜", "요일", "OCC%"]]
         total_row = {c: np.nan for c in display.columns}
         total_row["날짜"] = "TOTAL"
@@ -772,16 +872,13 @@ for tab, pr in zip(tabs, period_results):
                 total_row[c] = pd.to_numeric(display[c], errors="coerce").sum()
             except Exception:
                 total_row[c] = np.nan
-        # ADR total 재계산 (단순 합산은 의미 없으므로 가중평균으로 덮어씀)
         total_row["OTB ADR (종합)"] = cs["adr"]
         total_row[f"OTB ADR vs 목표({p['target_adr']:,})"] = adr_diff
         if "전일 ADR" in display.columns and ps["rn"] > 0:
             total_row["전일 ADR"] = ps["adr"]
-        # 픽업 ADR total: revenue_integrity_history 기반 구간 전체 신규 예약 ADR (객실료 기준)
-        total_row["📌 픽업 ADR (신규)"] = res_stat["room_adr"] if res_stat else np.nan
+        total_row["픽업 ADR (신규)"] = res_stat["room_adr"] if res_stat else np.nan
         display = pd.concat([display, pd.DataFrame([total_row])], ignore_index=True)
 
-        # 포맷 함수 — np.nan/비숫자 값에 안전하게 대응하는 callable 사용
         def _fmt_num(v):
             try:
                 if pd.isna(v): return "—"
@@ -808,7 +905,7 @@ for tab, pr in zip(tabs, period_results):
         def color_pickup(v):
             try:
                 val = float(str(v).replace(",", ""))
-                if val > 0:  return "color:#16a34a;font-weight:bold;"
+                if val > 0:   return "color:#16a34a;font-weight:bold;"
                 elif val < 0: return "color:#dc2626;font-weight:bold;"
             except Exception:
                 pass
@@ -817,9 +914,9 @@ for tab, pr in zip(tabs, period_results):
         def color_adr(v):
             try:
                 val = float(str(v).replace(",", ""))
-                if val >= 0:  return "background:#f0fdf4;color:#16a34a;font-weight:bold;"
-                elif val >= -20_000: return "background:#fffbeb;color:#d97706;font-weight:bold;"
-                else:          return "background:#fef2f2;color:#dc2626;font-weight:bold;"
+                if val >= 0:           return "background:#f0fdf4;color:#16a34a;font-weight:bold;"
+                elif val >= -20_000:   return "background:#fffbeb;color:#d97706;font-weight:bold;"
+                else:                  return "background:#fef2f2;color:#dc2626;font-weight:bold;"
             except Exception:
                 pass
             return ""
@@ -833,13 +930,14 @@ for tab, pr in zip(tabs, period_results):
         pickup_adr_cols  = [c for c in display.columns if "픽업 ADR" in c]
         adr_vs_cols      = [c for c in display.columns if "vs 목표" in c]
 
+        _p_target_adr = p["target_adr"]
         def color_pickup_adr(v):
             try:
                 if pd.isna(v): return ""
                 val = float(str(v).replace(",", ""))
-                if val >= p["target_adr"]:
+                if val >= _p_target_adr:
                     return "color:#16a34a;font-weight:bold;background:#f0fdf4;"
-                elif val >= p["target_adr"] * 0.95:
+                elif val >= _p_target_adr * 0.95:
                     return "color:#d97706;font-weight:bold;background:#fffbeb;"
                 else:
                     return "color:#dc2626;font-weight:bold;background:#fef2f2;"
@@ -855,6 +953,54 @@ for tab, pr in zip(tabs, period_results):
             styler = styler.map(color_adr, subset=adr_vs_cols)
         styler = styler.apply(hl_total, axis=1)
         st.dataframe(styler, use_container_width=True, hide_index=True)
+
+        # Excel 다운로드
+        import io as _io
+        _excel_buf = _io.BytesIO()
+        display.to_excel(_excel_buf, index=False, engine="openpyxl")
+        st.download_button(
+            label="Excel",
+            data=_excel_buf.getvalue(),
+            file_name=f"pickup_{p['id']}_{curr_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_{p['id']}",
+        )
+
+        # 세그먼트 / 채널별 신규 예약
+        with st.expander("세그먼트 / 채널별 신규 예약", expanded=False):
+            if res_today is not None and not res_today.empty:
+                _mask = (res_today["CheckIn"] >= pd.Timestamp(p["start"])) & (res_today["CheckIn"] <= pd.Timestamp(p["end"]))
+                _period_res = res_today[_mask]
+                if not _period_res.empty:
+                    sc1, sc2 = st.columns(2)
+                    with sc1:
+                        st.markdown("**세그먼트별**")
+                        seg_col = "Segment" if "Segment" in _period_res.columns else None
+                        if seg_col:
+                            seg_grp = _period_res.groupby(seg_col, dropna=False).agg(
+                                건수=("RN", "count"), RN=("RN", "sum"), ADR=("Room_Revenue", "sum")
+                            ).reset_index()
+                            seg_grp["ADR"] = seg_grp["ADR"] / seg_grp["RN"].replace(0, 1)
+                            seg_grp = seg_grp.sort_values("RN", ascending=False)
+                            st.dataframe(seg_grp.style.format({"RN": "{:,.0f}", "ADR": "{:,.0f}"}), hide_index=True)
+                        else:
+                            st.info("Segment 컬럼 없음")
+                    with sc2:
+                        st.markdown("**채널/거래처별 (Top 5)**")
+                        acc_col = "Account" if "Account" in _period_res.columns else None
+                        if acc_col:
+                            acc_grp = _period_res.groupby(acc_col, dropna=False).agg(
+                                건수=("RN", "count"), RN=("RN", "sum"), ADR=("Room_Revenue", "sum")
+                            ).reset_index()
+                            acc_grp["ADR"] = acc_grp["ADR"] / acc_grp["RN"].replace(0, 1)
+                            acc_grp = acc_grp.sort_values("RN", ascending=False).head(5)
+                            st.dataframe(acc_grp.style.format({"RN": "{:,.0f}", "ADR": "{:,.0f}"}), hide_index=True)
+                        else:
+                            st.info("Account 컬럼 없음")
+                else:
+                    st.info("이 구간 신규 예약 데이터 없음")
+            else:
+                st.info("예약 데이터 없음")
 
         chart1, chart2 = st.columns(2)
         with chart1:
