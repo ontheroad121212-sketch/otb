@@ -441,15 +441,16 @@ for tab, pr in zip(tabs, period_results):
         }
         display.rename(columns=col_names, inplace=True)
 
-        # TOTAL 행 추가
+        # TOTAL 행 추가 — 빈 문자열 대신 np.nan 사용 (Styler 포맷 에러 방지)
         num_cols = [c for c in display.columns if c not in ["날짜", "요일", "OCC%"]]
-        total_row = {c: "" for c in display.columns}
+        total_row = {c: np.nan for c in display.columns}
         total_row["날짜"] = "TOTAL"
+        total_row["요일"] = ""
         for c in num_cols:
             try:
-                total_row[c] = display[c].sum()
+                total_row[c] = pd.to_numeric(display[c], errors="coerce").sum()
             except Exception:
-                pass
+                total_row[c] = np.nan
         # ADR total 재계산
         total_row["ADR"] = cs["adr"]
         total_row[f"ADR vs 목표({p['target_adr']:,})"] = adr_diff
@@ -457,14 +458,29 @@ for tab, pr in zip(tabs, period_results):
             total_row["전일 ADR"] = ps["adr"]
         display = pd.concat([display, pd.DataFrame([total_row])], ignore_index=True)
 
+        # 포맷 함수 — np.nan/비숫자 값에 안전하게 대응하는 callable 사용
+        def _fmt_num(v):
+            try:
+                if pd.isna(v): return "—"
+                return f"{float(v):,.0f}"
+            except Exception:
+                return str(v)
+
+        def _fmt_occ(v):
+            try:
+                if pd.isna(v): return "—"
+                return f"{float(v):.1f}%"
+            except Exception:
+                return str(v)
+
         fmt = {}
         for c in display.columns:
             if c in ["날짜", "요일"]:
                 continue
             elif "OCC" in c:
-                fmt[c] = "{:.1f}%"
+                fmt[c] = _fmt_occ
             else:
-                fmt[c] = "{:,.0f}"
+                fmt[c] = _fmt_num
 
         def color_pickup(v):
             try:
@@ -493,7 +509,7 @@ for tab, pr in zip(tabs, period_results):
         pick_cols = [c for c in display.columns if "픽업" in c]
         adr_vs_cols = [c for c in display.columns if "vs 목표" in c]
 
-        styler = display.style.format(fmt, na_rep="—")
+        styler = display.style.format(fmt)
         if pick_cols:
             styler = styler.map(color_pickup, subset=pick_cols)
         if adr_vs_cols:
