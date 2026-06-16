@@ -41,8 +41,10 @@ PERIODS = [
         "start": "2026-07-01",
         "end": "2026-07-18",
         "target_adr": 355_000,
-        "target_occ": 0.75,       # 목표 OCC (페이싱 계산용)
-        "booking_buffer": 7,      # 체크인 N일 전까지가 실질 판매 마감
+        "new_bk_adr_lo": 355_000,  # 신규 예약 목표 ADR 하단
+        "new_bk_adr_hi": 355_000,  # 신규 예약 목표 ADR 상단 (동일하면 단일값)
+        "target_occ": 0.75,
+        "booking_buffer": 7,
         "color": "#64748b",
         "bg": "#f8fafc",
     },
@@ -53,6 +55,8 @@ PERIODS = [
         "start": "2026-07-19",
         "end": "2026-07-23",
         "target_adr": 340_000,
+        "new_bk_adr_lo": 340_000,
+        "new_bk_adr_hi": 340_000,
         "target_occ": 0.85,
         "booking_buffer": 7,
         "color": "#d97706",
@@ -65,8 +69,10 @@ PERIODS = [
         "start": "2026-07-24",
         "end": "2026-08-08",
         "target_adr": 510_000,
+        "new_bk_adr_lo": 510_000,  # 신규 예약 최소 목표 단가
+        "new_bk_adr_hi": 530_000,  # 신규 예약 최대 목표 단가
         "target_occ": 0.97,
-        "booking_buffer": 14,     # 극성수기는 2주 전이 실질 마감
+        "booking_buffer": 14,
         "color": "#dc2626",
         "bg": "#fef2f2",
     },
@@ -77,6 +83,8 @@ PERIODS = [
         "start": "2026-08-09",
         "end": "2026-08-16",
         "target_adr": 470_000,
+        "new_bk_adr_lo": 470_000,
+        "new_bk_adr_hi": 470_000,
         "target_occ": 0.90,
         "booking_buffer": 7,
         "color": "#ea580c",
@@ -89,6 +97,8 @@ PERIODS = [
         "start": "2026-08-17",
         "end": "2026-08-31",
         "target_adr": 310_000,
+        "new_bk_adr_lo": 310_000,
+        "new_bk_adr_hi": 310_000,
         "target_occ": 0.75,
         "booking_buffer": 5,
         "color": "#16a34a",
@@ -372,6 +382,30 @@ for i, p in enumerate(PERIODS):
     adr_color = "#16a34a" if adr_vs_tgt >= 0 else "#dc2626"
     pickup_adr_color = "#16a34a" if (pickup_room_adr or 0) >= p["target_adr"] else "#dc2626"
 
+    # ── 블렌디드 ADR 계산 ──────────────────────────────────────────────────
+    # = (현재 OTB 매출 + 잔여 RN × 신규 목표 단가) / 목표 총 RN
+    _p_start = datetime.strptime(p["start"], "%Y-%m-%d").date()
+    _p_end   = datetime.strptime(p["end"],   "%Y-%m-%d").date()
+    _p_days  = (_p_end - _p_start).days + 1
+    _target_rn   = int(TOTAL_ROOMS * _p_days * p["target_occ"])
+    _remaining   = max(0, _target_rn - cs["rn"])
+    _otb_rev     = cs["rn"] * cs["adr"]   # 현재 OTB 매출 추정
+    _is_range    = p["new_bk_adr_lo"] != p["new_bk_adr_hi"]
+
+    def _blended(new_bk_price):
+        if _target_rn <= 0: return cs["adr"]
+        return (_otb_rev + _remaining * new_bk_price) / _target_rn
+
+    _blended_lo = _blended(p["new_bk_adr_lo"])
+    _blended_hi = _blended(p["new_bk_adr_hi"])
+
+    if _is_range:
+        _blended_str   = f"{_blended_lo:,.0f}~{_blended_hi:,.0f}원"
+        _new_bk_str    = f"{p['new_bk_adr_lo']:,}~{p['new_bk_adr_hi']:,}원"
+    else:
+        _blended_str   = f"{_blended_lo:,.0f}원"
+        _new_bk_str    = f"{p['new_bk_adr_lo']:,}원"
+
     period_results.append(
         {
             "period": p,
@@ -379,11 +413,19 @@ for i, p in enumerate(PERIODS):
             "prev": ps,
             "pickup_rn": pickup_rn,
             "pickup_rev": pickup_rev,
-            "pickup_adr": pickup_room_adr,   # 하위 호환용 (room_adr)
+            "pickup_adr": pickup_room_adr,
             "res_stat": res_stat,
             "adr_vs_tgt": adr_vs_tgt,
             "curr_df": c_df,
             "prev_df": p_df,
+            # 블렌디드 ADR
+            "target_rn": _target_rn,
+            "remaining_rn": _remaining,
+            "blended_lo": _blended_lo,
+            "blended_hi": _blended_hi,
+            "blended_str": _blended_str,
+            "new_bk_str": _new_bk_str,
+            "is_range": _is_range,
         }
     )
 
@@ -412,7 +454,15 @@ for i, p in enumerate(PERIODS):
                 <div><b>📌 신규 객실 ADR</b> &nbsp;<span style="color:{pickup_adr_color};font-weight:900;">{room_adr_str}</span></div>
                 <div><b>📌 신규 총매출 ADR</b> &nbsp;<span style="color:#6366f1;font-weight:900;">{total_adr_str}</span></div>
                 <div style="margin-top:2px;">{res_info}</div>
-                <div style="font-size:11px;color:#6b7280;margin-top:4px;">목표 {p['target_adr']:,}원</div>
+                <hr style="margin:6px 0;border-color:#e5e7eb;">
+                <div style="font-size:11px;color:#374151;">
+                  <b>신규 목표 단가</b> <span style="color:#7c3aed;font-weight:700;">{_new_bk_str}</span>
+                </div>
+                <div style="font-size:11px;color:#374151;">
+                  <b>예상 최종 ADR</b>
+                  <span style="color:#1d4ed8;font-weight:700;">{_blended_str}</span>
+                  <span style="font-size:10px;color:#9ca3af;"> (잔여 {_remaining}RN 소화 시)</span>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -639,6 +689,28 @@ for tab, pr in zip(tabs, period_results):
                   f"{(merged['FIT_REV'].sum() / merged['FIT_RMS'].sum()):,.0f}원" if merged['FIT_RMS'].sum() > 0 else "—")
         m7.metric("GRP ADR",
                   f"{(merged['GRP_REV'].sum() / merged['GRP_RMS'].sum()):,.0f}원" if merged['GRP_RMS'].sum() > 0 else "—")
+
+        # ── 블렌디드 ADR 요약 박스 ────────────────────────────────────────
+        _b_lo  = pr["blended_lo"]
+        _b_hi  = pr["blended_hi"]
+        _b_str = pr["blended_str"]
+        _nb_str = pr["new_bk_str"]
+        _rem   = pr["remaining_rn"]
+        _tgt_rn = pr["target_rn"]
+        _b_color = "#16a34a" if _b_lo >= p["target_adr"] else ("#d97706" if _b_lo >= p["target_adr"] * 0.95 else "#dc2626")
+        st.markdown(
+            f"""
+            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;
+                        padding:10px 16px;font-size:12px;margin-bottom:8px;line-height:1.8;">
+              <span style="font-weight:700;color:#1d4ed8;">ADR 시뮬레이션</span> &nbsp;|&nbsp;
+              신규 예약 목표 단가 <b style="color:#7c3aed;">{_nb_str}</b>으로
+              잔여 <b>{_rem:,} RN</b> 소화 시 &nbsp;→&nbsp;
+              <b>예상 최종 ADR: <span style="color:{_b_color};font-size:14px;">{_b_str}</span></b>
+              &nbsp;<span style="color:#6b7280;">(목표 RN {_tgt_rn:,})</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         # ── ADR Alert ─────────────────────────────────────────────────────
         adr_diff = cs["adr"] - p["target_adr"]
