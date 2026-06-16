@@ -384,27 +384,35 @@ for i, p in enumerate(PERIODS):
 
     # ── 블렌디드 ADR 계산 ──────────────────────────────────────────────────
     # = (현재 OTB 매출 + 잔여 RN × 신규 목표 단가) / 목표 총 RN
+    # ※ OTB RN >= 목표 RN이면 이미 달성 → 현재 ADR 그대로 반환
     _p_start = datetime.strptime(p["start"], "%Y-%m-%d").date()
     _p_end   = datetime.strptime(p["end"],   "%Y-%m-%d").date()
     _p_days  = (_p_end - _p_start).days + 1
     _target_rn   = int(TOTAL_ROOMS * _p_days * p["target_occ"])
     _remaining   = max(0, _target_rn - cs["rn"])
-    _otb_rev     = cs["rn"] * cs["adr"]   # 현재 OTB 매출 추정
+    _otb_rev     = cs["rev"]   # cs["rev"] 직접 사용 (= sum(REV) per period)
     _is_range    = p["new_bk_adr_lo"] != p["new_bk_adr_hi"]
 
     def _blended(new_bk_price):
-        if _target_rn <= 0: return cs["adr"]
+        if _target_rn <= 0:
+            return cs["adr"]
+        if _remaining <= 0:
+            # OTB가 이미 목표 달성 — 추가 판매 없으므로 현재 ADR 반환
+            return cs["adr"]
         return (_otb_rev + _remaining * new_bk_price) / _target_rn
 
     _blended_lo = _blended(p["new_bk_adr_lo"])
     _blended_hi = _blended(p["new_bk_adr_hi"])
 
-    if _is_range:
-        _blended_str   = f"{_blended_lo:,.0f}~{_blended_hi:,.0f}원"
-        _new_bk_str    = f"{p['new_bk_adr_lo']:,}~{p['new_bk_adr_hi']:,}원"
+    if _remaining <= 0:
+        _blended_str = f"{cs['adr']:,.0f}원 (OCC 목표 달성)"
+        _new_bk_str  = "—"
+    elif _is_range:
+        _blended_str = f"{_blended_lo:,.0f}~{_blended_hi:,.0f}원"
+        _new_bk_str  = f"{p['new_bk_adr_lo']:,}~{p['new_bk_adr_hi']:,}원"
     else:
-        _blended_str   = f"{_blended_lo:,.0f}원"
-        _new_bk_str    = f"{p['new_bk_adr_lo']:,}원"
+        _blended_str = f"{_blended_lo:,.0f}원"
+        _new_bk_str  = f"{p['new_bk_adr_lo']:,}원"
 
     period_results.append(
         {
