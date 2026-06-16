@@ -44,7 +44,7 @@ PERIODS = [
         "new_bk_adr_lo": 355_000,  # 신규 예약 목표 ADR 하단
         "new_bk_adr_hi": 355_000,  # 신규 예약 목표 ADR 상단 (동일하면 단일값)
         "target_occ": 0.85,        # 목표 OCC 85% (프리피크)
-        "booking_buffer": 7,
+        "booking_buffer": 3,       # 기간 종료일 N일 전까지 실질 판매 (period END 기준)
         "color": "#64748b",
         "bg": "#f8fafc",
     },
@@ -58,7 +58,7 @@ PERIODS = [
         "new_bk_adr_lo": 340_000,
         "new_bk_adr_hi": 340_000,
         "target_occ": 0.90,        # 목표 OCC 90% (숄더)
-        "booking_buffer": 7,
+        "booking_buffer": 3,
         "color": "#d97706",
         "bg": "#fffbeb",
     },
@@ -72,7 +72,7 @@ PERIODS = [
         "new_bk_adr_lo": 510_000,
         "new_bk_adr_hi": 530_000,
         "target_occ": 0.97,        # 목표 OCC 97% (극성수기)
-        "booking_buffer": 14,
+        "booking_buffer": 5,       # 극성수기는 막바지 예약 적으므로 기간 종료 5일 전 기준
         "color": "#dc2626",
         "bg": "#fef2f2",
     },
@@ -86,7 +86,7 @@ PERIODS = [
         "new_bk_adr_lo": 470_000,
         "new_bk_adr_hi": 470_000,
         "target_occ": 0.96,        # 목표 OCC 96% (성수기 후반)
-        "booking_buffer": 7,
+        "booking_buffer": 3,
         "color": "#ea580c",
         "bg": "#fff7ed",
     },
@@ -100,7 +100,7 @@ PERIODS = [
         "new_bk_adr_lo": 310_000,
         "new_bk_adr_hi": 310_000,
         "target_occ": 0.80,        # 목표 OCC 80% (숄더 후반)
-        "booking_buffer": 5,
+        "booking_buffer": 3,
         "color": "#16a34a",
         "bg": "#f0fdf4",
     },
@@ -545,7 +545,8 @@ for i, pr in enumerate(period_results):
     remaining   = max(0, target_rn - otb_rn)
     otb_pct     = otb_rn / target_rn if target_rn > 0 else 0
 
-    deadline_dt      = start_dt - timedelta(days=p["booking_buffer"])
+    # 판매 마감 = 기간 종료일 - buffer (기간 내 막바지 예약도 들어오므로 END 기준)
+    deadline_dt      = end_dt - timedelta(days=p["booking_buffer"])
     days_to_deadline = max(1, (deadline_dt - _today_dt).days)
     days_to_start    = max(0, (start_dt - _today_dt).days)
 
@@ -586,7 +587,7 @@ for i, pr in enumerate(period_results):
               </div>
               <div style="font-size:10px;color:#4b5563;margin-top:4px;">{advice}</div>
               <div style="font-size:10px;color:#9ca3af;margin-top:4px;">
-                D-{days_to_start} | 마감까지 {days_to_deadline}일 남음 (D-{p["booking_buffer"]} 기준)
+                체크인 D-{days_to_start} | 판매 마감까지 {days_to_deadline}일 (기간 종료 {p["booking_buffer"]}일 전)
               </div>
             </div>
             """,
@@ -833,13 +834,15 @@ for tab, pr in zip(tabs, period_results):
         adr_vs_cols      = [c for c in display.columns if "vs 목표" in c]
 
         def color_pickup_adr(v):
-            """픽업 ADR: 목표 대비 색상"""
             try:
                 if pd.isna(v): return ""
                 val = float(str(v).replace(",", ""))
-                if val >= p["target_adr"]: return "color:#16a34a;font-weight:bold;background:#f0fdf4;"
-                elif val >= p["target_adr"] * 0.95: return "color:#d97706;font-weight:bold;background:#fffbeb;"
-                else: return "color:#dc2626;font-weight:bold;background:#fef2f2;"
+                if val >= p["target_adr"]:
+                    return "color:#16a34a;font-weight:bold;background:#f0fdf4;"
+                elif val >= p["target_adr"] * 0.95:
+                    return "color:#d97706;font-weight:bold;background:#fffbeb;"
+                else:
+                    return "color:#dc2626;font-weight:bold;background:#fef2f2;"
             except Exception:
                 return ""
 
@@ -851,224 +854,37 @@ for tab, pr in zip(tabs, period_results):
         if adr_vs_cols:
             styler = styler.map(color_adr, subset=adr_vs_cols)
         styler = styler.apply(hl_total, axis=1)
-
         st.dataframe(styler, use_container_width=True, hide_index=True)
 
-        # ── 차트 ─────────────────────────────────────────────────────────
         chart1, chart2 = st.columns(2)
-
         with chart1:
             fig_rn = go.Figure()
             if not p_df_period.empty:
-                fig_rn.add_trace(
-                    go.Scatter(
-                        x=merged["DateStr"], y=merged["RMS_prev"],
-                        name=f"전일 OTB ({prev_date})",
-                        line=dict(color="#9ca3af", dash="dot", width=1.5),
-                        mode="lines",
-                    )
-                )
-            fig_rn.add_trace(
-                go.Bar(
-                    x=merged["DateStr"], y=merged["RMS"],
-                    name="OTB RN",
-                    marker_color=p["color"],
-                    opacity=0.85,
-                )
-            )
-            fig_rn.add_trace(
-                go.Scatter(
-                    x=merged["DateStr"], y=merged["Pick_RN"],
-                    name="픽업 RN (증감)",
-                    line=dict(color="#2563eb", width=2),
-                    mode="lines+markers",
-                    yaxis="y2",
-                )
-            )
-            fig_rn.update_layout(
-                title=f"일자별 OTB RN & 픽업 — {p['desc']}",
-                height=320,
-                xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
-                yaxis=dict(title="OTB RN"),
-                yaxis2=dict(title="픽업 RN", overlaying="y", side="right", zeroline=True, zerolinecolor="#e5e7eb"),
-                legend=dict(orientation="h", y=-0.25),
-                bargap=0.3,
-            )
-            st.plotly_chart(fig_rn, use_container_width=True, key=f"rn_{p['id']}")
-
+                fig_rn.add_trace(go.Scatter(
+                    x=merged["DateStr"], y=merged["RMS_prev"],
+                    name="Prev OTB", line=dict(color="#9ca3af", dash="dot", width=1.5), mode="lines",
+                ))
+            fig_rn.add_trace(go.Bar(
+                x=merged["DateStr"], y=merged["RMS"],
+                name="OTB RN", marker_color=p["color"], opacity=0.85,
+            ))
+            fig_rn.update_layout(title="OTB RN by Date", height=300, margin=dict(l=10,r=10,t=30,b=10))
+            st.plotly_chart(fig_rn, use_container_width=True)
         with chart2:
             fig_adr = go.Figure()
+            fig_adr.add_hline(y=p["target_adr"], line_dash="dash", line_color="#dc2626", annotation_text="ADR Target")
             if not p_df_period.empty:
-                fig_adr.add_trace(
-                    go.Scatter(
-                        x=merged["DateStr"], y=merged["ADR_prev"],
-                        name=f"전일 ADR ({prev_date})",
-                        line=dict(color="#9ca3af", dash="dot", width=1.5),
-                        mode="lines",
-                    )
-                )
-            fig_adr.add_trace(
-                go.Scatter(
-                    x=merged["DateStr"], y=merged["ADR"],
-                    name="금일 ADR",
-                    line=dict(color=p["color"], width=3),
-                    mode="lines+markers",
-                    marker=dict(size=7),
-                )
-            )
-            fig_adr.add_hline(
-                y=p["target_adr"],
-                line_dash="dash",
-                line_color="red",
-                line_width=1.5,
-                annotation_text=f"목표 ADR {p['target_adr']:,}",
-                annotation_position="top left",
-                annotation_font_color="red",
-            )
-            fig_adr.update_layout(
-                title=f"일자별 ADR vs 목표 — {p['desc']}",
-                height=320,
-                xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
-                yaxis=dict(title="ADR (원)"),
-                legend=dict(orientation="h", y=-0.25),
-            )
-            st.plotly_chart(fig_adr, use_container_width=True, key=f"adr_{p['id']}")
+                fig_adr.add_trace(go.Scatter(
+                    x=merged["DateStr"], y=merged["ADR_prev"],
+                    name="Prev ADR", line=dict(color="#9ca3af", dash="dot", width=1.5), mode="lines",
+                ))
+            fig_adr.add_trace(go.Scatter(
+                x=merged["DateStr"], y=merged["ADR"],
+                name="OTB ADR", line=dict(color=p["color"], width=2), mode="lines+markers",
+            ))
+            fig_adr.update_layout(title="OTB ADR by Date", height=300, margin=dict(l=10,r=10,t=30,b=10))
+            st.plotly_chart(fig_adr, use_container_width=True)
 
-        # ── Revenue 흐름 ──────────────────────────────────────────────────
-        fig_rev = go.Figure()
-        if not p_df_period.empty:
-            fig_rev.add_trace(
-                go.Bar(
-                    x=merged["DateStr"], y=merged["REV_prev"],
-                    name="전일 Revenue",
-                    marker_color="#d1d5db",
-                    opacity=0.6,
-                )
-            )
-        fig_rev.add_trace(
-            go.Bar(
-                x=merged["DateStr"], y=merged["REV"],
-                name="금일 OTB Revenue",
-                marker_color=p["color"],
-                opacity=0.85,
-            )
-        )
-        fig_rev.add_trace(
-            go.Scatter(
-                x=merged["DateStr"], y=merged["Pick_REV"],
-                name="픽업 Revenue",
-                line=dict(color="#7c3aed", width=2),
-                mode="lines+markers",
-                yaxis="y2",
-            )
-        )
-        fig_rev.update_layout(
-            title=f"일자별 OTB Revenue & 픽업 — {p['desc']}",
-            height=300,
-            barmode="overlay",
-            xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
-            yaxis=dict(title="Revenue (원)"),
-            yaxis2=dict(title="픽업 Revenue", overlaying="y", side="right"),
-            legend=dict(orientation="h", y=-0.28),
-            bargap=0.3,
-        )
-        st.plotly_chart(fig_rev, use_container_width=True, key=f"rev_{p['id']}")
-
-
-# ==============================================================================
-# [11] 전체 구간 통합 비교 차트
-# ==============================================================================
-st.markdown("---")
-st.markdown("### 🔭 전체 구간 통합 뷰")
-
-col_a, col_b = st.columns(2)
-
-summary_df = pd.DataFrame(
-    [
-        {
-            "구간": f"{pr['period']['label']}\n{pr['period']['desc']}",
-            "desc_short": pr["period"]["desc"],
-            "OTB RN": pr["curr"]["rn"],
-            "픽업 RN": pr["pickup_rn"],
-            "ADR": pr["curr"]["adr"],
-            "목표 ADR": pr["period"]["target_adr"],
-            "ADR Gap": pr["adr_vs_tgt"],
-            "color": pr["period"]["color"],
-        }
-        for pr in period_results
-    ]
-)
-
-with col_a:
-    fig_s1 = go.Figure()
-    fig_s1.add_trace(
-        go.Bar(
-            x=summary_df["desc_short"],
-            y=summary_df["OTB RN"],
-            name="OTB RN",
-            marker_color=summary_df["color"].tolist(),
-            text=summary_df["OTB RN"].apply(lambda v: f"{v:,.0f}"),
-            textposition="outside",
-        )
-    )
-    fig_s1.update_layout(title="구간별 OTB RN", height=350, showlegend=False)
-    st.plotly_chart(fig_s1, use_container_width=True, key="s_rn")
-
-with col_b:
-    fig_s2 = go.Figure()
-    fig_s2.add_trace(
-        go.Bar(
-            x=summary_df["desc_short"],
-            y=summary_df["ADR"],
-            name="실제 ADR",
-            marker_color=summary_df["color"].tolist(),
-            text=summary_df["ADR"].apply(lambda v: f"{v:,.0f}"),
-            textposition="outside",
-        )
-    )
-    fig_s2.add_trace(
-        go.Scatter(
-            x=summary_df["desc_short"],
-            y=summary_df["목표 ADR"],
-            name="목표 ADR",
-            mode="markers+text",
-            marker=dict(color="red", size=14, symbol="line-ew-open", line=dict(width=3)),
-            text=summary_df["목표 ADR"].apply(lambda v: f"{v:,.0f}"),
-            textposition="top center",
-            textfont=dict(color="red", size=10),
-        )
-    )
-    fig_s2.update_layout(
-        title="구간별 ADR vs 목표 ADR",
-        height=350,
-        legend=dict(orientation="h", y=-0.15),
-    )
-    st.plotly_chart(fig_s2, use_container_width=True, key="s_adr")
-
-# ── ADR Gap 게이지 ─────────────────────────────────────────────────────────
-st.markdown("#### ADR 달성 상태 (목표 대비)")
-gap_cols = st.columns(5)
-for i, (pr, gc) in enumerate(zip(period_results, gap_cols)):
-    gap = pr["adr_vs_tgt"]
-    adr = pr["curr"]["adr"]
-    tgt = pr["period"]["target_adr"]
-    color = "#16a34a" if gap >= 0 else ("#d97706" if gap >= -20_000 else "#dc2626")
-    label = "✅ 달성" if gap >= 0 else ("⚠️ 주의" if gap >= -20_000 else "🚨 미달")
-    with gc:
-        st.markdown(
-            f"""
-            <div style="text-align:center;padding:10px;border-radius:8px;
-                        background:{pr['period']['bg']};border:1px solid {pr['period']['color']}20;">
-                <div style="font-size:11px;color:#6b7280;">{pr['period']['desc']}</div>
-                <div style="font-size:20px;font-weight:900;color:{color};">{'+' if gap>=0 else ''}{gap:,.0f}</div>
-                <div style="font-size:11px;color:{color};">{label}</div>
-                <div style="font-size:10px;color:#9ca3af;">{adr:,.0f} / 목표 {tgt:,}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-# ==============================================================================
 # ==============================================================================
 # [12] Quick decision guide
 # ==============================================================================
@@ -1076,14 +892,14 @@ st.markdown("---")
 with st.expander("Quick Decision Guide (Trigger Points)", expanded=False):
     _rows = [
         ("Peak 7/24-8/8",      "ADR < 510,000",        "Reduce OTA inventory / raise BAR"),
-        ("Peak 7/24-8/8",      "OCC >= 85%",            "Prioritize website / exclude deals"),
+        ("Peak 7/24-8/8",      "OCC >= 97%",            "Prioritize direct / exclude deals"),
         ("Post-peak 8/9-8/16", "ADR < 470,000",        "Freeze BAR / adjust OTA exposure"),
-        ("Shoulder 8/17-8/31", "OCC < 65% by 7/15",   "Breakfast pkg / expand intl OTA"),
+        ("Shoulder 8/17-8/31", "OCC < 80% by 7/15",   "Breakfast pkg / expand intl OTA"),
         ("All periods",        "< 10 rooms remaining", "Switch to website priority"),
     ]
     _gdf = pd.DataFrame(_rows, columns=["Period", "Trigger", "Action"])
     st.dataframe(_gdf, use_container_width=True, hide_index=True)
-    st.info("6/30: Jul OCC <70% -> Add live / Increase OTA ad / Freeze BAR / Expand F&B Credit")
-    st.info("7/15: Jul OCC <85% -> Shoulder breakfast pkg / Expand intl OTA / Add promo")
+    st.info("6/30: Jul OCC <70% - Add live / Increase OTA ad / Freeze BAR / Expand F&B Credit")
+    st.info("7/15: Jul OCC <85% - Shoulder breakfast pkg / Expand intl OTA / Add promo")
 
 st.caption(f"Last updated: {curr_date}  |  Amber Pure Hill Revenue Management")
