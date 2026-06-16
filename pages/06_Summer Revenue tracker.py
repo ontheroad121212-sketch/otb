@@ -137,6 +137,67 @@ def get_all_snapshot_dates() -> list:
     return sorted(d7 | d8, reverse=True)
 
 
+@st.cache_data(ttl=60)
+def load_reservation_pickups(snapshot_date: str) -> pd.DataFrame:
+    """해당 날짜에 예약된 건 로드 — revenue_integrity_history 컬렉션
+    문서 ID = {snapshot_date}_Reservation
+    Snapshot_Date = Booking_Date (예약일자)이므로 당일 신규 유입 예약만 추출됨
+    """
+    try:
+        db_local = firestore.client()
+        doc_id = f"{snapshot_date}_Reservation"
+        doc = db_local.collection("revenue_integrity_history").document(doc_id).get()
+        if doc.exists:
+            data = doc.to_dict().get("data", [])
+            if data:
+                df = pd.DataFrame(data)
+                # CheckIn 파싱 (string으로 저장됨)
+                if "CheckIn" in df.columns:
+                    df["CheckIn"] = pd.to_datetime(df["CheckIn"], errors="coerce")
+                # 숫자형 변환
+                for col in ["Room_Revenue", "Total_Revenue", "RN", "Rooms", "Nights"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+                # RN 없으면 Rooms * Nights로 계산
+                if "RN" not in df.columns and "Rooms" in df.columns and "Nights" in df.columns:
+                    df["RN"] = df["Rooms"] * df["Nights"]
+                # 0원 예약 제외 (무료 이용, 내부 사용 등)
+                if "Room_Revenue" in df.columns:
+                    df = df[df["Room_Revenue"] > 0].copy()
+                return df
+    except Exception as e:
+        st.session_state["_res_pickup_err"] = str(e)
+    return pd.DataFrame()
+
+
+def calc_res_period_stats(res_df: pd.DataFrame) -> dict:
+    """구간별 신규 예약 ADR/RN/건수 계산
+    Returns: {period_id: {"rn": ..., "rev": ..., "adr": ..., "count": ...} or None}
+    """
+    stats = {}
+    for p in PERIODS:
+        if res_df.empty or "CheckIn" not in res_df.columns:
+            stats[p["id"]] = None
+            continue
+        mask = (
+            (res_df["CheckIn"] >= pd.Timestamp(p["start"]))
+            & (res_df["CheckIn"] <= pd.Timestamp(p["end"]))
+        )
+        sub = res_df[mask]
+        rn_sum = sub["RN"].sum() if not sub.empty else 0
+        if sub.empty or rn_sum == 0:
+            stats[p["id"]] = None
+        else:
+            rev_sum = sub["Room_Revenue"].sum()
+            stats[p["id"]] = {
+                "rn": int(rn_sum),
+                "rev": rev_sum,
+                "adr": rev_sum / rn_sum,
+                "count": len(sub),   # 예약 건수 (레코드 수)
+            }
+    return stats
+
+
 def load_snapshot(date_str: str, month_num: int) -> pd.DataFrame | None:
     """특정 날짜·월의 스냅샷 로드"""
     try:
@@ -212,6 +273,7 @@ with st.sidebar:
     if st.button("🔄 캐시 새로고침"):
         get_all_snapshot_dates.clear()
         get_snapshot_dates_for_month.clear()
+        load_reservation_pickups.clear()
         st.rerun()
 
 # ==============================================================================
@@ -224,6 +286,14 @@ prev_df8 = load_snapshot(prev_date, 8) if prev_date else None
 
 curr_df = combine_months(curr_df7, curr_df8)
 prev_df = combine_months(prev_df7, prev_df8)
+
+# 신규 예약 ADR: revenue_integrity_history에서 curr_date 예약 데이터 로드
+res_today = load_reservation_pickups(curr_date)
+res_period_stats = calc_res_period_stats(res_today)
+if not res_today.empty:
+    st.sidebar.success(f"✅ 신규 예약 {len(res_today)}건 로드됨 ({curr_date})")
+else:
+    st.sidebar.info(f"ℹ️ {curr_date} 예약 데이터 없음\n(Daily Pick-up 업로드 필요)")
 
 # ==============================================================================
 # [7] 메인 화면
@@ -277,11 +347,11 @@ for i, p in enumerate(PERIODS):
 
     pickup_rn = cs["rn"] - ps["rn"]
     pickup_rev = cs["rev"] - ps["rev"]
-    # 픽업 ADR: 신규 유입 예약의 단가 (픽업 RN > 0 일 때만 의미 있음)
-    pickup_adr = pickup_rev / pickup_rn if pickup_rn > 0 else None
+    # 신규 유입 예약 ADR: revenue_integrity_history 기반 (OTB diff 방식 제거)
+    res_stat = res_period_stats.get(p["id"])
+    pickup_adr = res_stat["adr"] if res_stat else None
     adr_vs_tgt = cs["adr"] - p["target_adr"]
     adr_color = "#16a34a" if adr_vs_tgt >= 0 else "#dc2626"
-    # 픽업 ADR vs 목표
     pickup_adr_color = "#16a34a" if (pickup_adr or 0) >= p["target_adr"] else "#dc2626"
 
     period_results.append(
@@ -292,6 +362,7 @@ for i, p in enumerate(PERIODS):
             "pickup_rn": pickup_rn,
             "pickup_rev": pickup_rev,
             "pickup_adr": pickup_adr,
+            "res_stat": res_stat,
             "adr_vs_tgt": adr_vs_tgt,
             "curr_df": c_df,
             "prev_df": p_df,
@@ -301,6 +372,12 @@ for i, p in enumerate(PERIODS):
     with summary_cols[i]:
         pickup_sign = "+" if pickup_rn >= 0 else ""
         pickup_adr_str = f"{pickup_adr:,.0f}원" if pickup_adr is not None else "—"
+        res_info = (
+            f"<span style='font-size:10px;color:#6b7280;'>"
+            f"{res_stat['count']}건 / {res_stat['rn']}RN</span>"
+            if res_stat else
+            "<span style='font-size:10px;color:#9ca3af;'>예약 데이터 없음</span>"
+        )
         st.markdown(
             f"""
             <div class="period-card" style="background:{p['bg']};border-left:4px solid {p['color']};">
@@ -313,10 +390,9 @@ for i, p in enumerate(PERIODS):
                 <div><b>OTB ADR</b> &nbsp;<span style="color:{adr_color};font-weight:900;">{cs['adr']:,.0f}원</span>
                     &nbsp;<span style="font-size:11px;color:{adr_color};">({'+' if adr_vs_tgt>=0 else ''}{adr_vs_tgt:,.0f})</span>
                 </div>
-                <div><b>📌 픽업 ADR</b> &nbsp;<span style="color:{pickup_adr_color};font-weight:900;">{pickup_adr_str}</span>
-                    <span style="font-size:10px;color:#9ca3af;"> ← 신규유입 단가</span>
-                </div>
-                <div style="font-size:11px;color:#6b7280;">목표 {p['target_adr']:,}원</div>
+                <div><b>📌 신규 예약 ADR</b> &nbsp;<span style="color:{pickup_adr_color};font-weight:900;">{pickup_adr_str}</span></div>
+                <div>{res_info}</div>
+                <div style="font-size:11px;color:#6b7280;margin-top:4px;">목표 {p['target_adr']:,}원</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -394,12 +470,9 @@ for tab, pr in zip(tabs, period_results):
 
         merged["Pick_RN"]  = merged["RMS"] - merged["RMS_prev"]
         merged["Pick_REV"] = merged["REV"] - merged["REV_prev"]
-        # 픽업 ADR: 신규 유입 예약 단가 (Pick_RN > 0 인 날짜만)
-        merged["Pick_ADR"] = np.where(
-            merged["Pick_RN"] > 0,
-            merged["Pick_REV"] / merged["Pick_RN"],
-            np.nan
-        )
+        # 픽업 ADR 컬럼: 행별 값은 표시 안함 (구간 전체 ADR을 메트릭에서 표시)
+        # — OTB diff 방식은 단가 변경/취소 영향으로 의미 없으므로 NaN 처리
+        merged["Pick_ADR"] = np.nan
         merged["ADR_vs_Tgt"] = merged["ADR"] - p["target_adr"]
         merged["Date"] = pd.to_datetime(merged["DateStr"])
         merged = merged.sort_values("Date")
@@ -407,15 +480,27 @@ for tab, pr in zip(tabs, period_results):
         # ── 상단 메트릭 ───────────────────────────────────────────────────
         cs = pr["curr"]
         ps = pr["prev"]
-        # 구간 전체 픽업 ADR
-        period_pickup_adr = pr.get("pickup_adr")
-        pickup_adr_delta = f"{period_pickup_adr - p['target_adr']:+,.0f} vs 목표" if period_pickup_adr else "신규유입 없음"
+        res_stat = pr.get("res_stat")
+        period_pickup_adr = res_stat["adr"] if res_stat else None
+        if period_pickup_adr:
+            pickup_adr_delta = f"{period_pickup_adr - p['target_adr']:+,.0f} vs 목표"
+            pickup_adr_label = f"{period_pickup_adr:,.0f}원"
+        else:
+            pickup_adr_delta = "예약 데이터 없음"
+            pickup_adr_label = "—"
 
         m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("OTB RN",      f"{cs['rn']:,.0f}",    f"{pr['pickup_rn']:+,.0f} 픽업")
-        m2.metric("OTB Revenue",  f"{cs['rev']/1e8:.2f}억", f"{pr['pickup_rev']/1e6:+.1f}M 픽업")
+        m1.metric("OTB RN",      f"{cs['rn']:,.0f}",    f"{pr['pickup_rn']:+,.0f} (OTB 변화)")
+        m2.metric("OTB Revenue",  f"{cs['rev']/1e8:.2f}억", f"{pr['pickup_rev']/1e6:+.1f}M (OTB 변화)")
         m3.metric("OTB ADR (종합)", f"{cs['adr']:,.0f}원", f"{pr['adr_vs_tgt']:+,.0f} vs 목표")
-        m4.metric("📌 픽업 ADR (신규)", f"{period_pickup_adr:,.0f}원" if period_pickup_adr else "—", pickup_adr_delta)
+        m4.metric(
+            "📌 신규 예약 ADR",
+            pickup_adr_label,
+            pickup_adr_delta,
+            help=f"오늘({curr_date}) 예약된 건 중 이 구간 체크인 기준 ADR" + (
+                f" | {res_stat['count']}건 / {res_stat['rn']}RN" if res_stat else ""
+            ),
+        )
         m5.metric("FIT ADR",
                   f"{(merged['FIT_REV'].sum() / merged['FIT_RMS'].sum()):,.0f}원" if merged['FIT_RMS'].sum() > 0 else "—")
         m6.metric("GRP ADR",
@@ -473,11 +558,8 @@ for tab, pr in zip(tabs, period_results):
         total_row[f"OTB ADR vs 목표({p['target_adr']:,})"] = adr_diff
         if "전일 ADR" in display.columns and ps["rn"] > 0:
             total_row["전일 ADR"] = ps["adr"]
-        # 픽업 ADR total: 전체 픽업 REV / 전체 픽업 RN
-        if pr.get("pickup_adr") is not None:
-            total_row["📌 픽업 ADR (신규)"] = pr["pickup_adr"]
-        else:
-            total_row["📌 픽업 ADR (신규)"] = np.nan
+        # 픽업 ADR total: revenue_integrity_history 기반 구간 전체 신규 예약 ADR
+        total_row["📌 픽업 ADR (신규)"] = res_stat["adr"] if res_stat else np.nan
         display = pd.concat([display, pd.DataFrame([total_row])], ignore_index=True)
 
         # 포맷 함수 — np.nan/비숫자 값에 안전하게 대응하는 callable 사용
