@@ -469,13 +469,15 @@ def load_daily_summary_matrix():
 # ==============================================================================
 # [3] 메인 화면 UI 및 사이드바
 # ==============================================================================
-if is_chairman_mode:
-    st.markdown('<style>[data-testid="stSidebarNav"] {display: none;}</style>', unsafe_allow_html=True)
-    with st.sidebar:
-        st.title("Navigation")
-        st.page_link("streamlit_app.py", label=T("메인 리포트"), icon="🏠")
-        st.page_link("pages/03_Daily_Pick-up & Wash-out.py", label=T("데일리 픽업"), icon="📅")
-        st.divider()
+# 두 모드 모두 커스텀 네비게이션 사용 (Streamlit 기본 자동 네비 숨김)
+st.markdown('<style>[data-testid="stSidebarNav"] {display: none;}</style>', unsafe_allow_html=True)
+
+with st.sidebar:
+    st.title(T("Navigation"))
+    st.page_link("streamlit_app.py", label=T("메인 리포트"), icon="🏠")
+    st.page_link("pages/03_Daily_Pick-up & Wash-out.py", label=T("데일리 픽업"), icon="📅")
+    st.page_link("pages/04_Summer_Revenue_Tracker.py", label=T("서머 트래커"), icon="☀️")
+    st.divider()
 
 st.sidebar.header(T("⚙️ Settings"))
 
