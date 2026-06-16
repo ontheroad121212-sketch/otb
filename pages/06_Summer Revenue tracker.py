@@ -36,51 +36,61 @@ st.markdown(textwrap.dedent("""
 PERIODS = [
     {
         "id": "pre_peak",
-        "label": "📅 Pre-Peak",
+        "label": "Pre-Peak",
         "desc": "7/1~7/18",
         "start": "2026-07-01",
         "end": "2026-07-18",
         "target_adr": 355_000,
+        "target_occ": 0.75,       # 목표 OCC (페이싱 계산용)
+        "booking_buffer": 7,      # 체크인 N일 전까지가 실질 판매 마감
         "color": "#64748b",
         "bg": "#f8fafc",
     },
     {
         "id": "shoulder1",
-        "label": "🟡 숄더 전반",
+        "label": "Shoulder A",
         "desc": "7/19~7/23",
         "start": "2026-07-19",
         "end": "2026-07-23",
         "target_adr": 340_000,
+        "target_occ": 0.85,
+        "booking_buffer": 7,
         "color": "#d97706",
         "bg": "#fffbeb",
     },
     {
         "id": "peak",
-        "label": "🔴 극성수기",
+        "label": "Peak",
         "desc": "7/24~8/8",
         "start": "2026-07-24",
         "end": "2026-08-08",
         "target_adr": 510_000,
+        "target_occ": 0.97,
+        "booking_buffer": 14,     # 극성수기는 2주 전이 실질 마감
         "color": "#dc2626",
         "bg": "#fef2f2",
     },
     {
         "id": "post_peak",
-        "label": "🟠 성수기 후반",
+        "label": "Post-Peak",
         "desc": "8/9~8/16",
         "start": "2026-08-09",
         "end": "2026-08-16",
         "target_adr": 470_000,
+        "target_occ": 0.90,
+        "booking_buffer": 7,
         "color": "#ea580c",
         "bg": "#fff7ed",
     },
     {
         "id": "shoulder2",
-        "label": "🟢 숄더 후반",
+        "label": "Shoulder B",
         "desc": "8/17~8/31",
         "start": "2026-08-17",
         "end": "2026-08-31",
         "target_adr": 310_000,
+        "target_occ": 0.75,
+        "booking_buffer": 5,
         "color": "#16a34a",
         "bg": "#f0fdf4",
     },
@@ -403,6 +413,119 @@ for i, p in enumerate(PERIODS):
                 <div><b>📌 신규 총매출 ADR</b> &nbsp;<span style="color:#6366f1;font-weight:900;">{total_adr_str}</span></div>
                 <div style="margin-top:2px;">{res_info}</div>
                 <div style="font-size:11px;color:#6b7280;margin-top:4px;">목표 {p['target_adr']:,}원</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+# ==============================================================================
+# [8.5] 구간별 Pacing 분석
+# ==============================================================================
+st.markdown("---")
+st.markdown("### 🚀 구간별 Pacing 분석")
+st.caption(
+    "목표 OCC 기반 필요 일일 픽업 vs 실제 어제 픽업을 비교해 액션을 제안합니다. "
+    f"기준일: {curr_date}  |  어제 예약 데이터: {_pickup_date}"
+)
+
+_today_dt = datetime.strptime(curr_date, "%Y-%m-%d").date()
+
+def _pacing_action(pace_ratio, days_to_start, otb_pct):
+    """페이스 비율 + 잔여 리드타임 기반 액션 추천 (영문 유지 — 한글 인코딩 회피)"""
+    if otb_pct >= 1.0:
+        return "TARGET MET", "#16a34a", "OTA inventory reduction / BAR increase review"
+    if pace_ratio is None:
+        label = "NO DATA"
+        color = "#6b7280"
+        if days_to_start > 45:
+            advice = "D+45 window open — check OTA exposure & long-stay package"
+        elif days_to_start > 21:
+            advice = "D+21 — upload yesterday pickup data to see pace"
+        else:
+            advice = "URGENT — upload pickup data immediately"
+        return label, color, advice
+    if pace_ratio >= 1.5:
+        return "STRONG PACE", "#16a34a", "Price increase opportunity — review BAR ceiling"
+    if pace_ratio >= 1.0:
+        return "ON PACE", "#16a34a", "Maintain current strategy"
+    if pace_ratio >= 0.7:
+        if days_to_start > 45:
+            advice = "Monitor. Expand OTA visibility / review package deals"
+        elif days_to_start > 21:
+            advice = "Boost OTA ad spend / re-check channel mix"
+        elif days_to_start > 7:
+            advice = "WARNING — lower BAR tier / add live-commerce session"
+        else:
+            advice = "CRITICAL D-7 — immediate price adjustment & full channel review"
+        return "BELOW PACE", "#d97706", advice
+    # pace < 0.7
+    if days_to_start > 45:
+        advice = "Underperforming — launch promotion / review OTA ranking"
+    elif days_to_start > 21:
+        advice = "ALERT — aggressive OTA ad / flash deal / live session"
+    elif days_to_start > 7:
+        advice = "URGENT — lower BAR + live session + SNS push"
+    else:
+        advice = "CRITICAL — all-channel emergency pricing review"
+    return "CRITICAL PACE", "#dc2626", advice
+
+pace_cols = st.columns(5)
+for i, pr in enumerate(period_results):
+    p    = pr["period"]
+    cs   = pr["curr"]
+    rs   = pr.get("res_stat")
+
+    start_dt   = datetime.strptime(p["start"], "%Y-%m-%d").date()
+    end_dt     = datetime.strptime(p["end"],   "%Y-%m-%d").date()
+    period_days = (end_dt - start_dt).days + 1
+    target_rn   = int(TOTAL_ROOMS * period_days * p["target_occ"])
+    otb_rn      = cs["rn"]
+    remaining   = max(0, target_rn - otb_rn)
+    otb_pct     = otb_rn / target_rn if target_rn > 0 else 0
+
+    deadline_dt      = start_dt - timedelta(days=p["booking_buffer"])
+    days_to_deadline = max(1, (deadline_dt - _today_dt).days)
+    days_to_start    = max(0, (start_dt - _today_dt).days)
+
+    required_daily = remaining / days_to_deadline if days_to_deadline > 0 else 0
+    actual_daily   = rs["rn"] if rs else None
+    pace_ratio     = (actual_daily / required_daily) if (actual_daily and required_daily > 0) else None
+
+    status_label, status_color, advice = _pacing_action(pace_ratio, days_to_start, otb_pct)
+
+    # progress bar fill colour
+    bar_pct  = min(otb_pct, 1.0)
+    bar_color = "#16a34a" if otb_pct >= 0.8 else ("#d97706" if otb_pct >= 0.5 else "#dc2626")
+    bar_w    = f"{bar_pct*100:.0f}%"
+
+    actual_str   = f"{actual_daily:.0f} RN" if actual_daily is not None else "—"
+    required_str = f"{required_daily:.1f} RN/day" if required_daily > 0 else "—"
+    pace_str     = f"{pace_ratio*100:.0f}%" if pace_ratio is not None else "—"
+
+    with pace_cols[i]:
+        st.markdown(
+            f"""
+            <div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;font-size:12px;line-height:1.75;">
+              <div style="font-weight:900;color:{p['color']};margin-bottom:2px;">{p['label']} {p['desc']}</div>
+              <div style="background:#f3f4f6;border-radius:6px;height:8px;margin-bottom:8px;">
+                <div style="background:{bar_color};width:{bar_w};height:8px;border-radius:6px;"></div>
+              </div>
+              <div>OTB <b>{otb_rn:,}</b> / 목표 <b>{target_rn:,}</b> RN &nbsp;
+                <span style="color:{bar_color};font-weight:700;">({otb_pct*100:.0f}%)</span>
+              </div>
+              <div>필요 일일 픽업 &nbsp;<b>{required_str}</b></div>
+              <div>어제 실적 &nbsp;<b>{actual_str}</b> &nbsp;
+                <span style="color:{status_color};font-weight:700;">({pace_str})</span>
+              </div>
+              <div style="margin-top:6px;padding:5px 8px;background:{status_color}22;
+                          border-left:3px solid {status_color};border-radius:4px;
+                          color:{status_color};font-weight:700;font-size:11px;">
+                {status_label}
+              </div>
+              <div style="font-size:10px;color:#4b5563;margin-top:4px;">{advice}</div>
+              <div style="font-size:10px;color:#9ca3af;margin-top:4px;">
+                D-{days_to_start} | 마감까지 {days_to_deadline}일 남음 (D-{p["booking_buffer"]} 기준)
+              </div>
             </div>
             """,
             unsafe_allow_html=True,
