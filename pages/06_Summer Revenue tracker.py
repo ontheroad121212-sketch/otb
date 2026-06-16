@@ -287,13 +287,17 @@ prev_df8 = load_snapshot(prev_date, 8) if prev_date else None
 curr_df = combine_months(curr_df7, curr_df8)
 prev_df = combine_months(prev_df7, prev_df8)
 
-# 신규 예약 ADR: revenue_integrity_history에서 curr_date 예약 데이터 로드
-res_today = load_reservation_pickups(curr_date)
+# 신규 예약 ADR: revenue_integrity_history에서 전일(curr_date - 1) 예약 데이터 로드
+# 매일 업로드하는 픽업 파일의 Booking_Date = 전일 → 저장 문서 ID도 전일 기준
+_pickup_date = (
+    datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(days=1)
+).strftime("%Y-%m-%d")
+res_today = load_reservation_pickups(_pickup_date)
 res_period_stats = calc_res_period_stats(res_today)
 if not res_today.empty:
-    st.sidebar.success(f"✅ 신규 예약 {len(res_today)}건 로드됨 ({curr_date})")
+    st.sidebar.success(f"✅ 신규 예약 {len(res_today)}건 로드됨\n({_pickup_date} 예약분)")
 else:
-    st.sidebar.info(f"ℹ️ {curr_date} 예약 데이터 없음\n(Daily Pick-up 업로드 필요)")
+    st.sidebar.info(f"ℹ️ {_pickup_date} 예약 데이터 없음\n(Daily Pick-up에서 어제 예약 파일 업로드 필요)")
 
 # ==============================================================================
 # [7] 메인 화면
@@ -497,7 +501,7 @@ for tab, pr in zip(tabs, period_results):
             "📌 신규 예약 ADR",
             pickup_adr_label,
             pickup_adr_delta,
-            help=f"오늘({curr_date}) 예약된 건 중 이 구간 체크인 기준 ADR" + (
+            help=f"{_pickup_date} 예약된 건 중 이 구간 체크인 기준 ADR" + (
                 f" | {res_stat['count']}건 / {res_stat['rn']}RN" if res_stat else ""
             ),
         )
@@ -851,21 +855,22 @@ for i, (pr, gc) in enumerate(zip(period_results, gap_cols)):
         )
 
 # ==============================================================================
-# [12] 빠른 의사결정 체크리스트
+# ==============================================================================
+# [12] Quick decision guide
 # ==============================================================================
 st.markdown("---")
-with st.expander("⚡ 빠른 의사결정 가이드 (Trigger Point 기반)", expanded=False):
-    st.markdown("""
-    | 구간 | 체크 지표 | 액션 |
-    |------|-----------|------|
-    | 극성수기 7/24~8/8 | ADR < 430,000원 | OTA 재고 축소, BAR 상향 검토 |
-    | 극성수기 7/24~8/8 | OCC 85% 이상 날짜 | 홈페이지 우선, 라이브/공구 제외 |
-    | 성수기 후반 8/9~8/16 | ADR < 560,000원 | BAR 동결, OTA 노출 조정 |
-    | 숄더 8/17~8/31 | OCC < 65% (7/15 기준) | 조식 포함 패키지, 해외 OTA 확대 |
-    | 전체 | 잔여 10실 이하 날짜 | 홈페이지 우선 전환 |
-
-    **6/30 Trigger**: 7월 OCC < 70% → 라이브 1회 추가 / OTA 광고 증액 / BAR 동결 / F&B Credit 확대
-    **7/15 Trigger**: 7월 OCC < 85% → 숄더 조식 포함 / 해외 OTA Visibility 확대 / 프로모션 추가
-    """)
+with st.expander("Quick Decision Guide (Trigger Points)", expanded=False):
+    rows = [
+        ("Peak 7/24-8/8", "ADR < 510,000", "Reduce OTA inventory / raise BAR"),
+        ("Peak 7/24-8/8", "OCC >= 85%", "Prioritize website / exclude group deals"),
+        ("Post-peak 8/9-8/16", "ADR < 470,000", "Freeze BAR / adjust OTA exposure"),
+        ("Shoulder 8/17-8/31", "OCC < 65% by 7/15", "Breakfast package / expand intl OTA"),
+        ("All periods", "Remaining < 10 rooms", "Switch to website priority"),
+    ]
+    import pandas as pd
+    guide_df = pd.DataFrame(rows, columns=["Period", "Trigger", "Action"])
+    st.dataframe(guide_df, use_container_width=True, hide_index=True)
+    st.info("6/30 Check: Jul OCC < 70% -> Add live session / Increase OTA ad / Freeze BAR / Expand F&B Credit")
+    st.info("7/15 Check: Jul OCC < 85% -> Shoulder breakfast package / Expand intl OTA visibility / Add promo")
 
 st.caption(f"Last updated: {curr_date}  |  Amber Pure Hill Revenue Management")
