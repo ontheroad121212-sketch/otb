@@ -60,7 +60,7 @@ PERIODS = [
         "desc": "7/24~8/8",
         "start": "2026-07-24",
         "end": "2026-08-08",
-        "target_adr": 430_000,
+        "target_adr": 510_000,
         "color": "#dc2626",
         "bg": "#fef2f2",
     },
@@ -70,7 +70,7 @@ PERIODS = [
         "desc": "8/9~8/16",
         "start": "2026-08-09",
         "end": "2026-08-16",
-        "target_adr": 560_000,
+        "target_adr": 470_000,
         "color": "#ea580c",
         "bg": "#fff7ed",
     },
@@ -277,8 +277,12 @@ for i, p in enumerate(PERIODS):
 
     pickup_rn = cs["rn"] - ps["rn"]
     pickup_rev = cs["rev"] - ps["rev"]
+    # 픽업 ADR: 신규 유입 예약의 단가 (픽업 RN > 0 일 때만 의미 있음)
+    pickup_adr = pickup_rev / pickup_rn if pickup_rn > 0 else None
     adr_vs_tgt = cs["adr"] - p["target_adr"]
     adr_color = "#16a34a" if adr_vs_tgt >= 0 else "#dc2626"
+    # 픽업 ADR vs 목표
+    pickup_adr_color = "#16a34a" if (pickup_adr or 0) >= p["target_adr"] else "#dc2626"
 
     period_results.append(
         {
@@ -287,6 +291,7 @@ for i, p in enumerate(PERIODS):
             "prev": ps,
             "pickup_rn": pickup_rn,
             "pickup_rev": pickup_rev,
+            "pickup_adr": pickup_adr,
             "adr_vs_tgt": adr_vs_tgt,
             "curr_df": c_df,
             "prev_df": p_df,
@@ -295,6 +300,7 @@ for i, p in enumerate(PERIODS):
 
     with summary_cols[i]:
         pickup_sign = "+" if pickup_rn >= 0 else ""
+        pickup_adr_str = f"{pickup_adr:,.0f}원" if pickup_adr is not None else "—"
         st.markdown(
             f"""
             <div class="period-card" style="background:{p['bg']};border-left:4px solid {p['color']};">
@@ -304,12 +310,13 @@ for i, p in enumerate(PERIODS):
                     &nbsp;<span style="color:{'#16a34a' if pickup_rn>=0 else '#dc2626'};font-size:12px;">
                     ({pickup_sign}{pickup_rn:,.0f})</span>
                 </div>
-                <div><b>Revenue</b> &nbsp;{cs['rev']/1e8:.2f}억
-                    &nbsp;<span style="color:{'#16a34a' if pickup_rev>=0 else '#dc2626'};font-size:11px;">
-                    ({'+' if pickup_rev>=0 else ''}{pickup_rev/1e6:.1f}M)</span>
+                <div><b>OTB ADR</b> &nbsp;<span style="color:{adr_color};font-weight:900;">{cs['adr']:,.0f}원</span>
+                    &nbsp;<span style="font-size:11px;color:{adr_color};">({'+' if adr_vs_tgt>=0 else ''}{adr_vs_tgt:,.0f})</span>
                 </div>
-                <div><b>ADR</b> &nbsp;<span style="color:{adr_color};font-weight:900;">{cs['adr']:,.0f}원</span></div>
-                <div style="font-size:11px;color:{adr_color};">목표 {p['target_adr']:,} 대비 {'+' if adr_vs_tgt>=0 else ''}{adr_vs_tgt:,.0f}원</div>
+                <div><b>📌 픽업 ADR</b> &nbsp;<span style="color:{pickup_adr_color};font-weight:900;">{pickup_adr_str}</span>
+                    <span style="font-size:10px;color:#9ca3af;"> ← 신규유입 단가</span>
+                </div>
+                <div style="font-size:11px;color:#6b7280;">목표 {p['target_adr']:,}원</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -387,20 +394,31 @@ for tab, pr in zip(tabs, period_results):
 
         merged["Pick_RN"]  = merged["RMS"] - merged["RMS_prev"]
         merged["Pick_REV"] = merged["REV"] - merged["REV_prev"]
+        # 픽업 ADR: 신규 유입 예약 단가 (Pick_RN > 0 인 날짜만)
+        merged["Pick_ADR"] = np.where(
+            merged["Pick_RN"] > 0,
+            merged["Pick_REV"] / merged["Pick_RN"],
+            np.nan
+        )
         merged["ADR_vs_Tgt"] = merged["ADR"] - p["target_adr"]
         merged["Date"] = pd.to_datetime(merged["DateStr"])
         merged = merged.sort_values("Date")
 
         # ── 상단 메트릭 ───────────────────────────────────────────────────
-        m1, m2, m3, m4, m5 = st.columns(5)
         cs = pr["curr"]
         ps = pr["prev"]
-        m1.metric("OTB RN",     f"{cs['rn']:,.0f}",    f"{pr['pickup_rn']:+,.0f} 픽업")
-        m2.metric("OTB Revenue", f"{cs['rev']/1e8:.2f}억", f"{pr['pickup_rev']/1e6:+.1f}M 픽업")
-        m3.metric("ADR",        f"{cs['adr']:,.0f}원",  f"{pr['adr_vs_tgt']:+,.0f} vs 목표")
-        m4.metric("FIT ADR",
+        # 구간 전체 픽업 ADR
+        period_pickup_adr = pr.get("pickup_adr")
+        pickup_adr_delta = f"{period_pickup_adr - p['target_adr']:+,.0f} vs 목표" if period_pickup_adr else "신규유입 없음"
+
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("OTB RN",      f"{cs['rn']:,.0f}",    f"{pr['pickup_rn']:+,.0f} 픽업")
+        m2.metric("OTB Revenue",  f"{cs['rev']/1e8:.2f}억", f"{pr['pickup_rev']/1e6:+.1f}M 픽업")
+        m3.metric("OTB ADR (종합)", f"{cs['adr']:,.0f}원", f"{pr['adr_vs_tgt']:+,.0f} vs 목표")
+        m4.metric("📌 픽업 ADR (신규)", f"{period_pickup_adr:,.0f}원" if period_pickup_adr else "—", pickup_adr_delta)
+        m5.metric("FIT ADR",
                   f"{(merged['FIT_REV'].sum() / merged['FIT_RMS'].sum()):,.0f}원" if merged['FIT_RMS'].sum() > 0 else "—")
-        m5.metric("GRP ADR",
+        m6.metric("GRP ADR",
                   f"{(merged['GRP_REV'].sum() / merged['GRP_RMS'].sum()):,.0f}원" if merged['GRP_RMS'].sum() > 0 else "—")
 
         # ── ADR Alert ─────────────────────────────────────────────────────
@@ -417,27 +435,26 @@ for tab, pr in zip(tabs, period_results):
         st.markdown("")
 
         # ── 데일리 픽업 테이블 ────────────────────────────────────────────
-        display = merged[
-            ["DateStr", "WeekDay", "RMS_prev", "REV_prev", "ADR_prev",
-             "RMS", "REV", "ADR", "OCC", "Pick_RN", "Pick_REV", "ADR_vs_Tgt"]
-        ].copy() if "WeekDay" in merged.columns else merged[
-            ["DateStr", "RMS_prev", "REV_prev", "ADR_prev",
-             "RMS", "REV", "ADR", "OCC", "Pick_RN", "Pick_REV", "ADR_vs_Tgt"]
-        ].copy()
+        base_cols = ["DateStr", "RMS_prev", "REV_prev", "ADR_prev",
+                     "RMS", "REV", "ADR", "OCC", "Pick_RN", "Pick_REV", "Pick_ADR", "ADR_vs_Tgt"]
+        if "WeekDay" in merged.columns:
+            base_cols = ["DateStr", "WeekDay"] + base_cols[1:]
+        display = merged[[c for c in base_cols if c in merged.columns]].copy()
 
         col_names = {
             "DateStr": "날짜",
             "WeekDay": "요일",
-            "RMS_prev": f"전일 RN",
+            "RMS_prev": "전일 RN",
             "REV_prev": "전일 Revenue",
             "ADR_prev": "전일 ADR",
             "RMS": "OTB RN",
             "REV": "OTB Revenue",
-            "ADR": "ADR",
+            "ADR": "OTB ADR (종합)",
             "OCC": "OCC%",
             "Pick_RN": "픽업 RN",
             "Pick_REV": "픽업 Revenue",
-            "ADR_vs_Tgt": f"ADR vs 목표({p['target_adr']:,})",
+            "Pick_ADR": "📌 픽업 ADR (신규)",
+            "ADR_vs_Tgt": f"OTB ADR vs 목표({p['target_adr']:,})",
         }
         display.rename(columns=col_names, inplace=True)
 
@@ -451,11 +468,16 @@ for tab, pr in zip(tabs, period_results):
                 total_row[c] = pd.to_numeric(display[c], errors="coerce").sum()
             except Exception:
                 total_row[c] = np.nan
-        # ADR total 재계산
-        total_row["ADR"] = cs["adr"]
-        total_row[f"ADR vs 목표({p['target_adr']:,})"] = adr_diff
+        # ADR total 재계산 (단순 합산은 의미 없으므로 가중평균으로 덮어씀)
+        total_row["OTB ADR (종합)"] = cs["adr"]
+        total_row[f"OTB ADR vs 목표({p['target_adr']:,})"] = adr_diff
         if "전일 ADR" in display.columns and ps["rn"] > 0:
             total_row["전일 ADR"] = ps["adr"]
+        # 픽업 ADR total: 전체 픽업 REV / 전체 픽업 RN
+        if pr.get("pickup_adr") is not None:
+            total_row["📌 픽업 ADR (신규)"] = pr["pickup_adr"]
+        else:
+            total_row["📌 픽업 ADR (신규)"] = np.nan
         display = pd.concat([display, pd.DataFrame([total_row])], ignore_index=True)
 
         # 포맷 함수 — np.nan/비숫자 값에 안전하게 대응하는 callable 사용
@@ -506,12 +528,26 @@ for tab, pr in zip(tabs, period_results):
                 return ["background:#eff6ff;font-weight:900;border-top:2px solid #1d4ed8"] * len(row)
             return [""] * len(row)
 
-        pick_cols = [c for c in display.columns if "픽업" in c]
-        adr_vs_cols = [c for c in display.columns if "vs 목표" in c]
+        pick_rn_rev_cols = [c for c in display.columns if "픽업 RN" in c or "픽업 Revenue" in c]
+        pickup_adr_cols  = [c for c in display.columns if "픽업 ADR" in c]
+        adr_vs_cols      = [c for c in display.columns if "vs 목표" in c]
+
+        def color_pickup_adr(v):
+            """픽업 ADR: 목표 대비 색상"""
+            try:
+                if pd.isna(v): return ""
+                val = float(str(v).replace(",", ""))
+                if val >= p["target_adr"]: return "color:#16a34a;font-weight:bold;background:#f0fdf4;"
+                elif val >= p["target_adr"] * 0.95: return "color:#d97706;font-weight:bold;background:#fffbeb;"
+                else: return "color:#dc2626;font-weight:bold;background:#fef2f2;"
+            except Exception:
+                return ""
 
         styler = display.style.format(fmt)
-        if pick_cols:
-            styler = styler.map(color_pickup, subset=pick_cols)
+        if pick_rn_rev_cols:
+            styler = styler.map(color_pickup, subset=pick_rn_rev_cols)
+        if pickup_adr_cols:
+            styler = styler.map(color_pickup_adr, subset=pickup_adr_cols)
         if adr_vs_cols:
             styler = styler.map(color_adr, subset=adr_vs_cols)
         styler = styler.apply(hl_total, axis=1)
