@@ -568,43 +568,43 @@ for i, p in enumerate(PERIODS):
         )
 
 # ==============================================================================
-# [8.5] 구간별 Pacing 분석
+# ==============================================================================
+# [8.5] 구간별 Revenue Pacing 분석 (매출 기준)
 # ==============================================================================
 st.markdown("---")
-st.markdown("### 구간별 Pacing 분석")
+st.markdown("### Revenue Pacing — 매출 목표 달성 시뮬레이션")
 st.caption(
-    "목표 OCC 기반 필요 일일 픽업 vs 실제 어제 픽업을 비교해 액션을 제안합니다. "
-    f"기준일: {curr_date}  |  어제 예약 데이터: {_pickup_date}"
+    f"기준 스냅샷: {curr_date}  |  어제 예약 데이터: {_pickup_date}  |  "
+    "신규 목표 단가 기준으로 매출 갭을 채우는 데 필요한 일일 픽업을 계산합니다."
 )
 
 _today_dt = datetime.strptime(curr_date, "%Y-%m-%d").date()
 
-def _pacing_action(pace_ratio, days_to_start, otb_pct):
-    if otb_pct >= 1.0:
-        return "TARGET MET", "#16a34a", "OTA inventory reduction / BAR increase review"
+def _pacing_action(pace_ratio, days_to_start, rev_pct):
+    if rev_pct >= 1.0:
+        return "REVENUE TARGET MET", "#16a34a", "OTA inventory reduction / BAR increase review"
     if pace_ratio is None:
-        label = "NO DATA"
         color = "#6b7280"
         if days_to_start > 45:
-            advice = "D+45 window open — check OTA exposure & long-stay package"
+            advice = "D+45 window — check OTA exposure & package deals"
         elif days_to_start > 21:
-            advice = "D+21 — upload yesterday pickup data to see pace"
+            advice = "Upload yesterday pickup data to see revenue pace"
         else:
             advice = "URGENT — upload pickup data immediately"
-        return label, color, advice
+        return "NO DATA", color, advice
     if pace_ratio >= 1.5:
-        return "STRONG PACE", "#16a34a", "Price increase opportunity — review BAR ceiling"
+        return "STRONG PACE", "#16a34a", "Revenue on track — consider BAR increase"
     if pace_ratio >= 1.0:
-        return "ON PACE", "#16a34a", "Maintain current strategy"
+        return "ON PACE", "#16a34a", "Revenue pace healthy — maintain strategy"
     if pace_ratio >= 0.7:
         if days_to_start > 45:
-            advice = "Monitor. Expand OTA visibility / review package deals"
+            advice = "Monitor — expand OTA visibility / review package"
         elif days_to_start > 21:
-            advice = "Boost OTA ad spend / re-check channel mix"
+            advice = "Boost OTA ad / re-check channel mix"
         elif days_to_start > 7:
-            advice = "WARNING — lower BAR tier / add live-commerce session"
+            advice = "WARNING — lower BAR tier / add live-commerce"
         else:
-            advice = "CRITICAL D-7 — immediate price adjustment & full channel review"
+            advice = "CRITICAL D-7 — immediate pricing & channel review"
         return "BELOW PACE", "#d97706", advice
     if days_to_start > 45:
         advice = "Underperforming — launch promotion / review OTA ranking"
@@ -618,82 +618,112 @@ def _pacing_action(pace_ratio, days_to_start, otb_pct):
 
 pace_cols = st.columns(5)
 for i, pr in enumerate(period_results):
-    p    = pr["period"]
-    cs   = pr["curr"]
-    rs   = pr.get("res_stat")
+    p  = pr["period"]
+    cs = pr["curr"]
+    rs = pr.get("res_stat")
 
     start_dt    = datetime.strptime(p["start"], "%Y-%m-%d").date()
     end_dt      = datetime.strptime(p["end"],   "%Y-%m-%d").date()
     period_days = (end_dt - start_dt).days + 1
-    effective_target_rn = pr["effective_target_rn"]
-    otb_rn      = cs["rn"]
-    remaining   = max(0, effective_target_rn - otb_rn)
-    otb_pct     = otb_rn / pr["target_rn"] if pr["target_rn"] > 0 else 0
 
+    # ── 매출 기준 목표 및 갭 ──────────────────────────────────────────────
+    target_rn_base = int(TOTAL_ROOMS * period_days * p["target_occ"])
+    target_rev     = target_rn_base * p["target_adr"]   # 구간 매출 목표
+    otb_rev        = cs["rev"]                           # 현재 OTB 매출
+    revenue_gap    = max(0.0, target_rev - otb_rev)      # 채워야 할 매출
+    rev_pct        = otb_rev / target_rev if target_rev > 0 else 0
+
+    # ── 판매 마감까지 남은 일수 ───────────────────────────────────────────
     deadline_dt      = end_dt - timedelta(days=p["booking_buffer"])
     days_to_deadline = max(1, (deadline_dt - _today_dt).days)
     days_to_start    = max(0, (start_dt - _today_dt).days)
 
-    required_daily = remaining / days_to_deadline if days_to_deadline > 0 else 0
+    # ── 필요 일일 픽업 (매출 갭 → 순객실 → wash 반영 그로스) ─────────────
+    net_rooms_needed   = revenue_gap / p["new_bk_adr_lo"] if p["new_bk_adr_lo"] > 0 else 0
+    gross_rooms_needed = net_rooms_needed / (1 - p["wash_rate"]) if p["wash_rate"] < 1 else net_rooms_needed
+    required_daily     = gross_rooms_needed / days_to_deadline if days_to_deadline > 0 else 0
 
-    # 7일 평균 vs 어제 실적
-    p7d = pace_7day.get(p["id"], {})
-    avg7 = p7d.get("avg_net_rn", 0)
+    # ── 7일 평균 vs 어제 실적 (순픽업 기준) ──────────────────────────────
+    p7d            = pace_7day.get(p["id"], {})
+    avg7           = p7d.get("avg_net_rn", 0)
     days_with_data = p7d.get("days_with_data", 0)
-    actual_daily_yesterday = rs["net_rn"] if rs else None
+    yesterday_net  = rs["net_rn"] if rs else None
 
-    # pace_ratio: 3일 이상 데이터 있으면 7일 평균 사용, 아니면 어제 실적
-    if days_with_data >= 3:
-        pace_actual = avg7
+    pace_actual = avg7 if days_with_data >= 3 else yesterday_net
+    pace_ratio  = (pace_actual / required_daily) if (pace_actual is not None and required_daily > 0) else None
+
+    # ── 현 페이스 유지 시 예상 매출 ──────────────────────────────────────
+    if pace_actual is not None and pace_actual > 0:
+        projected_add_rev   = pace_actual * days_to_deadline * p["new_bk_adr_lo"]
+        projected_total_rev = otb_rev + projected_add_rev
+        proj_pct            = projected_total_rev / target_rev if target_rev > 0 else 0
+        proj_color          = "#16a34a" if proj_pct >= 0.95 else ("#d97706" if proj_pct >= 0.80 else "#dc2626")
+        proj_str            = f"{projected_total_rev/1e8:.2f}억 ({proj_pct*100:.0f}%)"
     else:
-        pace_actual = actual_daily_yesterday
+        proj_color = "#6b7280"
+        proj_str   = f"— (목표 {target_rev/1e8:.2f}억)"
 
-    pace_ratio = (pace_actual / required_daily) if (pace_actual is not None and required_daily > 0) else None
+    status_label, status_color, advice = _pacing_action(pace_ratio, days_to_start, rev_pct)
 
-    status_label, status_color, advice = _pacing_action(pace_ratio, days_to_start, otb_pct)
+    # ── 프로그레스 바 (매출 달성률) ──────────────────────────────────────
+    bar_pct   = min(rev_pct, 1.0)
+    bar_color = "#16a34a" if rev_pct >= 0.8 else ("#d97706" if rev_pct >= 0.5 else "#dc2626")
 
-    bar_pct   = min(otb_pct, 1.0)
-    bar_color = "#16a34a" if otb_pct >= 0.8 else ("#d97706" if otb_pct >= 0.5 else "#dc2626")
-    bar_w     = f"{bar_pct*100:.0f}%"
-
-    yesterday_str = f"{actual_daily_yesterday:.0f} RN" if actual_daily_yesterday is not None else "—"
+    yesterday_str = f"{yesterday_net:.0f} RN" if yesterday_net is not None else "—"
     avg7_str      = f"{avg7:.1f} RN" if days_with_data > 0 else "—"
-    required_str  = f"{required_daily:.1f} RN/day" if required_daily > 0 else "—"
+    required_str  = f"{required_daily:.1f} RN/day" if required_daily > 0 else "Achieved"
     pace_str      = f"{pace_ratio*100:.0f}%" if pace_ratio is not None else "—"
 
-    rev_gap = remaining * p["new_bk_adr_lo"]
-    rev_gap_str = f"잔여 매출 갭: {rev_gap/1e8:.2f}억원" if remaining > 0 else "목표 달성"
-
     with pace_cols[i]:
-        st.markdown(
-            f"""
-            <div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;font-size:12px;line-height:1.75;">
-              <div style="font-weight:900;color:{p['color']};margin-bottom:2px;">{p['label']} {p['desc']}</div>
-              <div style="background:#f3f4f6;border-radius:6px;height:8px;margin-bottom:8px;">
-                <div style="background:{bar_color};width:{bar_w};height:8px;border-radius:6px;"></div>
-              </div>
-              <div>OTB <b>{otb_rn:,}</b> / 목표 <b>{pr['target_rn']:,}</b> RN &nbsp;
-                <span style="color:{bar_color};font-weight:700;">({otb_pct*100:.0f}%)</span>
-              </div>
-              <div>효과적 목표 <b>{effective_target_rn:,}</b> RN (wash {p['wash_rate']*100:.0f}%)</div>
-              <div>필요 일일 픽업 &nbsp;<b>{required_str}</b></div>
-              <div>어제: <b>{yesterday_str}</b> | 7일 평균: <b>{avg7_str}</b> &nbsp;
-                <span style="color:{status_color};font-weight:700;">({pace_str})</span>
-              </div>
-              <div style="font-size:11px;color:#6b7280;">{rev_gap_str}</div>
-              <div style="margin-top:6px;padding:5px 8px;background:{status_color}22;
-                          border-left:3px solid {status_color};border-radius:4px;
-                          color:{status_color};font-weight:700;font-size:11px;">
-                {status_label}
-              </div>
-              <div style="font-size:10px;color:#4b5563;margin-top:4px;">{advice}</div>
-              <div style="font-size:10px;color:#9ca3af;margin-top:4px;">
-                체크인 D-{days_to_start} | 판매 마감까지 {days_to_deadline}일 (기간 종료 {p["booking_buffer"]}일 전)
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        html_card = (
+            '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;'
+            'font-size:12px;line-height:1.8;">'
+            f'<div style="font-weight:900;color:{p["color"]};margin-bottom:4px;">'
+            f'{p["label"]} {p["desc"]}</div>'
+
+            '<div style="font-size:10px;color:#6b7280;margin-bottom:2px;">매출 달성률</div>'
+            '<div style="background:#f3f4f6;border-radius:6px;height:8px;margin-bottom:6px;">'
+            f'<div style="background:{bar_color};width:{bar_pct*100:.0f}%;height:8px;border-radius:6px;"></div>'
+            '</div>'
+
+            f'<div><b>OTB 매출</b>&nbsp;'
+            f'<span style="font-weight:700;color:{bar_color};">{otb_rev/1e8:.2f}억</span>'
+            f'&nbsp;/ 목표 <b>{target_rev/1e8:.2f}억</b>'
+            f'&nbsp;<span style="color:{bar_color};font-size:11px;">({rev_pct*100:.0f}%)</span></div>'
+
+            f'<div><b>매출 갭</b>&nbsp;'
+            f'<span style="color:#dc2626;font-weight:700;">{revenue_gap/1e8:.2f}억원</span>'
+            f'&nbsp;<span style="font-size:10px;color:#9ca3af;">@ {p["new_bk_adr_lo"]:,}원</span></div>'
+
+            '<hr style="margin:6px 0;border-color:#f3f4f6;">'
+
+            f'<div><b>필요 일일 픽업</b>&nbsp;'
+            f'<span style="font-weight:700;color:#1d4ed8;">{required_str}</span>'
+            f'&nbsp;<span style="font-size:10px;color:#9ca3af;">(wash {p["wash_rate"]*100:.0f}% 반영)</span></div>'
+
+            f'<div>어제: <b>{yesterday_str}</b>&nbsp;|&nbsp;7일평균: <b>{avg7_str}</b>'
+            f'&nbsp;<span style="color:{status_color};font-weight:700;">({pace_str})</span></div>'
+
+            '<hr style="margin:6px 0;border-color:#f3f4f6;">'
+
+            '<div style="font-size:11px;"><b>현 페이스 예상 매출</b><br>'
+            f'<span style="color:{proj_color};font-weight:700;">{proj_str}</span>'
+            f'&nbsp;<span style="font-size:10px;color:#9ca3af;">/ 목표 {target_rev/1e8:.2f}억</span></div>'
+
+            f'<div style="margin-top:6px;padding:5px 8px;background:{status_color}22;'
+            f'border-left:3px solid {status_color};border-radius:4px;'
+            f'color:{status_color};font-weight:700;font-size:11px;">'
+            f'{status_label}</div>'
+
+            f'<div style="font-size:10px;color:#4b5563;margin-top:4px;">{advice}</div>'
+
+            f'<div style="font-size:10px;color:#9ca3af;margin-top:4px;">'
+            f'D-{days_to_start} | 마감까지 {days_to_deadline}일 (기간 종료 {p["booking_buffer"]}일 전)'
+            '</div>'
+            '</div>'
         )
+        st.markdown(html_card, unsafe_allow_html=True)
+
 
 # ==============================================================================
 # [9] 월별 OTB 총계 (7월·8월)
