@@ -43,7 +43,7 @@ PERIODS = [
         "target_adr": 355_000,
         "new_bk_adr_lo": 355_000,  # 신규 예약 목표 ADR 하단
         "new_bk_adr_hi": 355_000,  # 신규 예약 목표 ADR 상단 (동일하면 단일값)
-        "target_occ": 0.75,
+        "target_occ": 0.85,        # 목표 OCC 85% (프리피크)
         "booking_buffer": 7,
         "color": "#64748b",
         "bg": "#f8fafc",
@@ -57,7 +57,7 @@ PERIODS = [
         "target_adr": 340_000,
         "new_bk_adr_lo": 340_000,
         "new_bk_adr_hi": 340_000,
-        "target_occ": 0.85,
+        "target_occ": 0.90,        # 목표 OCC 90% (숄더)
         "booking_buffer": 7,
         "color": "#d97706",
         "bg": "#fffbeb",
@@ -69,9 +69,9 @@ PERIODS = [
         "start": "2026-07-24",
         "end": "2026-08-08",
         "target_adr": 510_000,
-        "new_bk_adr_lo": 510_000,  # 신규 예약 최소 목표 단가
-        "new_bk_adr_hi": 530_000,  # 신규 예약 최대 목표 단가
-        "target_occ": 0.97,
+        "new_bk_adr_lo": 510_000,
+        "new_bk_adr_hi": 530_000,
+        "target_occ": 0.97,        # 목표 OCC 97% (극성수기)
         "booking_buffer": 14,
         "color": "#dc2626",
         "bg": "#fef2f2",
@@ -85,7 +85,7 @@ PERIODS = [
         "target_adr": 470_000,
         "new_bk_adr_lo": 470_000,
         "new_bk_adr_hi": 470_000,
-        "target_occ": 0.90,
+        "target_occ": 0.96,        # 목표 OCC 96% (성수기 후반)
         "booking_buffer": 7,
         "color": "#ea580c",
         "bg": "#fff7ed",
@@ -99,7 +99,7 @@ PERIODS = [
         "target_adr": 310_000,
         "new_bk_adr_lo": 310_000,
         "new_bk_adr_hi": 310_000,
-        "target_occ": 0.75,
+        "target_occ": 0.80,        # 목표 OCC 80% (숄더 후반)
         "booking_buffer": 5,
         "color": "#16a34a",
         "bg": "#f0fdf4",
@@ -112,8 +112,8 @@ MONTH_TARGETS = {
     8: {"rn": 3_873, "rev": 1_388_376_999},
 }
 
-# 총 객실수 (OCC 계산용 — 기존 코드에서 40실 기준 확인 필요, 일단 40)
-TOTAL_ROOMS = 40
+# 총 판매 가능 객실수 (고장/유지보수 제외 기준 129실)
+TOTAL_ROOMS = 129
 
 # ==============================================================================
 # [3] Firebase 연결
@@ -406,7 +406,11 @@ for i, p in enumerate(PERIODS):
 
     if _remaining <= 0:
         _blended_str = f"{cs['adr']:,.0f}원 (OCC 목표 달성)"
-        _new_bk_str  = "—"
+        # 신규 목표 단가는 remaining=0이어도 항상 표시
+        _new_bk_str  = (
+            f"{p['new_bk_adr_lo']:,}~{p['new_bk_adr_hi']:,}원"
+            if _is_range else f"{p['new_bk_adr_lo']:,}원"
+        )
     elif _is_range:
         _blended_str = f"{_blended_lo:,.0f}~{_blended_hi:,.0f}원"
         _new_bk_str  = f"{p['new_bk_adr_lo']:,}~{p['new_bk_adr_hi']:,}원"
