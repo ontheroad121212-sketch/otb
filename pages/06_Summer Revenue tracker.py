@@ -111,6 +111,21 @@ PERIODS = [
         "color": "#16a34a",
         "bg": "#f0fdf4",
     },
+    {
+        "id": "september",
+        "label": "September",
+        "desc": "9/1~9/30",
+        "start": "2026-09-01",
+        "end": "2026-09-30",
+        "target_adr": 330_000,
+        "new_bk_adr_lo": 330_000,
+        "new_bk_adr_hi": 345_000,
+        "target_occ": 0.83,
+        "booking_buffer": 3,
+        "wash_rate": 0.08,
+        "color": "#0891b2",
+        "bg": "#ecfeff",
+    },
 ]
 
 # 월별 공식 목표 (rn=객실박, rev=매출목표)
@@ -144,6 +159,70 @@ SEP_STRATEGY = {                          # 9월 승부처 관리 지표
     "group_target_rev": 230_000_000,
     "group_current_rev": 192_569_161,
     "hardblock_confirmed_rn": 180,
+}
+
+DATE_PLAN = {  # 일자별 권장 착지(플랜): rn=권장객실, rev=권장매출, adr=ADR하한
+    "2026-08-01": {"rn": 126, "rev": 50581499, "adr": 425000},
+    "2026-08-02": {"rn": 124, "rev": 48516553, "adr": 425000},
+    "2026-08-03": {"rn": 127, "rev": 52214615, "adr": 425000},
+    "2026-08-04": {"rn": 123, "rev": 50464175, "adr": 390000},
+    "2026-08-05": {"rn": 122, "rev": 47348661, "adr": 390000},
+    "2026-08-06": {"rn": 118, "rev": 45084799, "adr": 390000},
+    "2026-08-07": {"rn": 123, "rev": 50002179, "adr": 390000},
+    "2026-08-08": {"rn": 123, "rev": 46395515, "adr": 390000},
+    "2026-08-09": {"rn": 117, "rev": 42816682, "adr": 390000},
+    "2026-08-10": {"rn": 118, "rev": 43583752, "adr": 390000},
+    "2026-08-11": {"rn": 118, "rev": 43824735, "adr": 390000},
+    "2026-08-12": {"rn": 120, "rev": 44816255, "adr": 390000},
+    "2026-08-13": {"rn": 120, "rev": 44520019, "adr": 390000},
+    "2026-08-14": {"rn": 121, "rev": 46714343, "adr": 390000},
+    "2026-08-15": {"rn": 126, "rev": 48288650, "adr": 425000},
+    "2026-08-16": {"rn": 124, "rev": 45757118, "adr": 425000},
+    "2026-08-17": {"rn": 115, "rev": 37321965, "adr": 350000},
+    "2026-08-18": {"rn": 113, "rev": 37152438, "adr": 350000},
+    "2026-08-19": {"rn": 113, "rev": 36410208, "adr": 350000},
+    "2026-08-20": {"rn": 113, "rev": 36152350, "adr": 350000},
+    "2026-08-21": {"rn": 110, "rev": 36666619, "adr": 350000},
+    "2026-08-22": {"rn": 128, "rev": 45378974, "adr": 425000},
+    "2026-08-23": {"rn": 111, "rev": 36166415, "adr": 355000},
+    "2026-08-24": {"rn": 111, "rev": 36345670, "adr": 355000},
+    "2026-08-25": {"rn": 111, "rev": 35558142, "adr": 355000},
+    "2026-08-26": {"rn": 111, "rev": 35937552, "adr": 355000},
+    "2026-08-27": {"rn": 85, "rev": 27945658, "adr": 355000},
+    "2026-08-28": {"rn": 111, "rev": 38297767, "adr": 355000},
+    "2026-08-29": {"rn": 127, "rev": 45140792, "adr": 425000},
+    "2026-08-30": {"rn": 117, "rev": 38525146, "adr": 355000},
+    "2026-08-31": {"rn": 114, "rev": 36656609, "adr": 355000},
+    "2026-09-01": {"rn": 120, "rev": 36683073, "adr": 330000},
+    "2026-09-02": {"rn": 117, "rev": 37331517, "adr": 330000},
+    "2026-09-03": {"rn": 122, "rev": 37219761, "adr": 330000},
+    "2026-09-04": {"rn": 121, "rev": 37872924, "adr": 330000},
+    "2026-09-05": {"rn": 128, "rev": 40890657, "adr": 345000},
+    "2026-09-06": {"rn": 121, "rev": 35660089, "adr": 330000},
+    "2026-09-07": {"rn": 119, "rev": 36972200, "adr": 330000},
+    "2026-09-08": {"rn": 118, "rev": 37180039, "adr": 330000},
+    "2026-09-09": {"rn": 118, "rev": 37849389, "adr": 330000},
+    "2026-09-10": {"rn": 128, "rev": 40142665, "adr": 345000},
+    "2026-09-11": {"rn": 128, "rev": 40465469, "adr": 345000},
+    "2026-09-12": {"rn": 120, "rev": 39136511, "adr": 330000},
+    "2026-09-13": {"rn": 118, "rev": 36344300, "adr": 330000},
+    "2026-09-14": {"rn": 118, "rev": 37478968, "adr": 330000},
+    "2026-09-15": {"rn": 117, "rev": 37245032, "adr": 330000},
+    "2026-09-16": {"rn": 118, "rev": 37081328, "adr": 330000},
+    "2026-09-17": {"rn": 37, "rev": 9030189, "adr": 345000},
+    "2026-09-18": {"rn": 42, "rev": 11755101, "adr": 345000},
+    "2026-09-19": {"rn": 127, "rev": 43750243, "adr": 345000},
+    "2026-09-20": {"rn": 118, "rev": 36738608, "adr": 330000},
+    "2026-09-21": {"rn": 119, "rev": 37263165, "adr": 330000},
+    "2026-09-22": {"rn": 119, "rev": 37677771, "adr": 330000},
+    "2026-09-23": {"rn": 119, "rev": 38727630, "adr": 330000},
+    "2026-09-24": {"rn": 121, "rev": 44022976, "adr": 330000},
+    "2026-09-25": {"rn": 119, "rev": 43593588, "adr": 330000},
+    "2026-09-26": {"rn": 119, "rev": 43004426, "adr": 330000},
+    "2026-09-27": {"rn": 115, "rev": 38413786, "adr": 330000},
+    "2026-09-28": {"rn": 116, "rev": 38572923, "adr": 330000},
+    "2026-09-29": {"rn": 117, "rev": 36406781, "adr": 330000},
+    "2026-09-30": {"rn": 115, "rev": 35529494, "adr": 330000},
 }
 
 TOTAL_ROOMS = 129
@@ -528,7 +607,7 @@ period_results = []
 
 scenario_factor = 1 + scenario_adj / 100
 
-summary_cols = st.columns(5)
+summary_cols = st.columns(len(PERIODS))
 for i, p in enumerate(PERIODS):
     c_df = period_df(curr_df, p)
     p_df = period_df(prev_df, p)
@@ -700,7 +779,7 @@ def _pacing_action(pace_ratio, days_to_start, rev_pct):
         advice = "CRITICAL — all-channel emergency pricing review"
     return "CRITICAL PACE", "#dc2626", advice
 
-pace_cols = st.columns(5)
+pace_cols = st.columns(len(PERIODS))
 for i, pr in enumerate(period_results):
     p  = pr["period"]
     cs = pr["curr"]
@@ -868,6 +947,67 @@ st.markdown(
     f"- **9/17~18 하드블럭 {SEP_STRATEGY['hardblock_confirmed_rn']}박 확정(OTB 미반영):** 실입금·룸리스트·OTB 반영을 매일 별도 추적 "
     f"(단체 2.30억에 포함, 중복 산정하지 않음)"
 )
+
+# ==============================================================================
+# [9.7] 일자별 권장목표 대비 추적 (플랜 대비 부족분 / 채울 RN)
+# ==============================================================================
+st.markdown("---")
+st.markdown("### 일자별 권장목표 대비 추적")
+st.caption("보고서에서 정한 일자별 권장 착지(플랜) 대비 현재 OTB 부족액과 추가로 채워야 할 객실 수. 부족액 ÷ ADR하한 = 필요 픽업 RN. (빨강=부족, 초록=초과달성)")
+
+def _plan_track(df_month, pfx, mlabel):
+    if df_month is None or df_month.empty:
+        st.info(f"{mlabel} 데이터 없음 (다른 페이지에서 업로드 필요)")
+        return
+    g = df_month.groupby("DateStr").agg(RMS=("RMS", "sum"), REV=("REV", "sum")).reset_index()
+    otb_map = {r["DateStr"]: (r["RMS"], r["REV"]) for _, r in g.iterrows()}
+    rows = []
+    for d in sorted([k for k in DATE_PLAN if k.startswith(pfx)]):
+        pl = DATE_PLAN[d]
+        rn, rev = otb_map.get(d, (0, 0))
+        short = pl["rev"] - rev
+        need_rn = max(0, round(short / pl["adr"])) if pl["adr"] > 0 else 0
+        rows.append({
+            "날짜": d[5:], "OTB RN": rn, "권장 RN": pl["rn"],
+            "OTB매출": rev, "권장매출": pl["rev"],
+            "부족액": short, "필요픽업RN": need_rn,
+        })
+    tdf = pd.DataFrame(rows)
+    tot = {
+        "날짜": "합계", "OTB RN": tdf["OTB RN"].sum(), "권장 RN": tdf["권장 RN"].sum(),
+        "OTB매출": tdf["OTB매출"].sum(), "권장매출": tdf["권장매출"].sum(),
+        "부족액": tdf["부족액"].sum(), "필요픽업RN": tdf["필요픽업RN"].sum(),
+    }
+    tdf = pd.concat([tdf, pd.DataFrame([tot])], ignore_index=True)
+
+    def _color_short(v):
+        try:
+            x = float(v)
+            if x > 0:   return "color:#dc2626;font-weight:bold;"
+            elif x < 0: return "color:#16a34a;font-weight:bold;"
+        except Exception:
+            pass
+        return ""
+
+    def _hl_total(row):
+        if str(row.iloc[0]) == "합계":
+            return ["background:#eff6ff;font-weight:900;border-top:2px solid #1d4ed8"] * len(row)
+        return [""] * len(row)
+
+    num_fmt = {c: "{:,.0f}" for c in ["OTB RN", "권장 RN", "OTB매출", "권장매출", "부족액", "필요픽업RN"]}
+    sty = (tdf.style.format(num_fmt)
+           .map(_color_short, subset=["부족액", "필요픽업RN"])
+           .apply(_hl_total, axis=1))
+    st.dataframe(sty, use_container_width=True, hide_index=True, height=340)
+    st.caption(f"{mlabel} 총 부족액 {tot['부족액']/1e8:.2f}억 · 총 필요 픽업 {tot['필요픽업RN']:,.0f} RN "
+               f"(권장 착지 {tot['권장매출']/1e8:.2f}억 / 현재 OTB {tot['OTB매출']/1e8:.2f}억)")
+
+_pt_tabs = st.tabs(["8월", "9월"])
+with _pt_tabs[0]:
+    _plan_track(curr_df8, "2026-08", "8월")
+with _pt_tabs[1]:
+    _plan_track(curr_df9, "2026-09", "9월")
+
 
 # ==============================================================================
 # [10] 구간별 상세 탭
@@ -1187,5 +1327,153 @@ with st.expander("Quick Decision Guide (Trigger Points)", expanded=False):
     st.dataframe(_gdf, use_container_width=True, hide_index=True)
     st.info("6/30: Jul OCC <70% - Add live / Increase OTA ad / Freeze BAR / Expand F&B Credit")
     st.info("7/15: Jul OCC <85% - Shoulder breakfast pkg / Expand intl OTA / Add promo")
+
+# ==============================================================================
+# [13] 일일 보고 (오전 / 오후) — 저장 & 조회   ← 총지배인 지시: 1일 2회 보고
+# ==============================================================================
+st.markdown("---")
+st.markdown("### 일일 보고 (오전 / 오후)  ·  저장 & 조회")
+st.caption("총지배인 지시: 매일 오전·오후 2회 보고. 순매출/순객실 픽업, 신규 ADR, OTB 관리선 대비 판정, 조치를 저장하고 언제든 일자로 조회.")
+
+def _save_report(date_str, slot, payload):
+    try:
+        firestore.client().collection("daily_reports").document(date_str).set(
+            {slot: payload, "last_updated": datetime.now().isoformat()}, merge=True
+        )
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+@st.cache_data(ttl=20)
+def _load_report(date_str):
+    try:
+        doc = firestore.client().collection("daily_reports").document(date_str).get()
+        return doc.to_dict() if doc.exists else {}
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=60)
+def _list_report_dates():
+    try:
+        return sorted([d.id for d in firestore.client().collection("daily_reports").stream()], reverse=True)
+    except Exception:
+        return []
+
+# ── 자동 계산 지표 (보고 항목) ──────────────────────────────────────────────
+_now_rev = float(curr_df["REV"].sum()); _now_rn = float(curr_df["RMS"].sum())
+_prev_rev = float(prev_df["REV"].sum()) if prev_df is not None else 0.0
+_prev_rn  = float(prev_df["RMS"].sum()) if prev_df is not None else 0.0
+_net_rev_pk = _now_rev - _prev_rev
+_net_rn_pk  = _now_rn - _prev_rn
+if res_today is not None and not res_today.empty and "Room_Revenue" in res_today.columns:
+    _rn_sum = res_today["RN"].sum() if "RN" in res_today.columns else 0
+    _new_adr = (res_today["Room_Revenue"].sum() / _rn_sum) if _rn_sum > 0 else 0
+else:
+    _new_adr = 0
+
+_rc = st.columns(4)
+_rc[0].metric("순매출 픽업(합계)", f"{_net_rev_pk/1e6:+.1f}M")
+_rc[1].metric("순객실 픽업(합계)", f"{_net_rn_pk:+,.0f} RN")
+_rc[2].metric("신규 예약 ADR", f"{_new_adr:,.0f}원" if _new_adr else "—")
+_rc[3].metric("8월 관리선 판정", _lv)
+
+_slot = st.radio("보고 시점", ["오전", "오후"], horizontal=True, key="rep_slot")
+_prefill = ""
+_existing = _load_report(curr_date)
+if isinstance(_existing, dict) and _slot in _existing:
+    _prefill = _existing[_slot].get("note", "")
+_note = st.text_area(
+    "특이사항 / 기준 미달 시 당일 조치 / 채널·상품 운영",
+    value=_prefill, key="rep_note",
+    placeholder="예: 8/17~21 저수요 구간 OTA 날짜한정 쿠폰 확대, 강한 날짜 할인 중단, 9/17~18 하드블럭 실입금 확인 …",
+)
+if st.button("이 시점 보고 저장", type="primary"):
+    _payload = {
+        "net_rev_pickup": _net_rev_pk, "net_rn_pickup": _net_rn_pk, "new_adr": _new_adr,
+        "aug_otb": _otb_m[8], "aug_line": _line, "aug_gap": _gap, "aug_verdict": _lv,
+        "sep_otb": _otb_m[9], "q3_otb": _q3_otb, "q3_pct": _q3_pct,
+        "note": _note, "saved_at": datetime.now().isoformat(),
+    }
+    _ok, _err = _save_report(curr_date, _slot, _payload)
+    if _ok:
+        _load_report.clear(); _list_report_dates.clear()
+        st.success(f"{curr_date} {_slot} 보고 저장 완료")
+    else:
+        st.error(f"저장 실패: {_err}")
+
+st.markdown("#### 저장된 보고 조회 (일자별)")
+_saved = _list_report_dates()
+if _saved:
+    _lookup = st.selectbox("조회할 일자", _saved, key="rep_lookup")
+    _rep = _load_report(_lookup)
+    for _s in ["오전", "오후"]:
+        if isinstance(_rep, dict) and _s in _rep:
+            _p = _rep[_s]
+            st.markdown(
+                f"**{_lookup} {_s}** — 순매출 {_p.get('net_rev_pickup',0)/1e6:+.1f}M · "
+                f"순객실 {_p.get('net_rn_pickup',0):+,.0f}RN · 신규ADR {_p.get('new_adr',0):,.0f}원 · "
+                f"8월판정 {_p.get('aug_verdict','—')} · 3분기 {_p.get('q3_pct',0)*100:.1f}%"
+            )
+            if _p.get("note"):
+                st.caption(f"조치/메모: {_p['note']}")
+        else:
+            st.caption(f"{_lookup} {_s}: 미저장")
+else:
+    st.info("저장된 보고가 없습니다. 위에서 첫 보고를 저장하세요.  (Firestore 컬렉션: daily_reports)")
+
+# ==============================================================================
+# [14] 총지배인 지시사항 · 실행 원칙 · 보고 기준
+# ==============================================================================
+with st.expander("총지배인 지시사항 · 월별 실행 원칙 · 보고 기준", expanded=False):
+    st.markdown("""
+**공식 실행안 (금일부터 세일즈팀 적용)** — 월별 개별목표 추구가 아닌 3분기 통합목표 기준 역할 재조정 (목표 완화 아님).
+
+**7월** — 잔여 재고 제한적. 무리한 할인 없이 **ADR 방어 중심**으로 마감.
+
+**8월** — 7/31까지 **OTB 9.6억(1차 관리선)**, 최종 **13.11억** 목표. 수요 높은 날짜는 할인 없이 ADR 극대화, **8/17 이후 저수요 구간**은 날짜한정·2박·폐쇄형 B2B·환불불가 상품 집중.
+
+**9월** — 3분기 성패 핵심월. 신규 예약 **ADR 33만~34만원 유지**, **개인 잔여 약 92% 순판매**, 주차별 Pick-up 관리. **단체 2.30억** 및 **9/17~18 하드블럭 180박**의 실입금·룸리스트·OTB 반영을 **매일 별도 추적**.
+
+**매일 오전·오후 2회 보고 항목** — 순매출 Pick-up / 순객실 Pick-up / 신규 예약 ADR / 날짜별 잔여 재고 / 8·9월 OTB 관리선 대비 달성 / 기준 미달 시 당일 실행 조치.
+
+**운영 원칙** — 강한 날짜의 불필요한 할인 중단, 약한 날짜에만 채널·상품 집중. 기준 미달 시 주의/위험/비상 단계별 조치 당일 적용, **비상 단계는 즉시 보고**.
+""")
+
+# ==============================================================================
+# [15] 종합 요약 (하단)
+# ==============================================================================
+st.markdown("---")
+st.markdown("## 종합 요약")
+
+def _month_short(dfm, pfx):
+    if dfm is None or dfm.empty:
+        return 0.0
+    g = dfm.groupby("DateStr").agg(REV=("REV", "sum")).reset_index()
+    om = {r["DateStr"]: r["REV"] for _, r in g.iterrows()}
+    return sum(max(0, DATE_PLAN[d]["rev"] - om.get(d, 0)) for d in DATE_PLAN if d.startswith(pfx))
+
+_a_short = _month_short(curr_df8, "2026-08")
+_s_short = _month_short(curr_df9, "2026-09")
+_sum_l, _sum_r = st.columns(2)
+with _sum_l:
+    st.markdown(f"**3분기 통합 달성률: {_q3_pct*100:.1f}%**  (누적 {_q3_otb/1e8:.2f}억 / 목표 {Q3_TARGET_REV/1e8:.2f}억)")
+    st.markdown(
+        f"- 7월 {_otb_m[7]/1e8:.2f}억 (권장 {PLAN_LANDING[7]/1e8:.2f}) · "
+        f"8월 {_otb_m[8]/1e8:.2f}억 (권장 {PLAN_LANDING[8]/1e8:.2f}) · "
+        f"9월 {_otb_m[9]/1e8:.2f}억 (권장 {PLAN_LANDING[9]/1e8:.2f})"
+    )
+    st.markdown(f"- **8월 관리선 판정: {_lv}**  (오늘 관리선 {_line/1e8:.2f}억 · 갭 {_gap/1e8:+.2f}억){_floor_warn}")
+with _sum_r:
+    st.markdown("**일자별 권장목표 대비 부족분**")
+    st.markdown(f"- 8월 총 부족: **{_a_short/1e8:.2f}억**")
+    st.markdown(f"- 9월 총 부족: **{_s_short/1e8:.2f}억**")
+    st.markdown(
+        f"- 단체 진척: {SEP_STRATEGY['group_current_rev']/1e8:.2f}억 / 목표 "
+        f"{SEP_STRATEGY['group_target_rev']/1e8:.2f}억 · 9/17~18 하드블럭 {SEP_STRATEGY['hardblock_confirmed_rn']}박 확정"
+    )
+    _today_saved = _load_report(curr_date)
+    _slots_done = ", ".join([s for s in ["오전", "오후"] if isinstance(_today_saved, dict) and s in _today_saved]) or "미저장"
+    st.markdown(f"- 오늘({curr_date}) 보고 상태: **{_slots_done}**")
+
 
 st.caption(f"Last updated: {curr_date}  |  Amber Pure Hill Revenue Management")
