@@ -9,6 +9,7 @@ import io
 import numpy as np
 import textwrap
 import math
+import calendar
 
 # ==============================================================================
 # [1] 페이지 설정
@@ -112,10 +113,37 @@ PERIODS = [
     },
 ]
 
-# 월별 예산 목표
+# 월별 공식 목표 (rn=객실박, rev=매출목표)
 MONTH_TARGETS = {
     7: {"rn": 3_720, "rev": 1_231_949_142},
     8: {"rn": 3_873, "rev": 1_388_376_999},
+    9: {"rn": 3_120, "rev": 952_171_506},   # 9월 추가 (RN은 추정)
+}
+
+# ── 3분기(7~9월) 통합목표 필달 계획 (보고서 승인안, 2026-07-22) ──────────────
+Q3_TARGET_REV = 3_572_497_647            # 3분기 통합 매출목표
+PLAN_LANDING = {                          # 월별 권장 착지 (역할 재조정)
+    7: 1_117_926_536,   # 잠금
+    8: 1_310_585_855,   # 현실선 (하한 사수)
+    9: 1_154_000_000,   # 승부처 (목표 +2.02억 초과)
+}
+AUG_FLOOR = 1_300_000_000                 # 8월 하한 사수선
+AUG_OTB_CHECKPOINTS = [                    # 8월 누적 OTB 관리선 (단조 증가)
+    ("2026-07-31",   960_000_000),
+    ("2026-08-07", 1_060_000_000),
+    ("2026-08-14", 1_140_000_000),
+    ("2026-08-21", 1_215_000_000),
+    ("2026-08-28", 1_280_000_000),
+    ("2026-08-31", 1_311_000_000),
+]
+SEP_STRATEGY = {                          # 9월 승부처 관리 지표
+    "adr_target": 330_000,
+    "peak_dates": ["09-05", "09-10", "09-11", "09-17", "09-18", "09-19"],
+    "peak_adr": 345_000,
+    "indiv_sell_through": 0.92,
+    "group_target_rev": 230_000_000,
+    "group_current_rev": 192_569_161,
+    "hardblock_confirmed_rn": 180,
 }
 
 TOTAL_ROOMS = 129
@@ -157,7 +185,8 @@ def get_snapshot_dates_for_month(month_num: int) -> list:
 def get_all_snapshot_dates() -> list:
     d7 = set(get_snapshot_dates_for_month(7))
     d8 = set(get_snapshot_dates_for_month(8))
-    return sorted(d7 | d8, reverse=True)
+    d9 = set(get_snapshot_dates_for_month(9))
+    return sorted(d7 | d8 | d9, reverse=True)
 
 
 @st.cache_data(ttl=60)
@@ -317,8 +346,8 @@ def load_snapshot(date_str: str, month_num: int) -> pd.DataFrame | None:
     return None
 
 
-def combine_months(df7, df8) -> pd.DataFrame | None:
-    parts = [df for df in [df7, df8] if df is not None and not df.empty]
+def combine_months(df7, df8, df9=None) -> pd.DataFrame | None:
+    parts = [df for df in [df7, df8, df9] if df is not None and not df.empty]
     if not parts:
         return None
     df = pd.concat(parts, ignore_index=True)
@@ -380,11 +409,13 @@ with st.sidebar:
 # ==============================================================================
 curr_df7 = load_snapshot(curr_date, 7)
 curr_df8 = load_snapshot(curr_date, 8)
+curr_df9 = load_snapshot(curr_date, 9)
 prev_df7 = load_snapshot(prev_date, 7) if prev_date else None
 prev_df8 = load_snapshot(prev_date, 8) if prev_date else None
+prev_df9 = load_snapshot(prev_date, 9) if prev_date else None
 
-curr_df = combine_months(curr_df7, curr_df8)
-prev_df = combine_months(prev_df7, prev_df8)
+curr_df = combine_months(curr_df7, curr_df8, curr_df9)
+prev_df = combine_months(prev_df7, prev_df8, prev_df9)
 
 _pickup_date = (
     datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(days=1)
@@ -416,6 +447,59 @@ if curr_df is None:
 curr_df["Date"] = pd.to_datetime(curr_df["Date"])
 if prev_df is not None:
     prev_df["Date"] = pd.to_datetime(prev_df["Date"])
+
+
+# ==============================================================================
+# [7.3] 3분기(7~9월) 통합목표 현황  ← 보고서 승인 실행안
+# ==============================================================================
+def _mrev(_df):
+    return float(_df["REV"].sum()) if (_df is not None and not _df.empty) else 0.0
+
+_otb_m = {7: _mrev(curr_df7), 8: _mrev(curr_df8), 9: _mrev(curr_df9)}
+_q3_otb = sum(_otb_m.values())
+_q3_pct = _q3_otb / Q3_TARGET_REV if Q3_TARGET_REV else 0
+
+st.markdown("### 3분기 통합목표 현황 (승인 실행안)")
+st.caption("월별 개별 달성이 아니라 9월 초과 달성으로 7·8월 부족분을 흡수하는 구조 · 통합목표 3,572,497,647원 · 계획착지 35.83억(100.3%)")
+_names = {7: "7월 (잠금)", 8: "8월 (현실선)", 9: "9월 (승부처)"}
+_qc = st.columns(4)
+for _m, _col in zip([7, 8, 9], _qc[:3]):
+    with _col:
+        _o = _otb_m[_m]; _t = MONTH_TARGETS[_m]["rev"]; _pl = PLAN_LANDING[_m]
+        st.metric(_names[_m], f"{_o/1e8:.2f}억", f"목표대비 {(_o-_t)/1e8:+.2f}억")
+        st.caption(f"권장착지 {_pl/1e8:.2f}억 · 목표 {_t/1e8:.2f}억")
+with _qc[3]:
+    st.metric("3분기 누적 OTB", f"{_q3_otb/1e8:.2f}억", f"달성률 {_q3_pct*100:.1f}%")
+    st.caption(f"목표 {Q3_TARGET_REV/1e8:.2f}억")
+st.progress(min(_q3_pct, 1.0),
+            text=f"3분기 통합 달성률 {_q3_pct*100:.1f}%  (누적 {_q3_otb/1e8:.2f}억 / 목표 {Q3_TARGET_REV/1e8:.2f}억)")
+
+# 8월 OTB 관리선 판정
+_today_d = datetime.strptime(curr_date, "%Y-%m-%d").date()
+_pts = [(datetime.strptime(_d, "%Y-%m-%d").date(), _v) for _d, _v in AUG_OTB_CHECKPOINTS]
+def _aug_line(_td):
+    if _td <= _pts[0][0]:
+        return _pts[0][1]
+    for (_d0, _v0), (_d1, _v1) in zip(_pts, _pts[1:]):
+        if _d0 <= _td <= _d1:
+            _fr = (_td - _d0).days / max(1, (_d1 - _d0).days)
+            return _v0 + (_v1 - _v0) * _fr
+    return _pts[-1][1]
+_aug_otb = _otb_m[8]; _line = _aug_line(_today_d); _gap = _aug_otb - _line
+if _gap >= 0:                 _lv, _c = "정상", "#16a34a"
+elif _gap >= -20_000_000:     _lv, _c = "주의", "#d97706"
+elif _gap >= -40_000_000:     _lv, _c = "위험", "#ea580c"
+else:                         _lv, _c = "비상", "#dc2626"
+_floor_warn = " · ⚠ 8월 하한 13.0억 사수선 근접" if _aug_otb < AUG_FLOOR else ""
+st.markdown(
+    f"<div style='background:{_c}18;border-left:4px solid {_c};border-radius:6px;"
+    f"padding:8px 12px;margin-top:6px;font-size:13px;'>"
+    f"<b>8월 OTB 관리선 판정: <span style='color:{_c};'>{_lv}</span></b> &nbsp; "
+    f"오늘({curr_date}) 관리선 {_line/1e8:.2f}억 · 현재 {_aug_otb/1e8:.2f}억 · "
+    f"갭 <b>{_gap/1e8:+.2f}억</b>{_floor_warn}</div>",
+    unsafe_allow_html=True,
+)
+st.markdown("---")
 
 
 def period_df(src_df, p):
@@ -730,9 +814,9 @@ for i, pr in enumerate(period_results):
 # ==============================================================================
 st.markdown("---")
 st.markdown("### 월별 OTB vs 목표")
-mcol7, mcol8 = st.columns(2)
+mcol7, mcol8, mcol9 = st.columns(3)
 
-for m_num, mcol, df_m in [(7, mcol7, curr_df7), (8, mcol8, curr_df8)]:
+for m_num, mcol, df_m in [(7, mcol7, curr_df7), (8, mcol8, curr_df8), (9, mcol9, curr_df9)]:
     tgt = MONTH_TARGETS[m_num]
     with mcol:
         st.markdown(f"#### {m_num}월")
@@ -743,7 +827,8 @@ for m_num, mcol, df_m in [(7, mcol7, curr_df7), (8, mcol8, curr_df8)]:
 
             need_rn = max(tgt["rn"] - rn, 0)
             today = datetime.now()
-            end_day = datetime(2026, m_num, 31)
+            _last_day = calendar.monthrange(2026, m_num)[1]
+            end_day = datetime(2026, m_num, _last_day)
             days_left = max((end_day.date() - today.date()).days, 1)
             daily_need = need_rn / days_left
 
@@ -758,6 +843,31 @@ for m_num, mcol, df_m in [(7, mcol7, curr_df7), (8, mcol8, curr_df8)]:
             st.progress(rev_pct, text=f"Revenue {rev_pct*100:.1f}%")
         else:
             st.info(f"{m_num}월 데이터 없음")
+
+# ==============================================================================
+# [9.5] 9월 승부처 관리 — 단체 · 하드블럭 · 핵심 레버
+# ==============================================================================
+st.markdown("---")
+st.markdown("### 9월 승부처 관리 (단체 · 하드블럭 · ADR)")
+st.caption("9월은 3분기 성패를 가르는 달. 예약창구(40~70일)와 확정 단체를 활용해 목표를 초과 달성하여 7·8월 부족분을 흡수.")
+_sep_otb = _mrev(curr_df9); _sep_plan = PLAN_LANDING[9]
+_sc1, _sc2, _sc3, _sc4 = st.columns(4)
+_sc1.metric("9월 OTB", f"{_sep_otb/1e8:.2f}억", f"권장착지 {_sep_plan/1e8:.2f}억")
+_sc2.metric("ADR 목표", f"{SEP_STRATEGY['adr_target']:,}원", "+8% 유지")
+_sc3.metric("개인 순판매 목표", f"{SEP_STRATEGY['indiv_sell_through']*100:.0f}%", "잔여 대비")
+_sc4.metric("단체 목표", f"{SEP_STRATEGY['group_target_rev']/1e8:.2f}억",
+            f"현재 {SEP_STRATEGY['group_current_rev']/1e8:.2f}억")
+_grp_gap = SEP_STRATEGY["group_target_rev"] - SEP_STRATEGY["group_current_rev"]
+st.progress(min(SEP_STRATEGY["group_current_rev"] / SEP_STRATEGY["group_target_rev"], 1.0),
+            text=f"단체 진척 {SEP_STRATEGY['group_current_rev']/1e8:.2f}억 / 목표 "
+                 f"{SEP_STRATEGY['group_target_rev']/1e8:.2f}억 (추가 필요 {_grp_gap/1e6:.0f}백만)")
+_peak_str = ", ".join("9/" + _d[3:] for _d in SEP_STRATEGY["peak_dates"])
+st.markdown(
+    f"- **피크 날짜(요금 극대화·할인 금지):** {_peak_str} — ADR 하한 {SEP_STRATEGY['peak_adr']:,}원\n"
+    f"- **공략 날짜(저수요 평일):** 날짜한정 상품·2박·폐쇄형 B2B·환불불가 중심, ADR 하한 {SEP_STRATEGY['adr_target']:,}원\n"
+    f"- **9/17~18 하드블럭 {SEP_STRATEGY['hardblock_confirmed_rn']}박 확정(OTB 미반영):** 실입금·룸리스트·OTB 반영을 매일 별도 추적 "
+    f"(단체 2.30억에 포함, 중복 산정하지 않음)"
+)
 
 # ==============================================================================
 # [10] 구간별 상세 탭
