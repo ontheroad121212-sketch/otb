@@ -600,6 +600,114 @@ def calc_summary(df):
 
 
 # ==============================================================================
+# ==============================================================================
+# [7.35] 데이터 신선도 경고
+# ==============================================================================
+_real_today = datetime.now().date()
+_snap_age = (_real_today - datetime.strptime(curr_date, "%Y-%m-%d").date()).days
+if _snap_age >= 1:
+    st.warning(f"⚠ 최신 스냅샷이 **{curr_date}** 로 오늘보다 {_snap_age}일 지났습니다. "
+               f"오래된 데이터로 판단하지 않도록 최신 스냅샷을 업로드/선택하세요.")
+
+# ==============================================================================
+# [7.4] 착지 예측 + 필요 런레이트 (월별 · 3분기)
+# ==============================================================================
+st.markdown("### 착지 예측 & 필요 런레이트")
+st.caption("현재 픽업 페이스로 갈 때의 예상 착지와, 권장 착지(플랜)까지 남은 기간 매일 필요한 픽업(매출/객실)을 자동 재계산합니다.")
+
+def _plan_adr(pfx, fallback):
+    _ad = [DATE_PLAN[d]["adr"] for d in DATE_PLAN if d.startswith(pfx)]
+    return (sum(_ad) / len(_ad)) if _ad else fallback
+
+_prev_m = {7: _mrev(prev_df7), 8: _mrev(prev_df8), 9: _mrev(prev_df9)}
+_cur_d = datetime.strptime(curr_date, "%Y-%m-%d").date()
+_prv_d = datetime.strptime(prev_date, "%Y-%m-%d").date() if prev_date else None
+_interval = max(1, (_cur_d - _prv_d).days) if _prv_d else None
+_pfx_map = {7: "2026-07", 8: "2026-08", 9: "2026-09"}
+_adr_fb = {7: 355_000, 8: 375_000, 9: 330_000}
+
+_fc_cols = st.columns(3)
+_proj_total = 0.0
+for _idx, _m in enumerate([7, 8, 9]):
+    _otb = _otb_m[_m]; _plan = PLAN_LANDING[_m]
+    _last = calendar.monthrange(2026, _m)[1]
+    _mend = datetime(2026, _m, _last).date()
+    _days_left = (_mend - _real_today).days
+    _adr = _plan_adr(_pfx_map[_m], _adr_fb[_m])
+    if _interval:
+        _pace_daily = (_otb - _prev_m[_m]) / _interval
+    else:
+        _pace_daily = None
+    if _days_left <= 0:
+        _proj = _otb; _req_daily = 0.0
+    else:
+        _proj = (_otb + _pace_daily * _days_left) if _pace_daily is not None else None
+        _req_daily = max(0.0, _plan - _otb) / _days_left
+    _proj_total += (_proj if _proj is not None else _otb)
+    _proj_pct = (_proj / _plan * 100) if (_proj is not None and _plan) else None
+    _arrow = "—"
+    if _proj is not None:
+        _arrow = "▲ 달성권" if _proj >= _plan else ("▼ 미달" if _proj < _plan * 0.97 else "≈ 근접")
+    with _fc_cols[_idx]:
+        st.markdown(f"**{_m}월**  ·  권장착지 {_plan/1e8:.2f}억")
+        if _proj is not None:
+            _pc = "#16a34a" if _proj >= _plan else ("#d97706" if _proj >= _plan*0.95 else "#dc2626")
+            st.markdown(f"<span style='font-size:20px;font-weight:900;color:{_pc};'>"
+                        f"예상 {_proj/1e8:.2f}억 ({_proj_pct:.0f}%)</span> &nbsp;{_arrow}",
+                        unsafe_allow_html=True)
+        else:
+            st.markdown("예상 착지 — (비교 스냅샷 필요)")
+        if _days_left > 0:
+            _req_rn = _req_daily / _adr if _adr > 0 else 0
+            st.caption(f"필요 런레이트: 매일 **{_req_daily/1e6:.1f}M** (≈ {_req_rn:.0f} RN) × {_days_left}일  |  "
+                       f"현 페이스 {('%.1fM/일' % (_pace_daily/1e6)) if _pace_daily is not None else '—'}")
+        else:
+            st.caption("월 마감 경과")
+
+_q3_proj_pct = _proj_total / Q3_TARGET_REV * 100 if Q3_TARGET_REV else 0
+_q3c = "#16a34a" if _proj_total >= Q3_TARGET_REV else ("#d97706" if _proj_total >= Q3_TARGET_REV*0.97 else "#dc2626")
+st.markdown(f"<div style='background:{_q3c}14;border-left:4px solid {_q3c};border-radius:6px;padding:8px 12px;font-size:14px;'>"
+            f"<b>3분기 예상 착지: <span style='color:{_q3c};'>{_proj_total/1e8:.2f}억 ({_q3_proj_pct:.0f}%)</span></b> "
+            f"&nbsp;/ 목표 {Q3_TARGET_REV/1e8:.2f}억 &nbsp;·&nbsp; 현 픽업 페이스 유지 가정</div>",
+            unsafe_allow_html=True)
+
+# ==============================================================================
+# [7.6] 예외 알림 (요금 규율 · 취소)
+# ==============================================================================
+st.markdown("#### 예외 알림 (요금 규율 · 취소)")
+_flags = []
+_peak_full = {"2026-" + _d for _d in SEP_STRATEGY["peak_dates"]}
+def _scan_rate(dfm, pfx):
+    if dfm is None or dfm.empty:
+        return
+    _g = dfm.groupby("DateStr").agg(RMS=("RMS", "sum"), REV=("REV", "sum")).reset_index()
+    for _, _r in _g.iterrows():
+        _d = _r["DateStr"]; _rms = _r["RMS"]
+        if _d not in DATE_PLAN or _rms < 5:
+            continue
+        _adr = _r["REV"] / _rms; _floor = DATE_PLAN[_d]["adr"]
+        _strong = (_floor >= 380_000) or (_d in _peak_full)
+        if _strong and _adr < _floor:
+            _flags.append(("강한 날짜 요금 하락", _d, f"OTB ADR {_adr:,.0f} < 하한 {_floor:,.0f}"))
+        elif (not _strong) and _adr < _floor * 0.9:
+            _flags.append(("저수요일 덤핑 의심", _d, f"OTB ADR {_adr:,.0f} < 하한 {_floor:,.0f}의 90%"))
+_scan_rate(curr_df8, "2026-08")
+_scan_rate(curr_df9, "2026-09")
+_cxl = int(cancel_today["RN"].sum()) if (cancel_today is not None and not cancel_today.empty and "RN" in cancel_today.columns) else 0
+if _cxl >= 20:
+    _flags.append(("취소 급증", _pickup_date, f"어제 취소 {_cxl} RN"))
+if _flags:
+    for _t, _d, _m in _flags[:15]:
+        st.markdown(f"<div class='alert-red' style='margin-bottom:4px;'>🚩 <b>{_t}</b> · {_d} — {_m}</div>",
+                    unsafe_allow_html=True)
+    if len(_flags) > 15:
+        st.caption(f"외 {len(_flags)-15}건 더 있음")
+    st.caption("강한 날짜 하락 → 할인 즉시 중단·BAR 재인상 / 저수요 덤핑 → 상쇄 매출 확인 / 취소 급증 → 재판매 즉시 오픈")
+else:
+    st.markdown("<div class='alert-green'>✅ 요금 규율·취소 이상 없음</div>", unsafe_allow_html=True)
+st.markdown("---")
+
+# ==============================================================================
 # [8] 구간 요약 카드 (상단 5개)
 # ==============================================================================
 st.markdown("### 구간별 OTB 현황 요약")
@@ -947,6 +1055,56 @@ st.markdown(
     f"- **9/17~18 하드블럭 {SEP_STRATEGY['hardblock_confirmed_rn']}박 확정(OTB 미반영):** 실입금·룸리스트·OTB 반영을 매일 별도 추적 "
     f"(단체 2.30억에 포함, 중복 산정하지 않음)"
 )
+
+# ==============================================================================
+# ==============================================================================
+# [9.6] 9월 단체·하드블럭 실행 추적 (자동 실적 + 상태 체크)
+# ==============================================================================
+st.markdown("---")
+st.markdown("### 9월 단체·하드블럭 실행 추적")
+st.caption("9월 승부의 핵심. 단체 실적은 스냅샷(GRP_REV)에서 자동 반영, 9/17~18 하드블럭 180박의 실입금·룸리스트·OTB 반영은 매일 체크·저장.")
+
+_sep_grp_actual = (float(curr_df9["GRP_REV"].sum())
+                   if (curr_df9 is not None and not curr_df9.empty and "GRP_REV" in curr_df9.columns) else 0.0)
+_grp_tgt = SEP_STRATEGY["group_target_rev"]
+_days_to_hb = (datetime(2026, 9, 17).date() - datetime.strptime(curr_date, "%Y-%m-%d").date()).days
+
+_gt1, _gt2, _gt3 = st.columns(3)
+_gt1.metric("9월 단체 OTB (실적)", f"{_sep_grp_actual/1e8:.2f}억", f"목표 {_grp_tgt/1e8:.2f}억")
+_gt2.metric("단체 목표 대비", f"{(_sep_grp_actual/_grp_tgt*100) if _grp_tgt else 0:.0f}%",
+            f"추가 필요 {max(0,_grp_tgt-_sep_grp_actual)/1e6:.0f}M")
+_gt3.metric("9/17~18 하드블럭", f"D-{_days_to_hb}" if _days_to_hb >= 0 else "행사기간",
+            f"{SEP_STRATEGY['hardblock_confirmed_rn']}박 확정")
+st.progress(min(_sep_grp_actual / _grp_tgt, 1.0) if _grp_tgt else 0,
+            text=f"단체 실적 {_sep_grp_actual/1e8:.2f}억 / 목표 {_grp_tgt/1e8:.2f}억")
+
+@st.cache_data(ttl=20)
+def _load_hb():
+    try:
+        _doc = firestore.client().collection("trackers").document("sep_hardblock").get()
+        return _doc.to_dict() if _doc.exists else {}
+    except Exception:
+        return {}
+
+_hb = _load_hb()
+st.markdown("**9/17~18 하드블럭 180박 상태** (체크 후 저장)")
+_hc1, _hc2, _hc3 = st.columns(3)
+_h_dep = _hc1.checkbox("실입금 확인", value=bool(_hb.get("deposit")), key="hb_dep")
+_h_rl = _hc2.checkbox("룸리스트 확정", value=bool(_hb.get("roomlist")), key="hb_rl")
+_h_otb = _hc3.checkbox("OTB 반영 완료", value=bool(_hb.get("otb")), key="hb_otb")
+_hb_note = st.text_input("단체/하드블럭 메모", value=_hb.get("note", ""), key="hb_note")
+if st.button("하드블럭 상태 저장", key="hb_save"):
+    try:
+        firestore.client().collection("trackers").document("sep_hardblock").set(
+            {"deposit": _h_dep, "roomlist": _h_rl, "otb": _h_otb,
+             "note": _hb_note, "updated": datetime.now().isoformat()}, merge=True)
+        _load_hb.clear()
+        st.success("하드블럭 상태 저장 완료")
+    except Exception as _e:
+        st.error(f"저장 실패: {_e}")
+if 0 <= _days_to_hb <= 14 and not (_h_dep and _h_rl and _h_otb):
+    _pending = [n for n, v in [("실입금", _h_dep), ("룸리스트", _h_rl), ("OTB반영", _h_otb)] if not v]
+    st.warning(f"D-{_days_to_hb}: 하드블럭 180박 미완 항목({', '.join(_pending)}) 마감 관리 필요")
 
 # ==============================================================================
 # [9.7] 일자별 권장목표 대비 추적 (플랜 대비 부족분 / 채울 RN)
@@ -1358,6 +1516,21 @@ def _list_report_dates():
         return sorted([d.id for d in firestore.client().collection("daily_reports").stream()], reverse=True)
     except Exception:
         return []
+
+# 직전 보고 이월 확인 (조치 추적)
+_prev_rep_dates = [d for d in _list_report_dates() if d < curr_date]
+if _prev_rep_dates:
+    _lastd = _prev_rep_dates[0]
+    _lastr = _load_report(_lastd)
+    _carry = []
+    for _s in ["오전", "오후"]:
+        if isinstance(_lastr, dict) and _s in _lastr:
+            _pp = _lastr[_s]
+            if _pp.get("aug_verdict") in ("위험", "비상") or _pp.get("note"):
+                _carry.append(f"[{_lastd} {_s}] 판정 {_pp.get('aug_verdict','—')} · 조치/메모: {_pp.get('note','') or '없음'}")
+    if _carry:
+        st.info("**직전 보고 이월 확인** (조치 완료 여부 점검)\n\n" + "\n\n".join(_carry))
+
 
 # ── 자동 계산 지표 (보고 항목) ──────────────────────────────────────────────
 _now_rev = float(curr_df["REV"].sum()); _now_rn = float(curr_df["RMS"].sum())
