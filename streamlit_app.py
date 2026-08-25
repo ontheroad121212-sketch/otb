@@ -15,10 +15,11 @@ import traceback  # [추가] 에러 상세 추적용
 
 def _get_firestore_client():
     """firebase-admin 버전 호환 Firestore 클라이언트"""
+    _fs = firestore.client
     try:
-        return firestore.client(database="(default)")
+        return _fs(database="(default)")
     except TypeError:
-        return _get_firestore_client()
+        return _fs()
 
 
 
