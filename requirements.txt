@@ -9,3 +9,4 @@ gspread
 google-auth
 plotly
 pytz
+firebase-admin>=6.0.0
