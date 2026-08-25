@@ -1,7 +1,7 @@
 streamlit
 pandas
 openpyxl
-firebase-admin
+firebase-admin>=6.0.0
 xlsxwriter
 matplotlib
 xlrd>=2.0.1
@@ -9,4 +9,3 @@ gspread
 google-auth
 plotly
 pytz
-firebase-admin>=6.0.0
