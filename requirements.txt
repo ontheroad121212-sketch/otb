@@ -9,4 +9,4 @@ gspread
 google-auth
 plotly
 pytz
-google-cloud-firestore>=2.16.0
+google-cloud-firestore==2.11.1
