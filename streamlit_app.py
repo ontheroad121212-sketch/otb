@@ -166,7 +166,7 @@ if not firebase_admin._apps:
         st.error(f"🔥 Firebase 연결 실패: {e}")
         st.stop()
 
-db = firestore.client()
+db = firestore.client(database="(default)")
 
 # [타겟 데이터]
 TARGET_DATA = {
@@ -225,7 +225,7 @@ def extract_date_from_filename(filename):
 
 
 def load_all_historical_data():
-    db = firestore.client()
+    db = firestore.client(database="(default)")
     st.write(T("파이어베이스 서버에 접속 중..."))
     docs = db.collection("hotel_bookings").stream()
     data = []
@@ -375,7 +375,7 @@ def get_latest_snapshot_before(target_date_str, month_num, exclude_date=None):
 def get_all_snapshot_dates_for_month(month_num):
     """해당 월(month_num)에 대해 저장된 모든 스냅샷 날짜를 정렬해 반환"""
     try:
-        db_local = firestore.client()
+        db_local = firestore.client(database="(default)")
         docs = db_local.collection_group('months').stream()
         dates = []
         for doc in docs:
@@ -434,7 +434,7 @@ def save_data_with_sob(date_str, month, df, sob):
 @st.cache_data(ttl=300)
 def load_daily_summary_matrix():
     try:
-        db = firestore.client()
+        db = firestore.client(database="(default)")
         docs = db.collection_group('months').stream()
         data = []
         for doc in docs:
@@ -527,7 +527,7 @@ if st.session_state.get("authenticated"):
                         st.sidebar.write(T("✅ 캐시 파일에서 로드! (비용 0원)"))
                         h_df = pd.read_pickle(cache_file)
                     else:
-                        db = firestore.client()
+                        db = firestore.client(database="(default)")
                         docs = db.collection_group("hotel_bookings").stream()
                         hist_data = []
                         count = 0
