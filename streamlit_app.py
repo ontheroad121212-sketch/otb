@@ -13,6 +13,15 @@ import plotly.graph_objects as go
 import os
 import traceback  # [추가] 에러 상세 추적용
 
+def _get_firestore_client():
+    """firebase-admin 버전 호환 Firestore 클라이언트"""
+    try:
+        return firestore.client(database="(default)")
+    except TypeError:
+        return _get_firestore_client()
+
+
+
 # ==============================================================================
 # [1] 페이지 기본 설정 및 다국어(중국어) 세션 고정 로직
 # ==============================================================================
@@ -166,7 +175,7 @@ if not firebase_admin._apps:
         st.error(f"🔥 Firebase 연결 실패: {e}")
         st.stop()
 
-db = firestore.client(database="(default)")
+db = _get_firestore_client()
 
 # [타겟 데이터]
 TARGET_DATA = {
@@ -225,7 +234,7 @@ def extract_date_from_filename(filename):
 
 
 def load_all_historical_data():
-    db = firestore.client(database="(default)")
+    db = _get_firestore_client()
     st.write(T("파이어베이스 서버에 접속 중..."))
     docs = db.collection("hotel_bookings").stream()
     data = []
@@ -375,7 +384,7 @@ def get_latest_snapshot_before(target_date_str, month_num, exclude_date=None):
 def get_all_snapshot_dates_for_month(month_num):
     """해당 월(month_num)에 대해 저장된 모든 스냅샷 날짜를 정렬해 반환"""
     try:
-        db_local = firestore.client(database="(default)")
+        db_local = _get_firestore_client()
         docs = db_local.collection_group('months').stream()
         dates = []
         for doc in docs:
@@ -434,7 +443,7 @@ def save_data_with_sob(date_str, month, df, sob):
 @st.cache_data(ttl=300)
 def load_daily_summary_matrix():
     try:
-        db = firestore.client(database="(default)")
+        db = _get_firestore_client()
         docs = db.collection_group('months').stream()
         data = []
         for doc in docs:
@@ -527,7 +536,7 @@ if st.session_state.get("authenticated"):
                         st.sidebar.write(T("✅ 캐시 파일에서 로드! (비용 0원)"))
                         h_df = pd.read_pickle(cache_file)
                     else:
-                        db = firestore.client(database="(default)")
+                        db = _get_firestore_client()
                         docs = db.collection_group("hotel_bookings").stream()
                         hist_data = []
                         count = 0
